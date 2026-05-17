@@ -6,8 +6,8 @@ classdef Trial < handle
 
     properties
         trialIdx
-        sessionId
-        timestamp
+        sessionId = ''
+        timestamp = NaT
         targetSpec       % struct: .cellIds, .dmdCoords, .patternRef
         powerMw          % at sample
         duration_s
@@ -18,7 +18,7 @@ classdef Trial < handle
     end
 
     properties (SetAccess = private)
-        data             % populated after trial runs
-        status           % 'pending' | 'running' | 'complete' | 'failed'
+        data = []            % populated after trial runs
+        status = 'pending'   % 'pending' | 'running' | 'complete' | 'failed'
     end
 end
