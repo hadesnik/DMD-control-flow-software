@@ -1,0 +1,26 @@
+# Mock hardware config for end-to-end testing without the rig.
+# Fill in each section as the corresponding code lands.
+
+# DMD configuration
+dmd:
+  # TODO: backend class (e.g., tfp.hardware.MockDMD), mirror dimensions, max pattern rate,
+  # debug-figure on/off, optional failure-injection modes.
+
+# DAQ configuration
+daq:
+  # TODO: backend class (e.g., tfp.hardware.MockDAQ), sample rate, AI/AO/DI/DO channel maps,
+  # fake-cell list (position in DMD coords + response model) for synthetic AI.
+
+# Filesystem paths
+paths:
+  # TODO: data root, log directory, session-folder naming pattern.
+
+# Calibration
+calibration_file:
+  # TODO: path to a .mat with dmdToSample_affine, umPerPixel, pixelsPerUm,
+  # powerCurve, timestamp, notes.
+
+# ScanImage bridge
+scanimage:
+  # TODO: bridge mode (tcp / ttl-only), host, port (if tcp), frame-clock DI line name,
+  # arm-timeout in seconds.

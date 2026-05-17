@@ -1,0 +1,11 @@
+# MATLAB
+*.asv
+*.m~
+slprj/
+
+# macOS
+.DS_Store
+
+# Local working directories
+/tmp/
+/scratch/
