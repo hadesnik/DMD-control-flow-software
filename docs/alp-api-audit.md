@@ -3,6 +3,71 @@
 **Date:** 2026-05-16
 **Status:** Pre-official-Vialux-installer baseline. Use this audit as the authoritative API surface for `+tfp/+hardware/DLP650LNIR_DMD.m` development until the official Vialux SDK installer arrives, after which this audit must be diffed against the official headers.
 
+## Verified against official Vialux ALP-4.3 header (2026-05-18)
+
+**Official header:** `vendor/alp/official/alp.h` — Version 28, © 2004-2024 ViALUX GmbH
+**Reference header:** `vendor/alp/reference/parot-alptool/alp.h` — Version 14, © 2004-2015 ViALUX GmbH
+
+### Result: all 9 audited functions verified — identical signatures
+
+`AlpDevAlloc`, `AlpDevInquire`, `AlpDevHalt`, `AlpDevFree`, `AlpSeqAlloc`, `AlpSeqPut`,
+`AlpSeqFree`, `AlpProjStart`, `AlpProjStartCont` are byte-identical across both headers.
+`ALP_ID` typedef is `unsigned long` in both. `AlpSeqControl`, `AlpProjControl`, and
+`AlpSeqTiming` (not formally audited but in scope) also appear with identical signatures.
+
+### Critical new constant for DLP650LNIR_DMD.m
+
+```c
+#define ALP_DMDTYPE_WXGA_S450  12L   // 1280x800, DLP650LNIR for DLPC410
+```
+
+This constant is in the official header only (parot topped out at type 7). Use it when calling
+`AlpDevControl(DeviceId, ALP_DEV_DMDTYPE, ALP_DMDTYPE_WXGA_S450)` during device init.
+
+### Removed from official — do not use
+
+| Symbol | Parot value | Action |
+|---|---|---|
+| `ALP_PROJ_SYNC` / `ALP_SYNCHRONOUS` / `ALP_ASYNCHRONOUS` | `2303–2305L` | Removed. Use `AlpProjWait` to block until completion. |
+| `ALP_TRIGGER_TIME_OUT` / `ALP_TIME_OUT_ENABLE` / `ALP_TIME_OUT_DISABLE` | `2014L`, `0L`, `1L` | Removed. Official compat alias `ALP_VD_TIME_OUT` is a dangling reference — avoid both. |
+
+### New in official (additive)
+
+- `AlpSeqPutEx` — line-level partial sequence put; not needed for our primary load path.
+- `ALP_CONFIG_MISMATCH 1021L`, `ALP_ERROR_UNKNOWN 1999L` — new error codes.
+- `ALP_DMD_RESUME 0L` — explicit wake-up complement to `ALP_DMD_POWER_FLOAT`.
+- `ALP_PROJ_ABORT_ASYNC 2345L` — immediate abort asynchronous to frame.
+- `ALP_USB_DISCONNECT_BEHAVIOUR 2078L` — USB resilience control.
+- `ALP_SEQ_CONFIG 2153L` — must precede `AlpSeqAlloc` when enabling bitplane-LUT-row mode.
+
+### Phase 3 implementation notes for DLP650LNIR_DMD.m
+
+- **`ALP_PROJ_ABORT_ASYNC (2345L)`** — wire into `DLP650LNIR_DMD.cleanup()` / the abort path
+  called by `Sequencer.abort()`. This is the correct mid-sequence halt: it stops the DMD
+  immediately without waiting for end-of-frame, matching the "Pockels-cell-closed-on-abort"
+  safety principle — the DAQ closes the beam in parallel, and the DMD should not linger on the
+  current pattern.
+
+- **`ALP_CONFIG_MISMATCH (1021L)` and `ALP_ERROR_UNKNOWN (1999L)`** — add named-case handling
+  in the error-translation helper (the function that maps ALP return codes to `tfp:hardware`
+  error identifiers). Without explicit cases these will silently fall through to a generic error,
+  making diagnosis on the scope PC harder.
+
+- **`ALP_USB_DISCONNECT_BEHAVIOUR (2078L)`** — set explicitly in `initialize()`, do not accept
+  the power-on default. Recommended: `ALP_USB_RESET` (stop sequence and DLP on disconnect) so
+  a cable pull is treated as a fault rather than a silent continue. Matches fail-loudly principle.
+
+- **`AlpSeqPutEx` and `ALP_SEQ_CONFIG`** — NOT needed for Phase 3 minimum viable path (binary
+  1-bit patterns, full-frame puts via `AlpSeqPut`). Flag as Phase 4+ if grayscale, bitplane-LUT,
+  or partial-update workflows emerge.
+
+### Verification task: CLOSED
+
+The "diff against official alp.h" checklist item below is resolved. No action required before
+writing `DLP650LNIR_DMD.m` beyond the notes above.
+
+---
+
 ## References audited
 
 1. [vendor/alp/reference/ALP4lib/src/ALP4.py](../vendor/alp/reference/ALP4lib/src/ALP4.py) — Python wrapper over the ALP-4.x high-speed API (`ctypes` calling `alp4395.dll` / `alpV42.dll` / etc.). Cleanest single-file API summary.
@@ -37,8 +102,4 @@
 
 ## Verification needed when official installer arrives
 
-- [ ] Diff [vendor/alp/reference/parot-alptool/alp.h](../vendor/alp/reference/parot-alptool/alp.h) against the official `alp.h` shipped with the Vialux installer. The vendored copy is from an earlier ALP-4.3 release ("© 2004-2015", header version 14) — newer installers may have added functions or changed signatures. Pay particular attention to:
-  - The 9 functions audited above (most critical — sequence playback path).
-  - `AlpSeqControl`, `AlpProjControl`, `AlpSeqTiming` (used in our likely code path but not in this audit).
-  - The `ALP_ID` typedef (unlikely to change, but confirm).
-  - Any new `AlpProjControlEx` / `AlpSeqControlEx` struct types (FLUT, dynamic synch, mask, shear — these vary by version).
+- [x] Diff [vendor/alp/reference/parot-alptool/alp.h](../vendor/alp/reference/parot-alptool/alp.h) against the official `alp.h` shipped with the Vialux installer. **Done 2026-05-18** — see "Verified against official Vialux ALP-4.3 header" section above. All 9 functions and `ALP_ID` typedef verified identical; `AlpSeqControl`, `AlpProjControl`, `AlpSeqTiming` also identical. See Phase 3 implementation notes for actionable deltas.
