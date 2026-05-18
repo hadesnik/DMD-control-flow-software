@@ -16,7 +16,7 @@ photostimulation system targeting single-cell resolution across a
 
 ## How to run
 
-From the repo root, on a machine with MATLAB R2023b or later:
+From the repo root, on a machine with MATLAB R2023a or later, with macOS 13.3+ required for R2023b and newer:
 
 ```
 matlab -batch "runtests"
