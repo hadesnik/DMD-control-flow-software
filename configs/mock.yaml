@@ -1,26 +1,32 @@
-# Mock hardware config for end-to-end testing without the rig.
-# Fill in each section as the corresponding code lands.
+# Mock hardware config for Phase 1 end-to-end tests and experiments.
+# Selector for the hardware factory in experiment scripts.
+hardwareKind: mock
 
-# DMD configuration
+# DMD configuration. Consumed by tfp.hardware.MockDMD.initialize.
 dmd:
-  # TODO: backend class (e.g., tfp.hardware.MockDMD), mirror dimensions, max pattern rate,
-  # debug-figure on/off, optional failure-injection modes.
+  nRows: 800
+  nCols: 1280
+  maxPatternRate: 12500
+  loadLatencyMsPerPattern: 0
+  debugFigure: false
 
-# DAQ configuration
+# DAQ configuration. Consumed by tfp.hardware.MockDAQ.initialize.
+# Experiments configure all of these channels before running Sequencer.
 daq:
-  # TODO: backend class (e.g., tfp.hardware.MockDAQ), sample rate, AI/AO/DI/DO channel maps,
-  # fake-cell list (position in DMD coords + response model) for synthetic AI.
+  sampleRate: 10000
+  analogInChannels: [0, 1]
+  analogOutChannels: [0]
+  digitalOutChannels: [port0/line0]
+  aiRangeV: [-5, 5]
+  fakeCells: []
 
-# Filesystem paths
+# Filesystem paths. Experiments create <dataDir>/<sessionName>/ per run.
 paths:
-  # TODO: data root, log directory, session-folder naming pattern.
+  dataDir: ./data
 
-# Calibration
-calibration_file:
-  # TODO: path to a .mat with dmdToSample_affine, umPerPixel, pixelsPerUm,
-  # powerCurve, timestamp, notes.
+# Calibration file path; empty -> identity affine fallback (mock).
+calibration_file: ""
 
-# ScanImage bridge
+# ScanImage bridge (not used in Phase 1 / mock).
 scanimage:
-  # TODO: bridge mode (tcp / ttl-only), host, port (if tcp), frame-clock DI line name,
-  # arm-timeout in seconds.
+  enabled: false

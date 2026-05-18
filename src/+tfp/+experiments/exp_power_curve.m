@@ -1,12 +1,126 @@
-function result = exp_power_curve(config, sessionName)
-%exp_power_curve Run a power-curve session at one target and return summary results.
-%   Same overall shape as exp_ppsf_lateral:
-%     1. Load config (mock or real hardware)
-%     2. Initialize DMD, DAQ, ScanImage bridge, load calibration
-%     3. Pick the target cell from a GCaMP FOV (interactive)
-%     4. Generate a power-curve trial sequence via tfp.trial.TrialSequence.generatePowerCurve
-%     5. Run the sequencer
-%     6. Quick-look analysis: fit a dose-response curve at the target
-%     7. Save full data + figure
-error('not implemented');
+function result = exp_power_curve(configOrPath, sessionName)
+%exp_power_curve Run a power-curve session at one mock target.
+%
+%   Phase 1: 1 hardcoded target, 3 powers, 2 reps = 6 trials.
+
+config = loadOrUseConfig(configOrPath);
+
+sessionDir = fullfile(config.paths.dataDir, char(sessionName));
+if ~isfolder(sessionDir), mkdir(sessionDir); end
+
+tfp.io.sessionLog(sessionDir, 'session-start', struct( ...
+    'experiment', 'exp_power_curve', 'sessionName', char(sessionName)));
+
+[dmd, daq] = makeHardware(config);
+cleanupHw = onCleanup(@() teardownHardware(dmd, daq)); %#ok<NASGU>
+
+daq.configureAnalogInput(config.daq.analogInChannels, config.daq.aiRangeV);
+daq.configureAnalogOutput(config.daq.analogOutChannels);
+daq.configureDigitalOutput(config.daq.digitalOutChannels);
+
+target   = [500, 400];
+powersMw = [1, 2, 4];
+nReps    = 2;
+radiusPx = 5;
+
+sequence = tfp.trial.TrialSequence.generatePowerCurve(target, powersMw, nReps);
+
+for k = 1:numel(sequence.trials)
+    tr = sequence.trials(k);
+    tr.targetSpec.patternRef = tfp.patterns.singleSpot(dmd, target, radiusPx);
+end
+
+sequencer = tfp.trial.Sequencer(dmd, daq, sequence, sessionDir);
+runError = [];
+try
+    sequencer.run();
+catch ME
+    runError = ME;
+    tfp.io.sessionLog(sessionDir, 'experiment-run-error', struct( ...
+        'identifier', ME.identifier, 'message', ME.message));
+end
+
+statuses   = {sequence.trials.status};
+nCompleted = sum(strcmp(statuses, 'complete'));
+nFailed    = sum(strcmp(statuses, 'failed'));
+
+summary = summarizeByPower(sequence.trials, powersMw);
+
+tfp.io.sessionLog(sessionDir, 'session-end', struct( ...
+    'nTrialsCompleted', nCompleted, 'nTrialsFailed', nFailed));
+
+result.sessionDir       = sessionDir;
+result.nTrialsCompleted = nCompleted;
+result.nTrialsFailed    = nFailed;
+result.summary          = summary;
+if ~isempty(runError)
+    result.runError = struct('identifier', runError.identifier, ...
+                             'message',    runError.message);
+end
+end
+
+% --- Local helpers ---
+
+function config = loadOrUseConfig(configOrPath)
+if isstruct(configOrPath)
+    config = configOrPath;
+elseif ischar(configOrPath) || (isstring(configOrPath) && isscalar(configOrPath))
+    config = tfp.io.loadConfig(char(configOrPath));
+else
+    error('tfp:experiments:exp_power_curve:badConfig', ...
+        'configOrPath must be a char/string path or a config struct.');
+end
+end
+
+function [dmd, daq] = makeHardware(config)
+switch lower(char(config.hardwareKind))
+    case 'mock'
+        dmd = tfp.hardware.MockDMD();
+        daq = tfp.hardware.MockDAQ();
+    case 'real'
+        error('tfp:experiments:exp_power_curve:notImplemented', ...
+            'real hardware is Phase 2+.');
+    otherwise
+        error('tfp:experiments:exp_power_curve:badKind', ...
+            'unknown hardwareKind: %s.', config.hardwareKind);
+end
+dmd.initialize(config.dmd);
+daq.initialize(config.daq);
+end
+
+function teardownHardware(dmd, daq)
+try, daq.cleanup(); catch, end %#ok<CTCH>
+try, dmd.cleanup(); catch, end %#ok<CTCH>
+end
+
+function r = tracePeakResponse(ai)
+[N, nChans] = size(ai);
+frames    = reshape(ai, [N, 1, nChans]);
+roi       = true(1, nChans);
+nBaseline = max(1, round(N / 4));
+trace     = tfp.analysis.onlineDFF(frames, roi, 1:nBaseline);
+r         = max(trace);
+end
+
+function summary = summarizeByPower(trials, powersMw)
+summary = struct('powerMw', {}, 'meanResponse', {}, 'nTrials', {});
+for p = 1:numel(powersMw)
+    pw = powersMw(p);
+    responses = [];
+    for k = 1:numel(trials)
+        tr = trials(k);
+        if ~strcmp(tr.status, 'complete'), continue; end
+        if ~isstruct(tr.data) || ~isfield(tr.data, 'aiData'), continue; end
+        if abs(tr.powerMw - pw) > 1e-9, continue; end
+        responses(end+1) = tracePeakResponse(tr.data.aiData); %#ok<AGROW>
+    end
+    summary(p).powerMw = pw;
+    if isempty(responses)
+        summary(p).meanResponse = NaN;
+        summary(p).nTrials      = 0;
+    else
+        summary(p).meanResponse = mean(responses);
+        summary(p).nTrials      = numel(responses);
+    end
+end
 end
