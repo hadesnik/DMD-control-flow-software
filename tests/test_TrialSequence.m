@@ -10,6 +10,47 @@ classdef test_TrialSequence < matlab.unittest.TestCase
             testCase.verifyEqual(t.sessionId, '');
         end
 
+        function trial_stateTransitions(testCase)
+            % pending -> running
+            t = tfp.trial.Trial();
+            testCase.verifyEqual(t.status, 'pending');
+            t.markRunning();
+            testCase.verifyEqual(t.status, 'running');
+
+            % running -> complete with data payload
+            t2 = tfp.trial.Trial();
+            t2.markRunning();
+            t2.markComplete(struct('foo', 1));
+            testCase.verifyEqual(t2.status, 'complete');
+            testCase.verifyEqual(t2.data.foo, 1);
+
+            % pending -> failed via MException
+            t3 = tfp.trial.Trial();
+            me = MException('my:err', 'oops');
+            t3.markFailed(me);
+            testCase.verifyEqual(t3.status, 'failed');
+            testCase.verifyEqual(t3.data.error.identifier, 'my:err');
+            testCase.verifyEqual(t3.data.error.message, 'oops');
+
+            % pending -> failed via string
+            t4 = tfp.trial.Trial();
+            t4.markFailed('boom');
+            testCase.verifyEqual(t4.status, 'failed');
+            testCase.verifyEqual(t4.data.error.message, 'boom');
+
+            % invalid: complete -> running
+            t5 = tfp.trial.Trial();
+            t5.markComplete([]);
+            testCase.verifyError(@() t5.markRunning(), ...
+                'tfp:trial:Trial:badTransition');
+
+            % invalid: failed -> complete
+            t6 = tfp.trial.Trial();
+            t6.markFailed('e');
+            testCase.verifyError(@() t6.markComplete([]), ...
+                'tfp:trial:Trial:badTransition');
+        end
+
         function generatePPSF_dimensions(testCase)
             targets     = [200, 200; 800, 400];
             distancesUm = [0, 5, 10, 20];
