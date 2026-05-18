@@ -323,17 +323,21 @@ Every test runs in <30 s. The full suite is the gate before any real-hardware se
 
 ## Phase 1 deliverables (mock-only, target completion in 5 days)
 
-- [ ] `+hardware/DMD.m`, `MockDMD.m`
-- [ ] `+hardware/DAQ.m`, `MockDAQ.m`
-- [ ] `+patterns/singleSpot.m`, `multiSpot.m`, `ppsfPattern.m`, `calibratedAffine.m`
-- [ ] `+trial/Trial.m`, `TrialSequence.m`, `Sequencer.m`
-- [ ] `+analysis/onlineDFF.m`, `responseClassifier.m`, `liveFigures.m`
-- [ ] `+experiments/exp_ppsf_lateral.m`, `exp_rapid_sequential.m`, `exp_power_curve.m`
-- [ ] `+io/saveTrial.m`, `loadConfig.m`
-- [ ] `configs/mock.yaml`
-- [ ] Tests for all of the above
+- [x] `+hardware/DMD.m`, `MockDMD.m`
+- [x] `+hardware/DAQ.m`, `MockDAQ.m`
+- [x] `+patterns/singleSpot.m`, `multiSpot.m`, `ppsfPattern.m`, `calibratedAffine.m`
+- [ ] `+patterns/powerLUT.m` (stubbed; not exercised by Phase 1 experiments)
+- [x] `+trial/Trial.m`, `TrialSequence.m`, `Sequencer.m`
+- [x] `+analysis/onlineDFF.m`, `responseClassifier.m`
+- [ ] `+analysis/liveFigures.m` (stubbed; live-figure rendering deferred)
+- [x] `+experiments/exp_ppsf_lateral.m`, `exp_rapid_sequential.m`, `exp_power_curve.m`
+- [x] `+io/saveTrial.m`, `loadConfig.m`, `sessionLog.m`
+- [x] `configs/mock.yaml`
+- [x] Tests for all of the above (`test_calibration_mock` deferred to Phase 2/3)
 
-Running `exp_ppsf_lateral('configs/mock.yaml', 'test_session')` should produce a complete fake dataset with a recognizable PPSF curve (built into the MockDAQ response model). That's the Phase 1 milestone.
+**Milestone achieved as of 2026-05-17.** Running `exp_ppsf_lateral('configs/mock.yaml', 'test_session')` runs end-to-end against mocks and produces a complete fake dataset (18 trials, `.mat` files on disk, well-shaped summary struct). Caveat: the response curve is currently flat noise — MockDAQ does not yet implement fake-cell response coupling, per the deliberate Phase 1 design call to keep cross-coupling logic in the Sequencer-or-experiment layer.
+
+TODO: implement fake-cell response coupling in Sequencer-or-experiment layer (Phase 1.5).
 
 ## Phase 2 deliverables (DAQ-real, days 5–7)
 

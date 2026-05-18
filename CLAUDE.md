@@ -2,6 +2,10 @@
 
 This repository implements MATLAB-based control software for a 2-photon temporal-focusing patterned photostimulation system being built to support a BRAIN Initiative R01 (RFA-NS-25-018). The grant proposes an NIR DMD + NIR PLM + temporal focusing photostimulation engine targeting single-cell resolution across a 3×3 mm FOV with simultaneous mesoscale 2p calcium imaging. Aim 1 of the grant is the photostimulation subsystem this software controls.
 
+## Status
+
+Phase 1 complete as of 2026-05-17. 32/33 tests passing (`test_calibration_mock` deferred to Phase 2/3). Mock-only end-to-end pipeline working on macOS. Hardware integration deferred to Phase 2/3.
+
 ## Immediate goal (2-week sprint, by ~June 18)
 
 Produce preliminary data for the R01 submission. The hero figure is **all-optical patterned photostimulation of identified ChRmine+GCaMP cells in windowed mice**, demonstrating:
@@ -168,6 +172,18 @@ YAML configs (parsed via MATLAB's `yamlread` in R2024b+, or `yaml.loadFile` via 
 - **Time**: all timestamps in seconds, double precision, referenced to DAQ master clock. Convert at the boundary, not in the middle.
 - **Coordinates**: DMD pixels are integer (col, row) with origin top-left. Sample coordinates are µm (x, y, z) with z=0 at the focal plane during calibration. All transforms live in `+calibration/`.
 
+## Conventions established in implementation
+
+Phase 1 implementation pinned the following conventions; treat them as load-bearing when adding new code.
+
+- **Private properties use trailing-underscore naming** (`patterns_`, `state_`, `log_`). Distinguishes internal state from public/protected properties at a glance.
+- **Each mock hardware class has a public `getLog()`** returning a struct array of `{timestamp, eventType, payload}` entries. Tests verify call sequences via this log.
+- **Error identifiers follow `tfp:<module>:<class-or-func>:<reason>`**, e.g. `tfp:hardware:MockDMD:badPatternShape`, `tfp:trial:Trial:badTransition`, `tfp:io:loadConfig:badYaml`.
+- **Trial state mutations go through `markRunning` / `markComplete(data)` / `markFailed(errOrMsg)`** methods on `tfp.trial.Trial`. `SetAccess = private` on `data` and `status` is enforced; the markers also validate state transitions and throw `tfp:trial:Trial:badTransition` on invalid moves.
+- **`configField(struct, name, default)` is the standard local helper** for reading config fields with a fallback (used as a local function in `MockDMD.m` and `MockDAQ.m`; promote to `+tfp/+util/` if a third caller appears).
+- **`tfp.io.sessionLog` returns the written line without a trailing newline.** The file gets the newline appended.
+- **`tfp.io.saveTrial` uses 4-digit zero-padded trial indices** (`trial_0001.mat`) and writes both `complete` and `failed` trials. Analysis pipelines filter by `trial.status`.
+
 ## Hardware API
 - Target: ViALUX **ALP-4.3** high-speed API on the scope PC (Windows). DLP650LNIR is driven via the DLPC410 controller; ALP-4.3 supports this combo per the [parot-alptool](vendor/alp/reference/parot-alptool/) wrapper. Phase 3 of [Development workflow](#development-workflow) uses this SDK unless the EVM arrives with incompatible firmware. See [docs/alp-api-audit.md](docs/alp-api-audit.md) for the cross-reference audit confirming API coverage.
 - Official Vialux SDK headers are PENDING — registration sent, awaiting download link
@@ -193,6 +209,13 @@ YAML configs (parsed via MATLAB's `yamlread` in R2024b+, or `yaml.loadFile` via 
 - ScanImage integration is via TCP/IP or named pipe — never modify ScanImage internals.
 - The DLPC410 supports binary pattern rates up to 12,500 Hz. Don't assume that's achievable for our patterns; the limit depends on pattern size and trigger mode. Empirical benchmarking required when the DMD arrives.
 - Temporal focusing means the **axial confinement** of the 2p excitation comes from spectral dispersion + BFP fill, not from numerical aperture alone. Lateral pattern definition comes from the DMD; the grating doesn't affect lateral resolution. Pattern-generation code only cares about lateral; everything else is optics.
+
+## Known gotchas
+
+- **MATLAB R2025b (and 2024+) require macOS 13.3+**; R2023a works on Monterey 12.x and is the current dev pin. Don't upgrade the dev machine's MATLAB until macOS is upgraded.
+- **When cloning vendor repos into `vendor/`, strip `.git/` before `git add`** to avoid embedded-repo gitlinks (which break clone-and-go for collaborators).
+- **`data/` is gitignored** — session outputs don't belong in the repo.
+- **`vendor/alp/reference/parot-alptool/` ships Windows `.dll`/`.obj`/`.lib` binaries.** Harmless privately, but consider stripping before any public release.
 
 ## Open questions to resolve
 
