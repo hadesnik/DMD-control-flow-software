@@ -27,6 +27,14 @@ The first command runs the full test suite (exit code 0 on full pass,
 1 on any failure). The second runs the PPSF experiment end-to-end
 against mocks and prints the summary struct.
 
+## Repo layout
+
+- `configs/` — YAML configuration files (mock and per-rig profiles).
+- `docs/` — design notes and API audits.
+- `src/` — MATLAB source under the `+tfp/` package.
+- `tests/` — `matlab.unittest.TestCase` suite, run via `runtests`.
+- `vendor/` — third-party references (Vialux ALP wrappers and headers).
+
 ## More
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — concrete design, classes, data flow.
