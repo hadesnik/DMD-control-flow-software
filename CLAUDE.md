@@ -186,9 +186,10 @@ Phase 1 implementation pinned the following conventions; treat them as load-bear
 
 ## Hardware API
 - Target: ViALUX **ALP-4.3** high-speed API on the scope PC (Windows). DLP650LNIR is driven via the DLPC410 controller; ALP-4.3 supports this combo per the [parot-alptool](vendor/alp/reference/parot-alptool/) wrapper. Phase 3 of [Development workflow](#development-workflow) uses this SDK unless the EVM arrives with incompatible firmware. See [docs/alp-api-audit.md](docs/alp-api-audit.md) for the cross-reference audit confirming API coverage.
-- Official Vialux SDK headers are PENDING — registration sent, awaiting download link
-- Until the official installer arrives, use these in-repo references as the authoritative API surface:
-  - **Primary C API reference:** [vendor/alp/reference/parot-alptool/alp.h](vendor/alp/reference/parot-alptool/alp.h) — the actual Vialux C header, extracted from an older ALP-4.3 installer by the parot-alptool author (banner: "© 2004-2015 ViALUX GmbH", Version 14). Diff against the official `alp.h` once the Vialux installer download arrives — newer installers may have added functions or changed signatures.
+- Official Vialux SDK header is now in-repo at [vendor/alp/official/alp.h](vendor/alp/official/alp.h) (Version 28, © 2004-2024). Diff against parot-alptool/alp.h completed 2026-05-18 — see [docs/alp-api-audit.md](docs/alp-api-audit.md) for full findings. All 9 audited function signatures verified identical. Key delta: `ALP_DMDTYPE_WXGA_S450 12L` (the DLP650LNIR type constant) is only in the official header; do not use `ALP_PROJ_SYNC/ALP_SYNCHRONOUS/ALP_ASYNCHRONOUS` (2303–2305L) — removed.
+- Authoritative API surface:
+  - **Primary C API reference:** [vendor/alp/official/alp.h](vendor/alp/official/alp.h) — official Vialux header, Version 28. Use this for all new code.
+  - **Older reference (Version 14, for cross-check only):** [vendor/alp/reference/parot-alptool/alp.h](vendor/alp/reference/parot-alptool/alp.h) — extracted from an earlier ALP-4.3 installer by the parot-alptool author.
   - **MATLAB calllib prototypes (4.3 x64):** [vendor/alp/reference/parot-alptool/alpV43x64proto.m](vendor/alp/reference/parot-alptool/alpV43x64proto.m) — the prototype file we'll use on a 4.3 x64 system; pairs with `alp4395.dll` and `alp4395_thunk_pcwin64.dll` in the same directory.
   - [vendor/alp/reference/ALP4lib/src/ALP4.py](vendor/alp/reference/ALP4lib/src/ALP4.py) — Python wrapper, cleanest single-file API summary
   - [vendor/alp/reference/parot-alptool/](vendor/alp/reference/parot-alptool/) — MATLAB `@alpapi/` wrappers and other prototype variants (V1, V42x32, V42x64) — cross-reference for ALP-4.3-specific calls

@@ -24,12 +24,22 @@
 This constant is in the official header only (parot topped out at type 7). Use it when calling
 `AlpDevControl(DeviceId, ALP_DEV_DMDTYPE, ALP_DMDTYPE_WXGA_S450)` during device init.
 
-### Removed from official — do not use
+### Removed in official — constants in parot Version 14 absent from official Version 28
 
-| Symbol | Parot value | Action |
+| Symbol | Parot value | Verified absent? |
 |---|---|---|
-| `ALP_PROJ_SYNC` / `ALP_SYNCHRONOUS` / `ALP_ASYNCHRONOUS` | `2303–2305L` | Removed. Use `AlpProjWait` to block until completion. |
-| `ALP_TRIGGER_TIME_OUT` / `ALP_TIME_OUT_ENABLE` / `ALP_TIME_OUT_DISABLE` | `2014L`, `0L`, `1L` | Removed. Official compat alias `ALP_VD_TIME_OUT` is a dangling reference — avoid both. |
+| `ALP_PROJ_SYNC` | `2303L` | Yes — grep confirmed not in `vendor/alp/official/alp.h` |
+| `ALP_SYNCHRONOUS` | `2304L` | Yes — grep confirmed not in `vendor/alp/official/alp.h` |
+| `ALP_ASYNCHRONOUS` | `2305L` | Yes — grep confirmed not in `vendor/alp/official/alp.h` |
+| `ALP_TRIGGER_TIME_OUT` | `2014L` | Yes — official compat section aliases `ALP_VD_TIME_OUT → ALP_TRIGGER_TIME_OUT` but the constant itself is not defined, creating a dangling reference; avoid both |
+| `ALP_TIME_OUT_ENABLE` / `ALP_TIME_OUT_DISABLE` | `0L` / `1L` | Yes — companion values to `ALP_TRIGGER_TIME_OUT`, also absent |
+
+**Implication:** Any code using `ALP_SYNCHRONOUS` or `ALP_ASYNCHRONOUS` must be rewritten; the
+modern API uses `ALP_PROJ_STEP (2329L)` or other primitives — check the official header for the
+current synchronization model. For our use case `AlpProjWait` is the correct blocking primitive.
+
+> **Scope note:** Constants audit was limited to the items checked above; a full
+> constant-by-constant diff was not performed and may surface additional removals.
 
 ### New in official (additive)
 
