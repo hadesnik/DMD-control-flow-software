@@ -9,3 +9,6 @@ slprj/
 # Local working directories
 /tmp/
 /scratch/
+
+# Session outputs
+data/
