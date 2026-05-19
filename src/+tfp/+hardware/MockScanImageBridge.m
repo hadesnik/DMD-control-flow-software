@@ -44,6 +44,9 @@ classdef MockScanImageBridge < handle
             if nargin < 2 || isempty(config)
                 config = struct();
             end
+            if ~iscell(cells)
+                cells = num2cell(cells);
+            end
             obj.cells_           = cells;
             obj.frameRate_       = configField(config, 'frameRate',       30);
             obj.simulateLatency_ = logical(configField(config, 'simulateLatency', false));

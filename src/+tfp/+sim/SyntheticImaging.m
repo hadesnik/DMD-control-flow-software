@@ -36,6 +36,9 @@ BASELINE = 1000;
 if nargin < 6
     calibration = [];
 end
+if ~iscell(cells)
+    cells = num2cell(cells);
+end
 
 nCells          = numel(cells);
 frameTimestamps = double(frameTimestamps(:)');
@@ -50,7 +53,7 @@ result.ops.Lx = LX;
 %   F(i,t) = BASELINE + dff(i,t) * BASELINE so F is always positive
 F = zeros(nCells, T);
 for i = 1:nCells
-    dff       = cells(i).computeTrace(patternMask, frameTimestamps, ...
+    dff       = cells{i}.computeTrace(patternMask, frameTimestamps, ...
                                        stimOnsetSec, stimDurationSec);
     F(i, :)   = BASELINE + dff(:)' * BASELINE;
 end
@@ -72,7 +75,7 @@ result.iscell = repmat([1, 0.9], nCells, 1);
 % --- stat: cell positions in imaging pixel coordinates ---
 stat(1, nCells) = struct('med', []);  % pre-allocate as 1×nCells struct array
 for i = 1:nCells
-    pos = cells(i).positionDmd;  % [col, row] in DMD pixels
+    pos = cells{i}.positionDmd;  % [col, row] in DMD pixels
     if ~isempty(calibration) && isfield(calibration, 'dmdToSample_affine')
         % Apply 3×3 affine: [u v 1] * M' → [x y 1] (sample µm)
         uvh    = [pos(1), pos(2), 1];
