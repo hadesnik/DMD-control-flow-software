@@ -48,7 +48,10 @@ if any(targetMw(:) < calMin) || any(targetMw(:) > calMax)
         calMin, calMax);
 end
 
-nActivePx = interp1(pc.powerAtSample, pc.dmdActivePx, targetMw, 'linear', 'extrap');
+% interp1 requires monotonically ordered X; sort the calibration curve.
+[sortedPower, sortIdx] = sort(pc.powerAtSample);
+sortedPx = pc.dmdActivePx(sortIdx);
+nActivePx = interp1(sortedPower, sortedPx, targetMw, 'linear', 'extrap');
 
 dutyCycle = nActivePx / totalPx;
 dutyCycle = max(0, min(1, dutyCycle));
