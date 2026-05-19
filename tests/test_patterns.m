@@ -128,5 +128,39 @@ classdef test_patterns < matlab.unittest.TestCase
             single = tfp.patterns.calibratedAffine([3, 4], cal);
             testCase.verifyEqual(single, [3, 4]);
         end
+
+        function powerLUT_interpolates(testCase)
+            % Build a synthetic calibration with a known linear curve:
+            % power = dmdActivePx / 1000  (mW), fovArea = 1000 µm²
+            % so power density = dmdActivePx / 1e6  (mW/µm²)
+            fovArea = 1000;  % µm²
+            cal.powerCurve.dmdActivePx   = [0, 512000, 1024000];   % 0, 40%, 80% of 1280*800
+            cal.powerCurve.powerAtSample = [0, 0.512, 1.024];      % mW, linear
+            cal.powerCurve.fovAreaUm2    = fovArea;
+
+            % Midpoint: 0.256 mW / 1000 µm² = 2.56e-4 mW/µm²
+            % Expected dutyCycle: 256000 / (800*1280) = 0.25
+            target = 0.256 / fovArea;
+            dc = tfp.patterns.powerLUT(target, cal);
+            testCase.verifyEqual(dc, 0.25, 'AbsTol', 1e-9, ...
+                'Interpolated dutyCycle must equal 0.25 at midpoint');
+
+            % Clamping: target below zero should give 0
+            dcLow = tfp.patterns.powerLUT(-1, cal);
+            testCase.verifyEqual(dcLow, 0, 'dutyCycle must clamp to 0 at low end');
+
+            % Clamping: very high target should clamp to 1
+            dcHigh = tfp.patterns.powerLUT(1e6, cal);
+            testCase.verifyEqual(dcHigh, 1, 'dutyCycle must clamp to 1 at high end');
+
+            % Empty calibration returns fallback without error
+            emptyFallback = tfp.patterns.powerLUT(0, struct('powerCurve', []));
+            testCase.verifyEqual(emptyFallback, 0, ...
+                'Empty calibration fallback must return 0 for zero input');
+
+            noCurveFallback = tfp.patterns.powerLUT(0, struct());
+            testCase.verifyEqual(noCurveFallback, 0, ...
+                'Missing powerCurve field fallback must return 0 for zero input');
+        end
     end
 end
