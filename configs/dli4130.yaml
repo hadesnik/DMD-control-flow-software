@@ -1,0 +1,40 @@
+# Config for DLi4130 visible-DMD evaluation kit (DLP7000, ALP-4.1, 1024x768 XGA).
+# Borrowed from Laura Waller lab for software validation before the NIR DLP650LNIR arrives.
+# Switch to real.yaml when the DLP650LNIR (ALP-4.3) arrives.
+hardwareKind: real
+
+# DMD configuration. Consumed by tfp.hardware.DLP650LNIR_DMD.initialize.
+# alpVersion '4.1' selects alp41.dll and XGA geometry (768×1024).
+dmd:
+  alpVersion: '4.1'
+  dmdType: 'DLP7000'
+  dllPath: 'C:\Program Files\ALP-4.1\alp41.dll'
+  protoFile: 'vendor\alp\reference\<alp41-proto>.m'  # fill in path when ALP-4.1 proto confirmed
+  loadLatencyMsPerPattern: 10
+  debugFigure: false
+
+# DAQ configuration. Consumed by tfp.hardware.NI6323_DAQ.initialize.
+daq:
+  deviceName: 'Dev1'
+  sampleRate: 10000
+  analogInChannels: [0, 1, 2, 3]
+  analogOutChannels: [0, 1]
+  digitalOutChannels:
+    - 'port0/line0'    # DMD pattern-advance trigger
+    - 'port0/line1'    # Pockels cell gate
+    - 'port0/line10'   # ScanImage acquisition trigger
+
+# Imaging parameters. Consumed by ScanImageBridge (Phase 2+).
+imaging:
+  frameRate: 30
+  fovSizePx: 512
+  fovSizeUm: 800
+  simulateLatency: false
+
+# Filesystem paths for session data and calibration.
+session:
+  dataDir: 'C:\data'
+  calibration_file: ''
+
+# No fake cells for real hardware.
+fakeCells: []

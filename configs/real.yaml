@@ -1,0 +1,38 @@
+# Real hardware config for Phase 3: NI6323 DAQ + DLP650LNIR DMD (ALP-4.3).
+# Switch from mock.yaml to this config when the NIR DMD arrives.
+# All DLL/device paths are for the scope PC (Windows).
+hardwareKind: real
+
+# DMD configuration. Consumed by tfp.hardware.DLP650LNIR_DMD.initialize.
+# alpVersion and dmdType default to '4.3'/'DLP650LNIR' when omitted.
+dmd:
+  dllPath: 'C:\Program Files\ALP-4.3\ALP-4.3 high-speed API\x64\alp4395.dll'
+  protoFile: 'vendor\alp\reference\parot-alptool\alpV43x64proto.m'
+  loadLatencyMsPerPattern: 10
+  debugFigure: false
+
+# DAQ configuration. Consumed by tfp.hardware.NI6323_DAQ.initialize.
+daq:
+  deviceName: 'Dev1'
+  sampleRate: 10000
+  analogInChannels: [0, 1, 2, 3]
+  analogOutChannels: [0, 1]
+  digitalOutChannels:
+    - 'port0/line0'    # DMD pattern-advance trigger
+    - 'port0/line1'    # Pockels cell gate
+    - 'port0/line10'   # ScanImage acquisition trigger
+
+# Imaging parameters. Consumed by ScanImageBridge (Phase 2+).
+imaging:
+  frameRate: 30
+  fovSizePx: 512
+  fovSizeUm: 800
+  simulateLatency: false
+
+# Filesystem paths for session data and calibration.
+session:
+  dataDir: 'C:\data'
+  calibration_file: ''   # fill in after first alignDMDtoCamera run
+
+# No fake cells for real hardware — live cells identified by suite2p.
+fakeCells: []
