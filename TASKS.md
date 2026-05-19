@@ -291,7 +291,7 @@ configs/dli4130.yaml. Switch to configs/real.yaml when DLP650LNIR arrives.
 
 ---
 
-## TASK-P2-03: liveFigures — Live Experiment Display [IN PROGRESS]
+## TASK-P2-03: liveFigures — Live Experiment Display [DONE]
 
 **No dependencies.**
 **Files (MODIFY):**
