@@ -140,7 +140,7 @@ The new class file parses without error:
 
 ---
 
-## TASK-P2-02: DLP650LNIR_DMD — ALP-4.3 Real Hardware [AVAILABLE]
+## TASK-P2-02: DLP650LNIR_DMD — ALP-4.3 Real Hardware [IN PROGRESS]
 
 **Note:** calllib/loadlibrary work in both R2019a and R2024b.
 No version dependency. Safe to start immediately.
