@@ -334,7 +334,7 @@ Verify manually: the existing test suite must still pass 32/1.
 
 ---
 
-## TASK-P2-04: powerLUT — DMD Power Lookup Table [IN PROGRESS]
+## TASK-P2-04: powerLUT — DMD Power Lookup Table [DONE]
 
 **No dependencies.**
 **Files (MODIFY):**
