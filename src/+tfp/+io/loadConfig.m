@@ -38,7 +38,11 @@ if ~isfile(yamlPath)
 end
 
 try
-    rawLines = readlines(yamlPath);
+    fid      = fopen(yamlPath, 'r');
+    raw      = fread(fid, '*char')';
+    fclose(fid);
+    raw      = raw(raw ~= char(13));        % strip \r so CRLF files parse on Windows
+    rawLines = string(strsplit(raw, char(10)));
     config   = parseLines(rawLines);
 catch ME
     error('tfp:io:loadConfig:badYaml', ...
