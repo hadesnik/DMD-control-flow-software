@@ -15,6 +15,18 @@ A Claude Code session should:
 
 ## TASK-P2-01: NI6323_DAQ — Legacy Session Interface [AVAILABLE]
 
+⚠️ BLOCKED — run diagnostic before starting this task.
+On the Windows scope PC, open MATLAB 2019a and run:
+  addpath('C:\projects\DMD-control-flow-software\src')
+  config = tfp.io.loadConfig('C:\projects\DMD-control-flow-software\configs\mock.yaml');
+  disp(config)
+
+If loadConfig works in 2019a, this task targets daq.createSession
+in MATLAB 2019a using the existing NI-DAQmx (no driver upgrade needed).
+Update this task's spec accordingly and remove the BLOCKED flag.
+
+If loadConfig fails, paste the error before proceeding.
+
 **No dependencies.**
 **Files (NEW):**
   src/+tfp/+hardware/NI6323_DAQ.m
@@ -132,6 +144,9 @@ The new class file parses without error:
 ---
 
 ## TASK-P2-02: DLP650LNIR_DMD — ALP-4.3 Real Hardware [AVAILABLE]
+
+**Note:** calllib/loadlibrary work in both R2019a and R2024b.
+No version dependency. Safe to start immediately.
 
 **No dependencies.**
 **Files (NEW):**
@@ -491,13 +506,15 @@ Files parse: check yaml is valid, scripts have no syntax errors via
 
 ## PHASE 1.5 TASKS
 
-## TASK-15-01: CellResponseModel [DONE when Phase 1.5 commits]
-## TASK-15-02: SyntheticImaging [DONE when Phase 1.5 commits]
-## TASK-15-03: MockScanImageBridge [DONE when Phase 1.5 commits]
-## TASK-15-04: Sequencer + config + loadConfig wiring [DONE when Phase 1.5 commits]
-## TASK-15-05: exp_ppsf_lateral wiring [DONE when Phase 1.5 commits]
+## TASK-15-01: CellResponseModel [DONE]
+## TASK-15-02: SyntheticImaging [DONE]
+## TASK-15-03: MockScanImageBridge [DONE]
+## TASK-15-04: Sequencer + config + loadConfig wiring [DONE]
+## TASK-15-05: exp_ppsf_lateral wiring [DONE]
 
 ---
 
 ## COMPLETED TASKS
-(none yet — Phase 1.5 in progress)
+
+TASK-15-01 through TASK-15-05: Phase 1.5 all-optical simulator
+  (37/38 tests green, committed 2026-05-19)
