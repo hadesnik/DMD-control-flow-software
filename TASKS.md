@@ -291,7 +291,7 @@ configs/dli4130.yaml. Switch to configs/real.yaml when DLP650LNIR arrives.
 
 ---
 
-## TASK-P2-03: liveFigures — Live Experiment Display [AVAILABLE]
+## TASK-P2-03: liveFigures — Live Experiment Display [IN PROGRESS]
 
 **No dependencies.**
 **Files (MODIFY):**
@@ -391,7 +391,7 @@ Total: 33 passed / 1 failed (or more if Phase 1.5 added tests).
 
 ---
 
-## TASK-P2-05: configs/real.yaml — Real Hardware Config [AVAILABLE]
+## TASK-P2-05: configs/real.yaml — Real Hardware Config [IN PROGRESS]
 
 **No dependencies.**
 **Files (NEW):**
