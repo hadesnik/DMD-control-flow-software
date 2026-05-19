@@ -138,10 +138,16 @@ The new class file parses without error:
   src/+tfp/+hardware/DLP650LNIR_DMD.m
 
 **Context:**
-Implements the abstract DMD interface against the Vialux ALP-4.3
-high-speed API via MATLAB's calllib(). The official header is at
-vendor/alp/official/alp.h. The MATLAB prototype file for 4.3 x64
-is vendor/alp/reference/parot-alptool/alpV43x64proto.m.
+Implements the abstract DMD interface against the Vialux ALP high-speed
+API via MATLAB's calllib(). Supports two boards via config (see
+Multi-board support below):
+  - Initial target: DLi4130 kit (DLP7000, ALP-4.1, alp41.dll, 1024×768)
+    — in hand now, use for all software development and validation.
+  - Final target: DLP650LNIR (ALP-4.3, alp4395.dll, 1280×800)
+    — arrives second week of June; switch via config, no code changes.
+ALP-4.3 header: vendor/alp/official/alp.h.
+ALP-4.1 header: vendor/alp/official-4.1/alp.h.
+MATLAB prototype for 4.3 x64: vendor/alp/reference/parot-alptool/alpV43x64proto.m.
 
 Key Phase 3 implementation notes from docs/alp-api-audit.md:
 - Use ALP_PROJ_ABORT_ASYNC (2345L) in abort() for mid-trial halt
@@ -239,7 +245,28 @@ Helper (private):
 Error identifier: tfp:hardware:DLP650LNIR_DMD:<reason>
 
 **CRITICAL:** Never invent ALP function names. Only use functions
-present in @vendor/alp/official/alp.h. If unsure, stop and ask.
+present in vendor/alp/official/alp.h. If unsure, stop and ask.
+
+**Multi-board support (DLi4130 kit available before DLP650LNIR):**
+Generalise DLP650LNIR_DMD.m to support both boards via two config
+parameters read in initialize():
+
+  config.alpVersion: '4.1' | '4.3'  (default '4.3')
+  config.dmdType:    'DLP7000' | 'DLP650LNIR'  (default 'DLP650LNIR')
+
+  alpVersion '4.1'  → dllName_ = 'alp41'
+                      nRows = 768, nCols = 1024 (XGA)
+                      maxPatternRate = 22727 Hz
+                      protoFile from config.protoFile (ALP-4.1 variant)
+
+  alpVersion '4.3'  → dllName_ = 'alp4395'
+                      nRows = 800, nCols = 1280 (WXGA)
+                      maxPatternRate = 12500 Hz
+
+DLP7000 device type constant is ALP_DMDTYPE_XGA_07A (4L) — present
+in both official/alp.h and parot-alptool/alp.h. Confirm in AlpDevInquire
+just as for ALP_DMDTYPE_WXGA_S450. Do NOT hard-code nRows/nCols from
+the constant value; read them from the config-driven lookup table above.
 
 **No test file** — requires real hardware.
 Add scripts/verify_DLP650LNIR_DMD.m as a manual verification script:
@@ -247,6 +274,8 @@ Add scripts/verify_DLP650LNIR_DMD.m as a manual verification script:
 
 **Verify:** runtests still 32/1. File parses:
   matlab -batch "addpath('src'); help tfp.hardware.DLP650LNIR_DMD"
+Initial hardware verification on DLi4130 (ALP-4.1, DLP7000) using
+configs/dli4130.yaml. Switch to configs/real.yaml when DLP650LNIR arrives.
 
 ---
 
@@ -355,6 +384,7 @@ Total: 33 passed / 1 failed (or more if Phase 1.5 added tests).
 **No dependencies.**
 **Files (NEW):**
   configs/real.yaml
+  configs/dli4130.yaml
   scripts/verify_NI6323_DAQ.m   (referenced by TASK-P2-01)
   scripts/verify_DLP650LNIR_DMD.m  (referenced by TASK-P2-02)
 
@@ -393,6 +423,42 @@ session:
   calibration_file: ''   # fill in after first calibration run
 
 fakeCells: []   # empty for real hardware — real cells come from suite2p
+
+**Spec — configs/dli4130.yaml:**
+hardwareKind: real
+
+dmd:
+  alpVersion: '4.1'
+  dmdType: 'DLP7000'
+  dllPath: 'C:\Program Files\ALP-4.1\alp41.dll'
+  protoFile: 'vendor\alp\reference\<alp41-proto>.m'  # fill in when proto confirmed
+  loadLatencyMsPerPattern: 10
+  debugFigure: false
+
+daq:
+  deviceName: 'Dev1'
+  sampleRate: 10000
+  analogInChannels: [0, 1, 2, 3]
+  analogOutChannels: [0, 1]
+  digitalOutChannels:
+    - 'port0/line0'    # DMD trigger
+    - 'port0/line1'    # Pockels cell gate
+    - 'port0/line10'   # ScanImage trigger
+
+imaging:
+  frameRate: 30
+  fovSizePx: 512
+  fovSizeUm: 800
+  simulateLatency: false
+
+session:
+  dataDir: 'C:\data'
+  calibration_file: ''
+
+fakeCells: []
+
+Also add to scripts/verify_DLP650LNIR_DMD.m step 1b: when dmdType is
+'DLP7000', confirm AlpDevInquire returns ALP_DMDTYPE_XGA_07A (4L).
 
 **Spec — scripts/verify_NI6323_DAQ.m:**
 Standalone script (not a test class). Run manually on scope PC.
