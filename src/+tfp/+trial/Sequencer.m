@@ -84,6 +84,12 @@ classdef Sequencer < handle
             obj.dmd.loadPatternSequence(trial.targetSpec.patternRef, loadOpts);
             obj.dmd.armSequence();
 
+            % Extract 2D pattern for siBridge (patternRef may be 2D or 3D).
+            patternMask = trial.targetSpec.patternRef;
+            if ndims(patternMask) > 2
+                patternMask = patternMask(:, :, 1);
+            end
+
             % Step 3: queue DAQ outputs.
             nSamples = round(trial.duration_s * obj.daq.sampleRate);
             nAo = numel(obj.daq.analogOutChannels);
@@ -105,6 +111,8 @@ classdef Sequencer < handle
             % Step 4: arm ScanImage if bridge present, else log skip.
             if ~isempty(obj.siBridge)
                 obj.siBridge.armForExternalTrigger(round(trial.duration_s * 30));
+                obj.siBridge.setActivePattern(patternMask, trial.preStim_s, ...
+                    trial.pulseTrain.pulseWidth_s);
             else
                 tfp.io.sessionLog(obj.log, 'siBridge-skipped', ...
                     struct('trialIdx', trial.trialIdx, ...
@@ -121,18 +129,24 @@ classdef Sequencer < handle
             % Step 7: stop DAQ.
             obj.daq.stop();
 
-            % Step 8: wait for SI completion if bridge present.
+            % Step 8: wait for SI completion; collect imaging data if bridge present.
+            frameTimestamps = [];
+            imaging         = [];
             if ~isempty(obj.siBridge)
                 obj.siBridge.waitForCompletion(trial.duration_s * 2);
+                [~, frameTimestamps] = obj.siBridge.getLastAcquisition();
+                imaging = obj.siBridge.getSyntheticResult();
             end
 
             % Steps 9-10: package data.
             data = struct( ...
-                'aiData',      ai, ...
-                'dmdLog',      obj.dmd.getLog(), ...
-                'daqLog',      obj.daq.getLog(), ...
-                'trialIdx',    trial.trialIdx, ...
-                'completedAt', datetime('now'));
+                'aiData',          ai, ...
+                'frameTimestamps', frameTimestamps, ...
+                'imaging',         imaging, ...
+                'dmdLog',          obj.dmd.getLog(), ...
+                'daqLog',          obj.daq.getLog(), ...
+                'trialIdx',        trial.trialIdx, ...
+                'completedAt',     datetime('now'));
 
             % Step 11: mark complete (outer run() does the saveTrial).
             trial.markComplete(data);

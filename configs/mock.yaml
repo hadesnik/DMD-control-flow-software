@@ -1,4 +1,4 @@
-# Mock hardware config for Phase 1 end-to-end tests and experiments.
+# Mock hardware config for Phase 1/1.5 end-to-end tests and experiments.
 # Selector for the hardware factory in experiment scripts.
 hardwareKind: mock
 
@@ -11,14 +11,13 @@ dmd:
   debugFigure: false
 
 # DAQ configuration. Consumed by tfp.hardware.MockDAQ.initialize.
-# Experiments configure all of these channels before running Sequencer.
+# Experiments configure all channels before running Sequencer.
 daq:
   sampleRate: 10000
   analogInChannels: [0, 1]
   analogOutChannels: [0]
   digitalOutChannels: [port0/line0]
   aiRangeV: [-5, 5]
-  fakeCells: []
 
 # Filesystem paths. Experiments create <dataDir>/<sessionName>/ per run.
 paths:
@@ -30,3 +29,33 @@ calibration_file: ""
 # ScanImage bridge (not used in Phase 1 / mock).
 scanimage:
   enabled: false
+
+# Imaging parameters. Consumed by tfp.hardware.MockScanImageBridge.
+imaging:
+  frameRate: 30          # Hz
+  fovSizePx: 512         # square FOV in pixels
+  fovSizeUm: 800         # approximate FOV in microns
+  simulateLatency: false # set true to add real acquisition pauses
+
+# Fake cells for the all-optical mock pipeline (Phase 1.5).
+# Parsed by tfp.io.loadConfig into a 1×N struct array.
+# Converted to tfp.sim.CellResponseModel objects in the experiment script.
+fakeCells:
+  - tag: cell_01
+    dmdCol: 640
+    dmdRow: 400
+    radiusDmd: 8
+    amplitude: 1.5
+    aiChannel: 0
+  - tag: cell_02
+    dmdCol: 400
+    dmdRow: 300
+    radiusDmd: 8
+    amplitude: 1.2
+    aiChannel: 1
+  - tag: cell_03
+    dmdCol: 900
+    dmdRow: 500
+    radiusDmd: 8
+    amplitude: 1.8
+    aiChannel: 2
