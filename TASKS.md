@@ -13,19 +13,16 @@ A Claude Code session should:
 
 ---
 
-## TASK-P2-01: NI6323_DAQ — Legacy Session Interface [AVAILABLE]
+## TASK-P2-01: NI6323_DAQ — Legacy Session Interface [IN PROGRESS]
 
-⚠️ BLOCKED — run diagnostic before starting this task.
-On the Windows scope PC, open MATLAB 2019a and run:
-  addpath('C:\projects\DMD-control-flow-software\src')
-  config = tfp.io.loadConfig('C:\projects\DMD-control-flow-software\configs\mock.yaml');
-  disp(config)
-
-If loadConfig works in 2019a, this task targets daq.createSession
-in MATLAB 2019a using the existing NI-DAQmx (no driver upgrade needed).
-Update this task's spec accordingly and remove the BLOCKED flag.
-
-If loadConfig fails, paste the error before proceeding.
+**CONFIRMED HARDWARE ENVIRONMENT:**
+- Target MATLAB version: R2019a
+- NI-DAQmx version: 19.5.0
+- `daq.getVendors()` confirms `IsOperational: true`
+- Use `daq.createSession('ni')` — legacy interface
+- Do NOT use `dataacquisition()` or `daq()` — modern interface only
+- Device name: 'Dev1' (confirm on scope PC with `daq.getDeviceInfo('Dev1')`)
+- All daq calls marked with `%LEGACY_API` comment
 
 **No dependencies.**
 **Files (NEW):**
@@ -337,7 +334,7 @@ Verify manually: the existing test suite must still pass 32/1.
 
 ---
 
-## TASK-P2-04: powerLUT — DMD Power Lookup Table [AVAILABLE]
+## TASK-P2-04: powerLUT — DMD Power Lookup Table [IN PROGRESS]
 
 **No dependencies.**
 **Files (MODIFY):**
