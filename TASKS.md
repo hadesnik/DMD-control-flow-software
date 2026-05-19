@@ -511,6 +511,63 @@ Files parse: check yaml is valid, scripts have no syntax errors via
 
 ---
 
+## PHASE 3 TASKS
+
+## TASK-P3-01: RealScanImageBridge [AVAILABLE]
+
+**No dependencies.**
+**Files (NEW):**
+  src/+tfp/+hardware/RealScanImageBridge.m
+
+**Context:**
+Verified msocket protocol between scope PC (128.32.177.203)
+and ScanImage PC (128.32.177.205). This PC is the SERVER —
+it listens on port 3043, ScanImage PC connects to it.
+
+Protocol (from verified SImsocketPrep.m):
+  srvsock = mslisten(3043)
+  SISocket = msaccept(srvsock, timeoutS)
+  msclose(srvsock)
+  mssend(SISocket, 'A')
+  wait for 'B' from ScanImage PC
+  → connection established
+  → send trial structs via mssend(SISocket, sendThisSI)
+  → sendThisSI.times = stim onset times
+  → sendThisSI.power = laser power
+
+msocket library: C:\Users\adesniklab\Documents\MATLAB\msocket\
+
+**Spec:**
+classdef RealScanImageBridge < handle
+  Implements the same interface as MockScanImageBridge:
+  - armForExternalTrigger(obj, nFrames)
+  - setActivePattern(obj, patternMask, stimOnsetSec, stimDurationSec)
+  - waitForCompletion(obj, timeoutS)
+  - [framesPath, frameTimestamps] = getLastAcquisition(obj)
+  - getLog(obj)
+
+  armForExternalTrigger: establish msocket connection
+    addpath msocket library
+    srvsock = mslisten(3043)
+    obj.siSocket_ = msaccept(srvsock, timeoutS)
+    msclose(srvsock)
+    mssend(obj.siSocket_, 'A')
+    wait for 'B'
+
+  waitForCompletion: send trial struct and wait for done signal
+    sendThisSI.times = obj.stimOnsetSec_
+    sendThisSI.power = obj.powerMw_
+    mssend(obj.siSocket_, sendThisSI)
+    wait for 'received' or 'done' from ScanImage PC
+
+  getLastAcquisition: return frame timestamps
+    framesPath = '' (ScanImage saves TIFFs independently)
+    frameTimestamps = linspace(0, nFrames/frameRate, nFrames)'
+
+Error identifier: tfp:hardware:RealScanImageBridge:<reason>
+
+---
+
 ## COMPLETED TASKS
 
 TASK-15-01 through TASK-15-05: Phase 1.5 all-optical simulator

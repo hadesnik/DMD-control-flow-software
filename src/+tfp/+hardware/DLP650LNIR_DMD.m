@@ -60,7 +60,7 @@ classdef DLP650LNIR_DMD < tfp.hardware.DMD
                     obj.maxPatternRate = 12500;
                     expectedDmdType    = int32(12); % ALP_DMDTYPE_WXGA_S450 (alp.h:153)
                 case '4.1'
-                    obj.dllName_       = 'alp41';
+                    obj.dllName_       = 'alpD41';
                     obj.nRows          = 768;
                     obj.nCols          = 1024;
                     obj.maxPatternRate = 22727;

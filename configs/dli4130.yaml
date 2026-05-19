@@ -8,8 +8,16 @@ hardwareKind: real
 dmd:
   alpVersion: '4.1'
   dmdType: 'DLP7000'
-  dllPath: 'C:\Program Files\ALP-4.1\alp41.dll'
-  protoFile: 'vendor\alp\reference\<alp41-proto>.m'  # fill in path when ALP-4.1 proto confirmed
+  dllPath: 'C:\Program Files\ALP-4.1\ALP-4.1 high-speed API\x64\alpD41.dll'
+  # alpV42x64proto.m is used for ALP-4.1 because function signatures are
+  # identical to ALP-4.2 x64 (verified in docs/alp-api-audit.md).
+  # No ALP-4.1-specific proto file ships with the SDK.
+  protoFile: 'vendor\alp\reference\parot-alptool\alpV42x64proto.m'
+  nRows: 768
+  nCols: 1024
+  maxPatternRate: 22727
+  activationKey: '223000-000442-987359'
+  deviceSerial: '00D256FC'
   loadLatencyMsPerPattern: 10
   debugFigure: false
 
