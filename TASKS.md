@@ -13,7 +13,7 @@ A Claude Code session should:
 
 ---
 
-## TASK-P2-01: NI6323_DAQ — Legacy Session Interface [IN PROGRESS]
+## TASK-P2-01: NI6323_DAQ — Legacy Session Interface [DONE]
 
 **CONFIRMED HARDWARE ENVIRONMENT:**
 - Target MATLAB version: R2019a
