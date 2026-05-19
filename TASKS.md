@@ -391,7 +391,7 @@ Total: 33 passed / 1 failed (or more if Phase 1.5 added tests).
 
 ---
 
-## TASK-P2-05: configs/real.yaml — Real Hardware Config [IN PROGRESS]
+## TASK-P2-05: configs/real.yaml — Real Hardware Config [DONE]
 
 **No dependencies.**
 **Files (NEW):**
