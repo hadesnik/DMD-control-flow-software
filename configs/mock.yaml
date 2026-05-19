@@ -42,20 +42,23 @@ imaging:
 # Converted to tfp.sim.CellResponseModel objects in the experiment script.
 fakeCells:
   - tag: cell_01
-    dmdCol: 640
+    dmdCol: 400
     dmdRow: 400
     radiusDmd: 8
     amplitude: 1.5
+    sigma: 10
     aiChannel: 0
   - tag: cell_02
-    dmdCol: 400
-    dmdRow: 300
+    dmdCol: 500
+    dmdRow: 400
     radiusDmd: 8
     amplitude: 1.2
+    sigma: 10
     aiChannel: 1
   - tag: cell_03
-    dmdCol: 900
-    dmdRow: 500
+    dmdCol: 600
+    dmdRow: 400
     radiusDmd: 8
     amplitude: 1.8
+    sigma: 10
     aiChannel: 2

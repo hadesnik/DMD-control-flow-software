@@ -6,7 +6,7 @@ function result = exp_ppsf_lateral(configOrPath, sessionName)
 %   configOrPath may be a path to a YAML config or a pre-built config
 %   struct (test path).
 %
-%   Phase 1: 3 hardcoded mock targets x 3 distances x 2 reps = 18 trials.
+%   Phase 1: 3 hardcoded mock targets x 9 distances x 2 reps = 54 trials.
 %   For real hardware, targets would be picked interactively from a
 %   GCaMP FOV.
 %
@@ -31,7 +31,7 @@ calibration = loadCalibrationOrIdentity(config);
 
 % Phase 1 mock target picking.
 targets     = [400, 400; 500, 400; 600, 400];
-distancesUm = [0, 10, 20];
+distancesUm = [0, 3, 6, 9, 12, 15, 20, 30, 40];
 nReps       = 2;
 powerMw     = 5;
 radiusPx    = 5;
@@ -49,8 +49,23 @@ for k = 1:numel(sequence.trials)
     tr.targetSpec.patternRef = tfp.patterns.singleSpot(dmd, stimTarget, radiusPx);
 end
 
+% Build mock ScanImage bridge from fakeCells if defined in config.
+siBridge = [];
+if isfield(config, 'fakeCells') && ~isempty(config.fakeCells)
+    siCfg = struct('frameRate', 30, 'simulateLatency', false);
+    if isfield(config, 'imaging')
+        siCfg = config.imaging;
+    end
+    cells    = buildCells(config.fakeCells);
+    siBridge = tfp.hardware.MockScanImageBridge(cells, siCfg);
+end
+
 % Run; swallow errors so the analysis layer still produces a result.
-sequencer = tfp.trial.Sequencer(dmd, daq, sequence, sessionDir);
+sequencerOpts = struct();
+if ~isempty(siBridge)
+    sequencerOpts.siBridge = siBridge;
+end
+sequencer = tfp.trial.Sequencer(dmd, daq, sequence, sessionDir, sequencerOpts);
 runError = [];
 try
     sequencer.run();
@@ -125,14 +140,27 @@ calibration.timestamp          = datetime('now');
 calibration.notes              = 'identity fallback (mock)';
 end
 
-function r = tracePeakResponse(ai)
-% Pipe AI(N x nChans) through onlineDFF by treating channels as ROI pixels.
-[N, nChans] = size(ai);
-frames    = reshape(ai, [N, 1, nChans]);
-roi       = true(1, nChans);
-nBaseline = max(1, round(N / 4));
-trace     = tfp.analysis.onlineDFF(frames, roi, 1:nBaseline);
-r         = max(trace);
+function cells = buildCells(fakeCellsCfg)
+% Build CellResponseModel array from the fakeCells config struct array.
+nCells = numel(fakeCellsCfg);
+for k = nCells:-1:1
+    fc   = fakeCellsCfg(k);
+    args = {};
+    if isfield(fc, 'amplitude'),   args = [args, {'amplitude',   double(fc.amplitude)}]; end %#ok<AGROW>
+    if isfield(fc, 'sigma'),       args = [args, {'sigma',       double(fc.sigma)}]; end %#ok<AGROW>
+    if isfield(fc, 'aiChannel'),   args = [args, {'aiChannel',   double(fc.aiChannel)}]; end %#ok<AGROW>
+    if isfield(fc, 'tag'),         args = [args, {'responseTag', char(fc.tag)}]; end %#ok<AGROW>
+    cells(k) = tfp.sim.CellResponseModel( ...
+        [double(fc.dmdCol), double(fc.dmdRow)], double(fc.radiusDmd), args{:});
+end
+end
+
+function r = tracePeakResponse(F)
+% F: nCells x T raw fluorescence from SyntheticImaging.
+%   Encoding: F = BASELINE + dFF * BASELINE, BASELINE = 1000.
+BASELINE = 1000;
+dff = (double(F) - BASELINE) / BASELINE;
+r   = max(dff(:));
 end
 
 function summary = summarizeByDistance(trials, distancesUm)
@@ -143,9 +171,13 @@ for d = 1:numel(distancesUm)
     for k = 1:numel(trials)
         tr = trials(k);
         if ~strcmp(tr.status, 'complete'), continue; end
-        if ~isstruct(tr.data) || ~isfield(tr.data, 'aiData'), continue; end
+        if ~isstruct(tr.data), continue; end
         if abs(tr.metadata.distanceUm - dist) > 1e-9, continue; end
-        responses(end+1) = tracePeakResponse(tr.data.aiData); %#ok<AGROW>
+        if ~isfield(tr.data, 'imaging') || isempty(tr.data.imaging) || ...
+                ~isfield(tr.data.imaging, 'F')
+            continue;
+        end
+        responses(end+1) = tracePeakResponse(tr.data.imaging.F); %#ok<AGROW>
     end
     summary(d).distanceUm = dist;
     if isempty(responses)

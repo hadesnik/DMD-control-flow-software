@@ -15,7 +15,8 @@ classdef CellResponseModel < handle
     properties
         positionDmd   % [col, row] DMD pixel coords, 1-indexed, top-left origin
         radiusDmd     % cell footprint radius in DMD pixels
-        amplitude     % peak ΔF/F when fully illuminated at zero distance
+        amplitude     % peak ΔF/F when stim is centred on cell (distance = 0)
+        sigma         % Gaussian falloff σ in DMD pixels; FWHM = 2.355 × sigma
         aiChannel     % AI channel index (reserved for future patch-clamp mode)
         responseTag   % label string, e.g. 'cell_01'
     end
@@ -26,11 +27,13 @@ classdef CellResponseModel < handle
             %
             %   CellResponseModel(positionDmd, radiusDmd)
             %   CellResponseModel(..., 'amplitude', 1.5,
+            %                        'sigma',      10,
             %                        'aiChannel',   0,
             %                        'responseTag', 'cell')
             %
             %   positionDmd: [col row] in DMD pixels
             %   radiusDmd:   scalar, cell footprint radius in DMD pixels
+            %   sigma:       Gaussian falloff std-dev (DMD px); default 10
             if ~isnumeric(positionDmd) || numel(positionDmd) ~= 2
                 error('tfp:sim:CellResponseModel:badPosition', ...
                     'positionDmd must be a 2-element numeric [col row].');
@@ -42,6 +45,7 @@ classdef CellResponseModel < handle
             end
             p = inputParser();
             addParameter(p, 'amplitude',   1.5);
+            addParameter(p, 'sigma',       10);
             addParameter(p, 'aiChannel',   0);
             addParameter(p, 'responseTag', 'cell');
             parse(p, varargin{:});
@@ -49,6 +53,7 @@ classdef CellResponseModel < handle
             obj.positionDmd = double(positionDmd(:)');
             obj.radiusDmd   = double(radiusDmd);
             obj.amplitude   = double(p.Results.amplitude);
+            obj.sigma       = double(p.Results.sigma);
             obj.aiChannel   = double(p.Results.aiChannel);
             obj.responseTag = char(p.Results.responseTag);
         end
@@ -72,19 +77,18 @@ classdef CellResponseModel < handle
             frameTimestamps = double(frameTimestamps(:)');  % enforce row vector
             T = numel(frameTimestamps);
 
-            % --- Overlap: fraction of cell footprint pixels that are ON ---
+            % --- Gaussian falloff: response scales with distance from stim centroid ---
             patternMask = logical(patternMask(:,:,1));  % take first slice if 3D
-            [nRows, nCols] = size(patternMask);
-            [cols, rows]   = meshgrid(1:nCols, 1:nRows);
-            cellMask = (cols - obj.positionDmd(1)).^2 + ...
-                       (rows - obj.positionDmd(2)).^2 <= obj.radiusDmd^2;
-            nCellPx = sum(cellMask(:));
-            if nCellPx == 0
-                overlap = 0;
+            [onRows, onCols] = find(patternMask);
+            if isempty(onRows)
+                scaledAmplitude = 0;
             else
-                overlap = double(sum(patternMask(cellMask))) / nCellPx;
+                centroidCol = mean(onCols);
+                centroidRow = mean(onRows);
+                dist = sqrt((obj.positionDmd(1) - centroidCol).^2 + ...
+                            (obj.positionDmd(2) - centroidRow).^2);
+                scaledAmplitude = obj.amplitude * exp(-dist.^2 / (2 * obj.sigma.^2));
             end
-            scaledAmplitude = obj.amplitude * overlap;
 
             if scaledAmplitude < eps
                 %ASSUMED baseline noise sigma = 0.10 dF/F units
