@@ -610,22 +610,19 @@ scripts/run_powerMeterSweep.m:
 
 ---
 
-## TASK-P3-03: SubstageCamera real implementation [AVAILABLE]
+## TASK-P3-03: SubstageCamera real implementation [DONE]
 
-**Blocked on:** camera model confirmation (Thorlabs — check tomorrow).
-**Files (MODIFY):**
-  src/+tfp/+hardware/SubstageCamera_generic.m
+**Camera confirmed:** Basler acA2500 GigE (2592×1944, 2.2 µm pitch).
+**Files (NEW):**
+  src/+tfp/+hardware/BaslerSubstageCamera.m
+  configs/real.yaml (camera section added)
 
-**Spec:**
-Fill in the videoinput() call with the correct Thorlabs device name and
-format string once the camera model is confirmed. The stub already
-implements the abstract interface; this task replaces the placeholder
-device string with the real one and verifies a live frame can be grabbed.
-
-  obj.vid_ = videoinput('gentl', 1, formatStr)
-  % or 'winvideo' / 'gige' depending on Thorlabs interface
-
-Verify: grabframe() returns a non-empty image on the scope PC.
+**Implementation notes:**
+- Adaptor: 'gentl' (requires Basler pylon 6+ with pylon GenTL Producer)
+- Format: 'Mono8' (default); 'Mono12' possible if more dynamic range needed
+- ExposureTime in µs (GenICam); fallback to ExposureTimeAbs for older firmware
+- Run imaqhwinfo('gentl') on scope PC to confirm deviceId (expect 1)
+- Verify: snap() returns 1944×2592 double on scope PC with camera connected
 
 ---
 

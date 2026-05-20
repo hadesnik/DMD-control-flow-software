@@ -40,6 +40,7 @@ The NIR DMD (TI DLP650LNIR) is not in hand yet; arrival expected second week of 
 **Control hardware (two PCs)**:
 - **Ephys/control PC** ("the DAQ PC"): NI PCIe-6323, runs MATLAB, drives the DMD, generates all triggers and analog control, acquires ephys + any auxiliary signals. **DMD lives here.**
 - **Imaging PC**: runs ScanImage (MATLAB) for 2p GCaMP imaging. Triggered by TTL from the DAQ PC.
+- **Substage widefield camera**: Basler acA2500-14um (USB3 Vision, 2592×1944, 2.2 µm pixel pitch, serial 22016738). Connected to the DAQ PC. Used only for spatial calibration (DMD→camera affine and ScanImage scan-field→camera affine); not used during experiments. Driver: `tfp.hardware.BaslerSubstageCamera` via MATLAB Image Acquisition Toolbox `gentl` adaptor (requires Basler pylon 6+ with pylon GenTL Producer).
 - **No third PC.** The lab's existing LCoS SLM rig uses a separate PC; this project deliberately does not, to avoid socket-communication bugs.
 
 **Trigger topology**:

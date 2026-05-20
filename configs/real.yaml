@@ -36,6 +36,17 @@ session:
   dataDir: 'C:\data'
   calibration_file: ''   # fill in after first alignDMDtoCamera run
 
+# Substage widefield camera — Basler acA2500-14um (USB3 Vision, serial 22016738).
+# Consumed by tfp.hardware.BaslerSubstageCamera.initialize.
+# imaqhwinfo('gentl',1) confirmed: DeviceIDs=[1], SupportedFormats={'Mono8','Mono12'}.
+camera:
+  class: 'tfp.hardware.BaslerSubstageCamera'
+  deviceId: 1
+  format: 'Mono8'
+  exposureMs: 10        # ms; increase if spots are underexposed
+  gain: 0               # dB; 0 = minimum noise
+  umPerPixel: 1.56      # µm per camera pixel at the sample; remeasure after mounting
+
 # No fake cells for real hardware — live cells identified by suite2p.
 fakeCells: []
 
