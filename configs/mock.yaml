@@ -62,3 +62,21 @@ fakeCells:
     amplitude: 1.8
     sigma: 10
     aiChannel: 2
+
+# Laser modulation (NKT FS-50). Ignored in mock mode — included for
+# config schema parity with real.yaml.
+laser:
+  fs50_ao_channel: 'ao1'
+  modulation_voltage_max: 5.0     # ASSUMED — verify with NKT FS-50 manual
+  modulation_voltage_min: 0.0     # 0 V = laser off
+  calibration_file: ''
+  default_power_mw: 1.0
+
+# Trial timing defaults.
+trial:
+  preStim_s: 1.0
+  stimDuration_s: 0.25
+  postStim_s: 3.0
+  nReps: 5
+  distancesUm: [0, 3, 6, 9, 12, 15, 20, 30, 40]
+  shuffle: true

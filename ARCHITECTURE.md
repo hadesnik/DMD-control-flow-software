@@ -90,6 +90,18 @@ classdef DAQ < handle
 end
 ```
 
+#### Stimulation timing architecture
+
+The DMD is purely spatial — it defines which pixels are illuminated.
+Stimulation timing and power are controlled entirely by the NKT FS-50
+laser's analog power modulation input (DAQ AO channel). The FS-50
+modulation input accepts 0–5 V (verify with NKT manual); 0 V = laser
+off, max V = max power. The DAQ queues an AO waveform that is 0 V
+during baseline, ramps to the target voltage at stim onset, holds for
+stimDuration_s, then returns to 0 V. The DMD pattern is loaded before
+the trial and does not change during it for single-target PPSF
+experiments.
+
 #### `MockDAQ`
 
 Generates synthetic data:
@@ -100,6 +112,34 @@ Generates synthetic data:
 #### `NI6323_DAQ`
 
 Uses MATLAB's `daq` toolbox (newer `dataacquisition` interface, R2020a+). PCIe-6323 has 32 AI / 4 AO / 48 DIO. Channel assignments to be configured in YAML, not hard-coded.
+
+#### `SubstageCamera` (abstract)
+
+Widefield camera for DMD spatial calibration. **Not ScanImage** — ScanImage uses a PMT and cannot image DMD spots. The substage camera views the sample from below and captures a full-field image for each projected calibration spot.
+
+```matlab
+classdef SubstageCamera < handle
+    properties (Abstract, SetAccess = protected)
+        nRows; nCols; isInitialized
+    end
+    methods (Abstract)
+        initialize(obj, config)
+        frame = snap(obj)          % blocking single-frame; returns double(nRows,nCols)
+        startLive(obj)
+        stopLive(obj)
+        frame = getFrame(obj)      % last frame (non-blocking during live)
+        cleanup(obj)
+    end
+end
+```
+
+#### `MockSubstageCamera`
+
+Config accepts `dmd` (a `MockDMD` handle) and `truthAffine` (3×3). On each `snap()`, reads the current active pattern from the DMD via `dmd.getActivePattern()`, finds the pattern centroid in DMD space, applies the truth affine to get the expected camera position, and renders a Gaussian spot there on a noise background. Allows `alignDMDtoCamera` to run fully end-to-end in mock mode.
+
+#### `SubstageCamera_generic`
+
+Placeholder for the real camera (model TBD). All methods `error()` with a clear message. Each method body contains commented Image Acquisition Toolbox (`videoinput` / `getsnapshot`) skeleton code showing where SDK calls go.
 
 #### `ScanImageBridge`
 
@@ -231,13 +271,20 @@ function liveFigures(seqState)  % updates the live experiment figure
 The hard part. Routines that establish the DMD↔sample coordinate map and power calibration.
 
 ```matlab
-function calib = alignDMDtoCamera(dmd, camera, options)
-    % Project a sequence of single spots, capture on camera, fit affine.
+function calib = alignDMDtoCamera(dmd, referenceImagePath, options)
+    % Process a TIFF stack of calibration spots → fit affine DMD→sample.
+function calib = alignDMDtoCamera_mock(dmd, options)
+    % Returns a known-affine calibration for testing (no hardware needed).
 function calib = measurePSF(dmd, camera, sampleSlab, options)
     % On a thin fluorescent slab.
 function curve = powerMeterSweep(dmd, powerMeter, options)
     % Sweep "on" pixel count, record power, build LUT.
 ```
+
+**Critical imaging constraint:** ScanImage is a PMT-based point scanner. It **cannot** image DMD illumination spots. The `referenceImagePath` TIFF passed to `alignDMDtoCamera` must come from a **substage widefield camera**, not from ScanImage. Two calibration strategies exist (see CLAUDE.md "Known gotchas" for detail):
+
+1. **Substage camera (primary):** Fluorescent film illuminated by DMD spots, imaged on a substage camera. A separate ScanImage raster of the same film cross-registers substage-camera coordinates to ScanImage scan coordinates. `alignDMDtoCamera` handles the first step (spot → affine from substage TIFF); the cross-registration step is not yet implemented.
+2. **Photobleach holes (backup):** DMD bleaches dark holes in a fluorescent film; ScanImage images the holes directly, giving a one-step DMD → ScanImage mapping. Feasibility depends on sufficient power density at sample.
 
 These calibration routines also have mock versions for testing the pipeline without hardware.
 
@@ -333,11 +380,12 @@ Every test runs in <30 s. The full suite is the gate before any real-hardware se
 - [x] `+experiments/exp_ppsf_lateral.m`, `exp_rapid_sequential.m`, `exp_power_curve.m`
 - [x] `+io/saveTrial.m`, `loadConfig.m`, `sessionLog.m`
 - [x] `configs/mock.yaml`
-- [x] Tests for all of the above (`test_calibration_mock` deferred to Phase 2/3)
+- [x] Tests for all of the above
+- [x] `+calibration/alignDMDtoCamera_mock.m` — known-affine mock; `test_calibration_mock` passing (2026-05-19)
 
 **Milestone achieved as of 2026-05-17.** Running `exp_ppsf_lateral('configs/mock.yaml', 'test_session')` runs end-to-end against mocks and produces a complete fake dataset (18 trials, `.mat` files on disk, well-shaped summary struct). Caveat: the response curve is currently flat noise — MockDAQ does not yet implement fake-cell response coupling, per the deliberate Phase 1 design call to keep cross-coupling logic in the Sequencer-or-experiment layer.
 
-TODO: implement fake-cell response coupling in Sequencer-or-experiment layer (Phase 1.5).
+**Phase 1 100% complete as of 2026-05-19.** All 39 tests green. `test_calibration_mock` fakeAffineRoundTrip now exercises `alignDMDtoCamera_mock` with a known 0.5×-scale + offset affine; round-trip error verified < 0.1 px.
 
 ## Phase 2 deliverables (DAQ-real, days 5–7)
 

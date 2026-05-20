@@ -158,6 +158,19 @@ classdef MockDMD < tfp.hardware.DMD
             obj.logEvent('cleanup', []);
         end
 
+        function pattern = getActivePattern(obj)
+            %getActivePattern Return the currently active pattern slice.
+            %   Returns logical(nRows, nCols) for the pattern at
+            %   currentPatternIdx_, or [] if no pattern is loaded or the
+            %   sequence has not been started. Used by MockSubstageCamera
+            %   to synthesise images during mock calibration.
+            if isempty(obj.patterns_) || obj.currentPatternIdx_ == 0
+                pattern = [];
+            else
+                pattern = obj.patterns_(:, :, obj.currentPatternIdx_);
+            end
+        end
+
         function entries = getLog(obj)
             %getLog Return the in-memory session log.
             %   entries is a struct array with fields

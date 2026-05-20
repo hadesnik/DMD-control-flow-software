@@ -145,6 +145,65 @@ classdef test_TrialSequence < matlab.unittest.TestCase
             end
         end
 
+        function generatePPSF_2d(testCase)
+            target  = [400, 400];
+            offsets = [-5 -5; -5 0; -5 5; 0 -5; 0 0; 0 5; 5 -5; 5 0; 5 5];
+            nReps   = 2;
+            seq = tfp.trial.TrialSequence.generatePPSF( ...
+                target, offsets, nReps, 5.0);
+
+            nExpected = size(offsets, 1) * nReps;
+            testCase.verifyEqual(numel(seq.trials), nExpected);
+
+            % Every trial has offsetUm (1x2) and distanceUm = norm(offsetUm).
+            for k = 1:numel(seq.trials)
+                off  = seq.trials(k).metadata.offsetUm;
+                testCase.verifySize(off, [1 2]);
+                dist = seq.trials(k).metadata.distanceUm;
+                testCase.verifyEqual(dist, norm(off), 'AbsTol', 1e-10);
+            end
+
+            % Each offset appears exactly nReps times.
+            for o = 1:size(offsets, 1)
+                count = 0;
+                for k = 1:numel(seq.trials)
+                    off = seq.trials(k).metadata.offsetUm;
+                    if abs(off(1) - offsets(o,1)) < 1e-9 && ...
+                            abs(off(2) - offsets(o,2)) < 1e-9
+                        count = count + 1;
+                    end
+                end
+                testCase.verifyEqual(count, nReps, ...
+                    sprintf('offset [%g %g] count', offsets(o,1), offsets(o,2)));
+            end
+        end
+
+        function gaussianGrid2D_properties(testCase)
+            grid = tfp.trial.TrialSequence.gaussianGrid2D(20, 2, 8);
+
+            % Nx2 matrix with more than one row.
+            testCase.verifyEqual(size(grid, 2), 2);
+            testCase.verifyGreaterThan(size(grid, 1), 1);
+
+            % [0 0] is always included.
+            hasOrigin = any(grid(:,1) == 0 & grid(:,2) == 0);
+            testCase.verifyTrue(hasOrigin, '[0 0] must be in grid.');
+
+            % Symmetric: every [dx dy] has a [-dx -dy] counterpart.
+            for k = 1:size(grid, 1)
+                dx = grid(k,1); dy = grid(k,2);
+                mirror = any(abs(grid(:,1)+dx) < 1e-9 & abs(grid(:,2)+dy) < 1e-9);
+                testCase.verifyTrue(mirror, ...
+                    sprintf('[%g %g] has no symmetric counterpart', dx, dy));
+            end
+
+            % Feed directly into generatePPSF.
+            target = [400, 400];
+            nReps  = 2;
+            seq = tfp.trial.TrialSequence.generatePPSF(target, grid, nReps, 5.0);
+            testCase.verifyEqual(numel(seq.trials), size(grid, 1) * nReps);
+        end
+
         function shuffle_reproducible(testCase)
             targets     = [100, 100; 200, 200; 300, 300];
             distancesUm = [0, 5, 10];

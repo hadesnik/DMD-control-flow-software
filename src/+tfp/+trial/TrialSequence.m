@@ -14,18 +14,24 @@ classdef TrialSequence < handle
     end
 
     methods (Static)
-        function seq = generatePPSF(targets, distancesUm, nReps, powerMw)
+        function seq = generatePPSF(targets, offsetsUm, nReps, powerMw)
             %generatePPSF Build a PPSF sequence.
             %
             %   Inputs:
-            %     targets     - N x 2 numeric [col row] DMD pixel coords.
-            %     distancesUm - vector of offset magnitudes (um), stored on
-            %                   trial.metadata.distanceUm.
-            %     nReps       - positive integer, reps per (target, distance).
-            %     powerMw     - non-negative numeric scalar; same power for
-            %                   every trial.
+            %     targets   - N x 2 numeric [col row] DMD pixel coords.
+            %     offsetsUm - 1D vector [d1, d2, ...] of x-axis distances
+            %                 (um), OR M x 2 matrix [dx1 dy1; dx2 dy2; ...]
+            %                 of 2D offsets. 1D input is treated as [d 0].
+            %     nReps     - positive integer, reps per (target, offset).
+            %     powerMw   - non-negative numeric scalar; same power for
+            %                 every trial.
             %
-            %   Iteration order: rep outer, target middle, distance inner.
+            %   Iteration order: rep outer, target middle, offset inner.
+            %
+            %   Metadata stored per trial:
+            %     .offsetUm   [dx dy] (1x2), 2D offset applied (um).
+            %     .distanceUm norm([dx dy]), radial distance (um).
+            %     .repIdx     rep number.
             %
             %   Defaults applied to every Trial (override post-hoc as needed):
             %     duration_s  = 2.0      pulseTrain.pulseWidth_s = 0.1
@@ -33,19 +39,19 @@ classdef TrialSequence < handle
             %     postStim_s  = 1.0      pulseTrain.interPulse_s = 0
 
             validateTargets(targets, 'generatePPSF');
-            validateVector(distancesUm, 'distancesUm', 'generatePPSF');
+            offsets2d = normalizeOffsets(offsetsUm, 'generatePPSF');
             validatePosInt(nReps, 'nReps', 'generatePPSF');
             validateScalarNonNeg(powerMw, 'powerMw', 'generatePPSF');
 
-            nTargets   = size(targets, 1);
-            nDistances = numel(distancesUm);
-            nExpected  = nTargets * nDistances * nReps;
+            nTargets  = size(targets, 1);
+            nOffsets  = size(offsets2d, 1);
+            nExpected = nTargets * nOffsets * nReps;
 
             trials(nExpected, 1) = tfp.trial.Trial();
             idx = 0;
             for rep = 1:nReps
                 for t = 1:nTargets
-                    for d = 1:nDistances
+                    for o = 1:nOffsets
                         idx = idx + 1;
                         tr = trials(idx);
                         tr.trialIdx   = idx;
@@ -60,15 +66,17 @@ classdef TrialSequence < handle
                         tr.preStim_s  = 0.5;
                         tr.postStim_s = 1.0;
                         tr.metadata   = struct( ...
-                            'distanceUm', distancesUm(d), 'repIdx', rep);
+                            'offsetUm',   offsets2d(o, :), ...
+                            'distanceUm', norm(offsets2d(o, :)), ...
+                            'repIdx',     rep);
                     end
                 end
             end
 
             seq = tfp.trial.TrialSequence();
             seq.trials = trials;
-            seq.description = sprintf('PPSF: %d targets x %d distances x %d reps', ...
-                nTargets, nDistances, nReps);
+            seq.description = sprintf('PPSF: %d targets x %d offsets x %d reps', ...
+                nTargets, nOffsets, nReps);
         end
 
         function seq = generateRapidSequential(targets, isi_s, nReps)
@@ -161,6 +169,33 @@ classdef TrialSequence < handle
             seq.trials = trials;
             seq.description = sprintf('PowerCurve: %d powers x %d reps', nPowers, nReps);
         end
+
+        function offsets = gaussianGrid2D(maxUm, nPointsPerHalfAxis, sigmaPsfUm)
+            %gaussianGrid2D Gaussian-spaced 2D offset grid for PPSF experiments.
+            %
+            %   offsets = gaussianGrid2D(maxUm, nPointsPerHalfAxis, sigmaPsfUm)
+            %
+            %   Returns an Nx2 matrix of [dx dy] offsets (um), symmetric
+            %   around (0,0). Points are denser near center (Gaussian
+            %   quantile spacing), with outermost points at ±maxUm.
+            %   Uses erfinv (MATLAB built-in, no Statistics Toolbox needed).
+            %
+            %   Defaults: maxUm=75, nPointsPerHalfAxis=5, sigmaPsfUm=8.
+
+            if nargin < 1, maxUm              = 75; end %#ok<ALIGN>
+            if nargin < 2, nPointsPerHalfAxis = 5;  end
+            if nargin < 3, sigmaPsfUm         = 8;  end
+
+            % Evenly spaced quantiles on (0.5, 1.0) → Gaussian half-axis positions.
+            p        = linspace(0.5, 1.0, nPointsPerHalfAxis + 2);
+            p        = p(2:end-1);
+            halfAxis = sqrt(2) .* erfinv(2*p - 1) .* sigmaPsfUm;
+            halfAxis = halfAxis .* (maxUm / halfAxis(end));
+
+            axis1d   = [-fliplr(halfAxis), 0, halfAxis];
+            [DX, DY] = meshgrid(axis1d, axis1d);
+            offsets  = [DX(:), DY(:)];
+        end
     end
 
     methods
@@ -223,5 +258,18 @@ function validateScalarNonNeg(x, name, fnName)
 if ~isnumeric(x) || ~isscalar(x) || ~isfinite(x) || x < 0
     error('tfp:trial:TrialSequence:badScalar', ...
         '%s: %s must be a non-negative finite numeric scalar.', fnName, name);
+end
+end
+
+function offsets2d = normalizeOffsets(offsetsUm, fnName)
+% Accept 1D vector (→ x-axis offsets [d 0]) or Nx2 matrix.
+if isnumeric(offsetsUm) && isvector(offsetsUm) && ~isempty(offsetsUm)
+    offsets2d = [offsetsUm(:), zeros(numel(offsetsUm), 1)];
+elseif isnumeric(offsetsUm) && ndims(offsetsUm) == 2 && ...
+        size(offsetsUm, 2) == 2 && size(offsetsUm, 1) >= 1
+    offsets2d = offsetsUm;
+else
+    error('tfp:trial:TrialSequence:badOffsets', ...
+        '%s: offsetsUm must be a non-empty numeric vector or Nx2 matrix.', fnName);
 end
 end

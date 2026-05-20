@@ -214,6 +214,13 @@ Phase 1 implementation pinned the following conventions; treat them as load-bear
 
 ## Known gotchas
 
+- **ScanImage is a PMT-based point scanner, not a camera. It cannot image DMD illumination spots directly.**
+  The 2p imaging path uses galvo-scanned focused excitation and a PMT point detector. There is no widefield camera on the imaging PC. Consequently, projecting a DMD spot onto a fluorescent slab and "imaging it in ScanImage" does not work: ScanImage can only see fluorescence that its own scan beam excites.
+
+  Two viable routes for DMD↔sample spatial calibration exist:
+  - **Substage camera (preferred):** A widefield camera viewing the sample from below (trans-illumination geometry) can image fluorescence excited by the DMD on a thin fluorescent film. A separate ScanImage raster of the same film gives the imaging coordinate frame. Cross-registering the two images (substage camera coords ↔ ScanImage scan coords) yields the full DMD → sample mapping. `alignDMDtoCamera` currently processes the substage-camera TIFF; the ScanImage↔substage cross-registration is a separate step not yet implemented.
+  - **Photobleach holes (backup):** Project DMD spots onto a fluorescent film at sufficient power density to bleach dark holes. Image the holes with ScanImage (they appear as dark spots against the fluorescent background). This gives a direct DMD → ScanImage pixel mapping with no substage camera required. Feasibility depends on achieving enough intensity at the sample with the NKT FS-50; may not be practical at low duty-cycle.
+
 - **MATLAB R2025b (and 2024+) require macOS 13.3+**; R2023a works on Monterey 12.x and is the current dev pin. Don't upgrade the dev machine's MATLAB until macOS is upgraded.
 - **When cloning vendor repos into `vendor/`, strip `.git/` before `git add`** to avoid embedded-repo gitlinks (which break clone-and-go for collaborators).
 - **`data/` is gitignored** — session outputs don't belong in the repo.
