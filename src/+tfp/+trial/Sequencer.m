@@ -133,10 +133,17 @@ classdef Sequencer < handle
             % Step 8: wait for SI completion; collect imaging data if bridge present.
             frameTimestamps = [];
             imaging         = [];
+            imagingTiffPath = '';
             if ~isempty(obj.siBridge)
                 obj.siBridge.waitForCompletion(trial.duration_s * 2);
-                [~, frameTimestamps] = obj.siBridge.getLastAcquisition();
-                imaging = obj.siBridge.getSyntheticResult();
+                [framesPath, frameTimestamps] = obj.siBridge.getLastAcquisition();
+                if isa(obj.siBridge, 'tfp.hardware.MockScanImageBridge')
+                    imaging = obj.siBridge.getSyntheticResult();
+                else
+                    % Real bridge: ScanImage writes TIFFs on the imaging PC.
+                    % Store the path; don't copy the matrix into the trial .mat.
+                    imagingTiffPath = framesPath;
+                end
             end
 
             % Steps 9-10: package data.
@@ -144,6 +151,7 @@ classdef Sequencer < handle
                 'aiData',             ai, ...
                 'frameTimestamps',    frameTimestamps, ...
                 'imaging',            imaging, ...
+                'imagingTiffPath',    imagingTiffPath, ...
                 'dmdLog',             obj.dmd.getLog(), ...
                 'daqLog',             obj.daq.getLog(), ...
                 'trialIdx',           trial.trialIdx, ...
