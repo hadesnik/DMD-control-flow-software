@@ -39,7 +39,6 @@ config.deviceName = 'Dev1';
 config.sampleRate = 10000;
 
 d = tfp.hardware.NI6323_DAQ(config);
-cleanupObj = onCleanup(@() d.outputSingleAnalog('ao3', 0));  % zero on any exit
 
 % --- Sweep options ---
 options.voltageStepsDiv  = linspace(0.4, 5, 24);  % Phase 1: 0.4–5 V, 24 steps (no power below 0.4 V)

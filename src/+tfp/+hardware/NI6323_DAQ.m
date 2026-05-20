@@ -671,6 +671,13 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
                         delete(obj.aiListener_);
                         obj.aiListener_ = [];
                     end
+                    if ~isempty(obj.configuredAoChannels_)
+                        try
+                            obj.session_.outputSingleScan( ...
+                                zeros(1, numel(obj.configuredAoChannels_)));  %LEGACY_API
+                        catch
+                        end
+                    end
                     obj.session_.release();  %LEGACY_API
                 catch
                 end
