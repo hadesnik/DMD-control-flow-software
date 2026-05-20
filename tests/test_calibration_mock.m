@@ -371,5 +371,92 @@ classdef test_calibration_mock < matlab.unittest.TestCase
             testCase.verifyEqual(calib.dmdToScan_affine, expectedDmdToScan, ...
                 'AbsTol', 1e-10, 'dmdToScan_affine composition');
         end
+
+        function verifySignsDefaultPositive(testCase)
+            %verifySignsDefaultPositive Signs (+1,+1) confirmed; dmdToScan_affine unchanged.
+            %   Uses crossRegisterScanImage_mock to build calib, then calls
+            %   verifyScanFieldComposition with mockResponse=[+1,+1]. Verifies
+            %   signs are recorded, scanVerified is set, and dmdToScan_affine
+            %   is numerically identical to the pre-verify value (no correction).
+
+            dmdStub.nRows = 800; dmdStub.nCols = 1280;
+            dmdCalib = tfp.calibration.alignDMDtoCamera_mock(dmdStub);
+            calib    = tfp.calibration.crossRegisterScanImage_mock(dmdCalib);
+
+            dmdCfg.nRows                   = 800;
+            dmdCfg.nCols                   = 1280;
+            dmdCfg.loadLatencyMsPerPattern = 0;
+            dmd = tfp.hardware.MockDMD();
+            dmd.initialize(dmdCfg);
+
+            baseAffine = calib.dmdToScan_affine;
+
+            opts.testDmdCoord = [640, 400];
+            opts.fovSizeUm    = 800;
+            opts.mockResponse = [1, 1];
+
+            calibOut = tfp.calibration.verifyScanFieldComposition(dmd, calib, opts);
+
+            % Signs confirmed correctly
+            testCase.verifyEqual(calibOut.scan_fast_axis_sign, 1, ...
+                'fast_sign should be +1');
+            testCase.verifyEqual(calibOut.scan_slow_axis_sign, 1, ...
+                'slow_sign should be +1');
+
+            % Metadata fields set
+            testCase.verifyTrue(calibOut.scanVerified, ...
+                'scanVerified must be true after confirmation');
+            testCase.verifyTrue(isfield(calibOut, 'scanVerifyTimestamp'), ...
+                'scanVerifyTimestamp must be present');
+
+            % With signs (+1,+1) the correction matrices are both identity,
+            % so dmdToScan_affine must be numerically unchanged.
+            testCase.verifyEqual(calibOut.dmdToScan_affine, baseAffine, ...
+                'AbsTol', 1e-12, ...
+                'dmdToScan_affine should be unchanged for default signs (+1,+1)');
+        end
+
+        function verifySignsFlipFast(testCase)
+            %verifySignsFlipFast Signs (-1,+1) confirmed; fast-axis flip applied.
+            %   Verifies that confirming fast_sign=-1 applies the correction
+            %   matrix [-1 0 nFast+1; 0 1 0; 0 0 1] to dmdToScan_affine.
+
+            dmdStub.nRows = 800; dmdStub.nCols = 1280;
+            dmdCalib = tfp.calibration.alignDMDtoCamera_mock(dmdStub);
+
+            crossOpts.scanPixels = [512, 256];
+            calib = tfp.calibration.crossRegisterScanImage_mock(dmdCalib, crossOpts);
+
+            dmdCfg.nRows                   = 800;
+            dmdCfg.nCols                   = 1280;
+            dmdCfg.loadLatencyMsPerPattern = 0;
+            dmd = tfp.hardware.MockDMD();
+            dmd.initialize(dmdCfg);
+
+            baseAffine = calib.dmdToScan_affine;
+            nFast      = calib.scanPixels(1);
+
+            opts.testDmdCoord = [640, 400];
+            opts.fovSizeUm    = 800;
+            opts.mockResponse = [-1, 1];
+
+            calibOut = tfp.calibration.verifyScanFieldComposition(dmd, calib, opts);
+
+            % Signs confirmed correctly
+            testCase.verifyEqual(calibOut.scan_fast_axis_sign, -1, ...
+                'fast_sign should be -1');
+            testCase.verifyEqual(calibOut.scan_slow_axis_sign,  1, ...
+                'slow_sign should be +1');
+            testCase.verifyTrue(calibOut.scanVerified, ...
+                'scanVerified must be true');
+
+            % Corrected dmdToScan = flipFast * baseAffine
+            %   flipFast = [-1 0 nFast+1; 0 1 0; 0 0 1]
+            corrFast   = [-1  0  (nFast+1); 0  1  0; 0  0  1];
+            expected   = corrFast * baseAffine;
+            testCase.verifyEqual(calibOut.dmdToScan_affine, expected, ...
+                'AbsTol', 1e-12, ...
+                'dmdToScan_affine must be corrFast * base after fast_sign=-1');
+        end
     end
 end
