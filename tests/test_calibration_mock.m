@@ -1,22 +1,27 @@
 classdef test_calibration_mock < matlab.unittest.TestCase
     %test_calibration_mock Calibration tests using mock hardware.
-    %   fakeAffineRoundTrip      — verifies alignDMDtoCamera_mock struct fields
-    %                              and inverse-transform round-trip error.
-    %   liveMockCalibration      — runs alignDMDtoCamera end-to-end with
-    %                              MockDMD + MockSubstageCamera and a known
-    %                              truth affine; verifies the recovered affine
-    %                              is close to the ground truth.
-    %   composeCalibrationMath   — unit tests for composeCalibration: known
-    %                              affines, NaN axis signs, field preservation,
-    %                              round-trip, and error conditions.
-    %   mockCrossRegRoundTrip    — verifies crossRegisterScanImage_mock fields,
-    %                              affine composition math, and round-trip.
-    %                              No Image Processing Toolbox required.
-    %   liveMockCrossRegister    — runs crossRegisterScanImage end-to-end with
-    %                              MockSubstageCamera (scanRect mode) and a known
-    %                              truth scanToCam affine; verifies recovered
-    %                              affine and composition.
-    %                              Requires Image Processing Toolbox.
+    %   fakeAffineRoundTrip        — verifies alignDMDtoCamera_mock struct fields
+    %                                and inverse-transform round-trip error.
+    %   liveMockCalibration        — runs alignDMDtoCamera end-to-end with
+    %                                MockDMD + MockSubstageCamera and a known
+    %                                truth affine; verifies the recovered affine
+    %                                is close to the ground truth.
+    %   composeCalibrationMath     — unit tests for composeCalibration: known
+    %                                affines, NaN axis signs, field preservation,
+    %                                round-trip, and error conditions.
+    %   mockCrossRegRoundTrip      — verifies crossRegisterScanImage_mock fields,
+    %                                affine composition math, and round-trip.
+    %                                No Image Processing Toolbox required.
+    %   liveMockCrossRegister      — runs crossRegisterScanImage end-to-end with
+    %                                MockSubstageCamera (scanRect mode) and a known
+    %                                truth scanToCam affine; verifies recovered
+    %                                affine and composition.
+    %                                Requires Image Processing Toolbox.
+    %   verifySignsDefaultPositive — verifyScanFieldComposition with mockResponse
+    %                                (+1,+1): signs confirmed, scanVerified=true,
+    %                                dmdToScan_affine unchanged.
+    %   verifySignsFlipFast        — mockResponse (-1,+1): fast-axis correction
+    %                                matrix applied to dmdToScan_affine.
 
     methods (Test)
         function fakeAffineRoundTrip(testCase)
