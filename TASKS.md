@@ -513,7 +513,7 @@ Files parse: check yaml is valid, scripts have no syntax errors via
 
 ## PHASE 3 TASKS
 
-## TASK-P3-01: RealScanImageBridge [AVAILABLE]
+## TASK-P3-01: RealScanImageBridge [DONE]
 
 **No dependencies.**
 **Files (NEW):**
@@ -568,7 +568,186 @@ Error identifier: tfp:hardware:RealScanImageBridge:<reason>
 
 ---
 
+---
+
+## TASK-P3-02: powerMeterSweep [IN PROGRESS]
+
+**No dependencies.**
+**Files (NEW/MODIFY):**
+  src/+tfp/+calibration/powerMeterSweep.m (NEW)
+  src/+tfp/+hardware/NI6323_DAQ.m (MODIFY — add outputSingleAnalog)
+  scripts/run_powerMeterSweep.m (NEW)
+
+**Spec:**
+Sweep DMD active-pixel count (or analog output voltage controlling laser
+power), record photodiode voltage from power meter at each step via DAQ
+analog input, and return a calibration struct suitable for powerLUT.
+
+  function calib = powerMeterSweep(dmd, daq, options)
+    options.nSteps          — number of power steps (default 20)
+    options.analogOutCh     — DAQ AO channel for laser control
+    options.photodiodeInCh  — DAQ AI channel for power meter
+    options.settleMs        — settle time between steps (default 50)
+    options.fovAreaUm2      — FOV area for density conversion
+
+  Returns calib struct:
+    calib.powerCurve.dmdActivePx
+    calib.powerCurve.powerAtSample   % mW, from photodiode + cal factor
+    calib.powerCurve.fovAreaUm2
+    calib.timestamp
+    calib.config                     % echo of options
+
+NI6323_DAQ addition — outputSingleAnalog(obj, channel, voltageV):
+  session_.outputSingleScan([voltageV]) on the AO channel.
+  Used by powerMeterSweep to step laser power.
+
+scripts/run_powerMeterSweep.m:
+  Standalone script. Load real.yaml, instantiate DAQ + DMD,
+  call powerMeterSweep, save calib to configs/calibration_YYYYMMDD.mat,
+  plot power curve, print summary.
+
+**Status:** Being implemented now.
+
+---
+
+## TASK-P3-03: SubstageCamera real implementation [AVAILABLE]
+
+**Blocked on:** camera model confirmation (Thorlabs — check tomorrow).
+**Files (MODIFY):**
+  src/+tfp/+hardware/SubstageCamera_generic.m
+
+**Spec:**
+Fill in the videoinput() call with the correct Thorlabs device name and
+format string once the camera model is confirmed. The stub already
+implements the abstract interface; this task replaces the placeholder
+device string with the real one and verifies a live frame can be grabbed.
+
+  obj.vid_ = videoinput('gentl', 1, formatStr)
+  % or 'winvideo' / 'gige' depending on Thorlabs interface
+
+Verify: grabframe() returns a non-empty image on the scope PC.
+
+---
+
+## TASK-P3-04: measurePSF stub [AVAILABLE]
+
+**No blocking dependency (stub only).**
+**Files (NEW):**
+  src/+tfp/+calibration/measurePSF.m
+
+**Spec:**
+Stub only — full implementation deferred until fluorescent slab is
+available on the rig.
+
+  function calib = measurePSF(dmd, camera, sampleSlab, options)
+    % Stub: loads a single-spot pattern on DMD, captures a camera frame,
+    % fits a 2D Gaussian to the spot, stores lateral FWHM.
+    % Full axial sweep not implemented yet.
+    error('tfp:calibration:measurePSF:notImplemented', ...
+      'measurePSF requires a fluorescent slab — implement when available.');
+
+Add a note at the top of the file describing the planned implementation:
+lateral sweep (translate DMD spot across slab, fit Gaussian to each
+camera frame), then axial sweep via objective z-drive.
+
+---
+
+## TASK-P3-05: Trial file size refactor [AVAILABLE]
+
+**No dependencies.**
+**Files (MODIFY):**
+  src/+tfp/+io/saveTrial.m
+  src/+tfp/+trial/Sequencer.m
+
+**Context:**
+Current trial .mat files are 400–700 KB each. At 250 trials/session
+that is ~150 MB — unsustainable for routine archiving. Split into a
+small metadata file (always written) and a large rawData file (written
+by default, skippable for dry runs).
+
+**Spec:**
+saveTrial(trial, sessionDir, options):
+  options.saveRawData  — logical, default true
+
+  Always writes:  trial_NNNN_meta.mat
+    Fields: trialIdx, status, targetSpec, powerMw, timingSpec,
+            responseSummary (peak ΔF/F, cell IDs), fileRef (path to raw)
+
+  When options.saveRawData:
+    Also writes: trial_NNNN_raw.mat
+      Fields: aiData, dmdLog, daqLog, imaging.F
+
+Sequencer: pass options.saveRawData from session config
+  (config.session.saveRawData, default true).
+
+Backward compatibility: existing code that loads trial_NNNN.mat will
+not find the new split files — document the schema change in a comment
+at the top of saveTrial.m. No migration script needed (data is
+ephemeral per-session).
+
+---
+
+## TASK-P3-06: Verify ScanImage msocket protocol [BLOCKED]
+
+**Blocked on:** Masato returning from Japan.
+**Files (MODIFY):**
+  src/+tfp/+hardware/RealScanImageBridge.m
+
+**Spec:**
+Resolve the 5 %VERIFY items in RealScanImageBridge.m by running
+verifyProtocol() with the real ScanImage PC connected:
+
+  1. Confirm handshake sequence: server sends 'A', client replies 'B'.
+  2. Confirm mssend(socket, struct) works for trial structs (not just strings).
+  3. Confirm ScanImage replies 'received' or 'done' after struct send.
+  4. Confirm frame timestamps are accessible post-acquisition.
+  5. Confirm msocket path (C:\Users\adesniklab\Documents\MATLAB\msocket\).
+
+Replace each %VERIFY comment with confirmed behaviour or a corrected
+implementation. No new tests — manual verification on scope PC.
+
+---
+
+## TASK-P3-07: First real DMD test [BLOCKED]
+
+**Blocked on:** BTF power supply arriving (expected tomorrow 2026-05-20).
+**Files:** none — this is a hardware milestone, not a code task.
+
+**Spec:**
+Run scripts/verify_DLP650LNIR_DMD.m on the DLi4130 board (ALP-4.1,
+DLP7000) using configs/dli4130.yaml.
+
+Success criterion: AlpDevAlloc returns ret == 0 (ALP_OK).
+This is the first real hardware integration milestone.
+
+Log the outcome (pass/fail per step) and commit a note to
+docs/hardware_log.md.
+
+---
+
+## TASK-P3-08: Spatial calibration first run [BLOCKED]
+
+**Blocked on:** TASK-P3-07 (DMD working) + camera model known (P3-03).
+**Files:** none — produces configs/calibration_YYYYMMDD.mat artifact.
+
+**Spec:**
+Run alignDMDtoCamera with the real DLi4130 + substage camera.
+Produces the first real calibration.mat mapping DMD pixel coordinates
+to sample µm coordinates.
+
+Steps:
+  1. Mount thin fluorescent film on sample stage.
+  2. Project known DMD patterns (grid of spots) via verify script.
+  3. Capture camera frames via SubstageCamera_generic.
+  4. Run alignDMDtoCamera(dmdPts, cameraPts) to fit affine transform.
+  5. Save output to configs/calibration_YYYYMMDD.mat.
+  6. Spot-check: reproject a few points and verify residuals < 5 µm.
+
+---
+
 ## COMPLETED TASKS
 
 TASK-15-01 through TASK-15-05: Phase 1.5 all-optical simulator
   (37/38 tests green, committed 2026-05-19)
+TASK-P3-01: RealScanImageBridge (msocket) — structured VERIFY docs +
+  verifyProtocol() diagnostic method (committed 2026-05-19)
