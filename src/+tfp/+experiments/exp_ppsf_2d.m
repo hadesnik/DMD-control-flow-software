@@ -30,10 +30,18 @@ daq.configureDigitalOutput(config.daq.digitalOutChannels);
 
 calibration = loadCalibrationOrIdentity(config);
 
-% Target cells and 2D offset grid.
-targets   = [400, 400; 500, 400; 600, 400];
-offsetsUm = tfp.trial.TrialSequence.gaussianGrid2D(40, 4, 8);
-nReps     = 2;
+% Target cells and 2D offset grid (overridable via config.ppsf2d for tests).
+targets = [400, 400; 500, 400; 600, 400];
+g = struct('maxUm', 40, 'nPointsPerHalfAxis', 4, 'sigmaPsfUm', 8, 'nReps', 2);
+if isfield(config, 'ppsf2d')
+    ov = config.ppsf2d;
+    if isfield(ov, 'maxUm'),              g.maxUm              = ov.maxUm;              end
+    if isfield(ov, 'nPointsPerHalfAxis'), g.nPointsPerHalfAxis = ov.nPointsPerHalfAxis; end
+    if isfield(ov, 'sigmaPsfUm'),         g.sigmaPsfUm         = ov.sigmaPsfUm;         end
+    if isfield(ov, 'nReps'),              g.nReps              = ov.nReps;              end
+end
+offsetsUm = tfp.trial.TrialSequence.gaussianGrid2D(g.maxUm, g.nPointsPerHalfAxis, g.sigmaPsfUm);
+nReps     = g.nReps;
 powerMw   = 5;
 radiusPx  = 5;
 

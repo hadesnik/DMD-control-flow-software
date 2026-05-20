@@ -109,6 +109,10 @@ classdef test_exp_ppsf_lateral_mock < matlab.unittest.TestCase
                 'sigma',     {10,         10,         10}, ...
                 'aiChannel', {0,          1,          2});
 
+            config.ppsf2d.maxUm              = 10;
+            config.ppsf2d.nPointsPerHalfAxis = 1;
+            config.ppsf2d.nReps              = 1;
+
             result = tfp.experiments.exp_ppsf_2d(config, 'test-2d-session');
 
             testCase.verifyTrue(isfield(result, 'ppsf2d_summary'));
