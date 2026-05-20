@@ -17,6 +17,7 @@ daq:
   analogInChannels: [0, 1]
   analogOutChannels: [0]
   digitalOutChannels: [port0/line0]
+  digitalInChannels: [port0/line2]   # ScanImage frame clock
   aiRangeV: [-5, 5]
 
 # Filesystem paths. Experiments create <dataDir>/<sessionName>/ per run.
@@ -29,6 +30,8 @@ calibration_file: ""
 # ScanImage bridge (not used in Phase 1 / mock).
 scanimage:
   enabled: false
+  streamLiveF: false         # mock path: getLiveTraces() returns lastResult_.F directly
+  nExpectedCells: 10
 
 # Imaging parameters. Consumed by tfp.hardware.MockScanImageBridge.
 imaging:

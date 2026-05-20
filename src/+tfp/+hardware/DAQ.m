@@ -18,6 +18,9 @@ classdef DAQ < handle
         configureAnalogOutput(obj, channels)
         configureDigitalOutput(obj, lines)
 
+        % configure digital input lines (e.g. ScanImage frame clock)
+        configureDigitalInput(obj, lines)
+
         % data: nSamples × nChannels
         queueAnalogOutput(obj, data)
 
@@ -27,6 +30,9 @@ classdef DAQ < handle
 
         % blocking until nSamples acquired
         data = readAnalogInput(obj, nSamples)
+
+        % returns nSamples × 1 double (0/1); call after readAnalogInput, before stop()
+        data = readDigitalInput(obj, lineName, nSamples)
 
         sendDigitalPulse(obj, lineName, durationS)
         cleanup(obj)

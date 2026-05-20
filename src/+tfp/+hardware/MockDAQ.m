@@ -27,6 +27,7 @@ classdef MockDAQ < tfp.hardware.DAQ
         configuredAiChannels_ = []
         configuredAoChannels_ = []
         configuredDoLines_ = {}
+        configuredDiLines_ = {}
         aiRangeV_ = []
         queuedAo_ = []
         queuedPulses_ = struct('lineNames', {}, 'times', {}, 'durations', {})
@@ -57,6 +58,7 @@ classdef MockDAQ < tfp.hardware.DAQ
             obj.configuredAiChannels_ = [];
             obj.configuredAoChannels_ = [];
             obj.configuredDoLines_    = {};
+            obj.configuredDiLines_    = {};
             obj.aiRangeV_             = [];
 
             obj.logEvent('initialize', config);
@@ -183,6 +185,35 @@ classdef MockDAQ < tfp.hardware.DAQ
                 'lineName', lineNameC, 'durationS', durationS));
         end
 
+        function configureDigitalInput(obj, lines)
+            %configureDigitalInput Register DI lines for frame clock capture.
+            %   lines must be a subset of digitalInChannels (from config).
+            obj.requireInitialized('configureDigitalInput');
+            linesC = cellstr(lines);
+            availC = obj.digitalInChannels;
+            if ~isempty(availC)
+                availC = cellstr(availC);
+                if ~all(ismember(linesC, availC))
+                    error('tfp:hardware:MockDAQ:badLines', ...
+                        'lines must be a subset of digitalInChannels.');
+                end
+            end
+            obj.configuredDiLines_ = linesC;
+            obj.logEvent('configureDigitalInput', struct('lines', {linesC}));
+        end
+
+        function data = readDigitalInput(obj, lineName, nSamples)
+            %readDigitalInput Return a synthetic 30 Hz frame clock vector.
+            %   Returns nSamples × 1 double with 1s at each frame onset.
+            %   Simulates ScanImage frame acquisition pulses at 30 Hz.
+            obj.requireInitialized('readDigitalInput');
+            framePeriod = max(1, round(obj.sampleRate / 30));
+            data        = zeros(nSamples, 1);
+            data(1:framePeriod:end) = 1;
+            obj.logEvent('readDigitalInput', struct( ...
+                'lineName', char(lineName), 'nSamples', nSamples));
+        end
+
         function cleanup(obj)
             obj.isRunning             = false;
             obj.isInitialized         = false;
@@ -194,6 +225,7 @@ classdef MockDAQ < tfp.hardware.DAQ
             obj.configuredAiChannels_ = [];
             obj.configuredAoChannels_ = [];
             obj.configuredDoLines_    = {};
+            obj.configuredDiLines_    = {};
             obj.aiRangeV_             = [];
             obj.queuedAo_             = [];
             obj.queuedPulses_         = struct('lineNames', {}, 'times', {}, 'durations', {});

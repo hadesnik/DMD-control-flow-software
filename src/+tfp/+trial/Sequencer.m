@@ -21,6 +21,11 @@ classdef Sequencer < handle
         siBridge
         sequence
         log              % path to session directory
+        sessionStartTime % datetime set at the top of run()
+    end
+
+    properties (Access = private)
+        nStreamCells_  % ROI count passed to siBridge.armStreaming(); 0 = streaming disabled
     end
 
     methods
@@ -37,15 +42,29 @@ classdef Sequencer < handle
             else
                 obj.siBridge = [];
             end
+            if isfield(opts, 'nStreamCells')
+                obj.nStreamCells_ = opts.nStreamCells;
+            else
+                obj.nStreamCells_ = 0;
+            end
         end
 
         function run(obj)
+            obj.sessionStartTime = datetime('now');
             tfp.io.sessionLog(obj.log, 'run-start', ...
                 struct('nTrials', numel(obj.sequence.trials)));
 
+            % Open F-streaming socket once before trial loop (imaging PC connects once/session).
+            if ~isempty(obj.siBridge) && obj.siBridge.supportsStreaming() && ...
+                    obj.nStreamCells_ > 0
+                obj.siBridge.armStreaming(obj.nStreamCells_);
+            end
+
             trials = obj.sequence.trials;
             for k = 1:numel(trials)
-                trial = trials(k);
+                trial          = trials(k);
+                trialStartTime = datetime('now');
+                trialError     = [];
                 try
                     tfp.util.safetyChecks('check');
                     trial.markRunning();
@@ -58,7 +77,21 @@ classdef Sequencer < handle
                         'trialIdx',   trial.trialIdx, ...
                         'identifier', ME.identifier, ...
                         'message',    ME.message));
-                    rethrow(ME);
+                    trialError = ME;
+                end
+
+                seqState = struct( ...
+                    'trialIdx',            k, ...
+                    'nTrials',             numel(trials), ...
+                    'lastTrial',           trial, ...
+                    'allTrials',           trials(1:k), ...
+                    'sessionDir',          obj.log, ...
+                    'sessionStartTime',    obj.sessionStartTime, ...
+                    'lastTrialDuration_s', seconds(datetime('now') - trialStartTime));
+                tfp.analysis.liveFigures(seqState);
+
+                if ~isempty(trialError)
+                    rethrow(trialError);
                 end
             end
 
@@ -127,6 +160,18 @@ classdef Sequencer < handle
             obj.dmd.softTrigger();
             ai = obj.daq.readAnalogInput(nSamples);
 
+            % Read frame clock DI line before stop() clears the buffer.
+            frameClock = [];
+            diLines = obj.daq.digitalInChannels;
+            if iscell(diLines) && ~isempty(diLines)
+                try
+                    frameClock = obj.daq.readDigitalInput(diLines{1}, nSamples);
+                catch ME
+                    warning('tfp:trial:Sequencer:frameClockReadFailed', ...
+                        'Frame clock read failed for %s: %s', diLines{1}, ME.message);
+                end
+            end
+
             % Step 7: stop DAQ.
             obj.daq.stop();
 
@@ -149,6 +194,7 @@ classdef Sequencer < handle
             % Steps 9-10: package data.
             data = struct( ...
                 'aiData',             ai, ...
+                'frameClock',         frameClock, ...
                 'frameTimestamps',    frameTimestamps, ...
                 'imaging',            imaging, ...
                 'imagingTiffPath',    imagingTiffPath, ...

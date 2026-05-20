@@ -90,6 +90,32 @@ classdef test_MockDAQ < matlab.unittest.TestCase
             testCase.verifyLessThan(abs(mean(data(:, 2))), 0.05);
         end
 
+        function configureDigitalInput_validates(testCase)
+            daq = testCase.makeDaq();  % digitalInChannels = {'port0/line2','port0/line3'}
+
+            % Valid line accepted without error.
+            daq.configureDigitalInput({'port0/line2'});
+
+            % Line not in digitalInChannels is rejected.
+            testCase.verifyError( ...
+                @() daq.configureDigitalInput({'port0/line99'}), ...
+                'tfp:hardware:MockDAQ:badLines');
+        end
+
+        function readDigitalInput_returnsSyntheticClock(testCase)
+            daq = testCase.makeDaq();
+            daq.configureDigitalInput({'port0/line2'});
+
+            N    = 1000;
+            data = daq.readDigitalInput('port0/line2', N);
+
+            testCase.verifyEqual(size(data), [N, 1]);
+            testCase.verifyTrue(all(data == 0 | data == 1), ...
+                'frame clock values must be binary (0 or 1)');
+            % At 10 kHz / 30 Hz = 333 samples/frame, 1000 samples -> 3 pulses.
+            testCase.verifyGreaterThanOrEqual(sum(data), 3);
+        end
+
         function sendDigitalPulse_logs(testCase)
             daq = testCase.makeDaq();
             daq.configureDigitalOutput({'port0/line0'});

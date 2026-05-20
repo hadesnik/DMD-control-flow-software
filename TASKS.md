@@ -745,6 +745,58 @@ Steps:
 
 ---
 
+## TASK-P3-09: Real-time ROI fluorescence streaming [AVAILABLE]
+
+**Blocked on:** Confirming with Masato that ScanImage ROI Integration
+is enabled and whether a frame callback already sends F values back.
+
+**Context:**
+ScanImage has built-in ROI Integration that computes mean fluorescence
+per ROI per frame in real time (hSI.hIntegrationRoiManager).
+If a frame callback on the imaging PC sends these values back via
+msocket, the scope PC can plot live ΔF/F traces and a live PPSF
+curve during the session — no need to wait for suite2p.
+
+**Architecture:**
+Imaging PC (ScanImage) → mssend F values per frame →
+Scope PC (ScanImageBridge receives) → liveFigures plots in real time
+
+**Questions for Masato:**
+1. Is ROI Integration enabled in your ScanImage setup?
+2. Does any existing script send integration values back to scope PC
+   during acquisition? (look for mssend calls in ScanImage callbacks)
+3. What's the struct format of the integration output?
+   (probably hSI.hIntegrationRoiManager.outputChannelsData)
+
+**Files to create/modify:**
+  src/+tfp/+hardware/ScanImageBridge.m (MODIFY)
+  src/+tfp/+hardware/MockScanImageBridge.m (MODIFY)
+  configs/real.yaml (MODIFY)
+  configs/mock.yaml (MODIFY)
+  scripts/si_frame_callback.m (NEW)
+
+**Spec — ScanImageBridge additions:**
+  - Properties: liveF_ (nCells × nFrames accumulator), liveFTimes_,
+    nCellsExpected_, streamLiveF_
+  - clearLiveTraces(): reset accumulator at trial start (call after armForExternalTrigger)
+  - getLiveTraces(): return liveF_ for liveFigures
+  - receiveLiveFrame(data): accumulate one frame packet (private)
+  - pollLiveFrames(timeoutS): msocket polling loop inside waitForCompletion (private)
+  - Config: config.streamLiveF (default false), config.nExpectedCells (default 10)
+
+**MockScanImageBridge additions:**
+  - getLiveTraces(): returns lastResult_.F from SyntheticImaging
+  - clearLiveTraces(): no-op (F computed all at once in getLastAcquisition)
+
+**Imaging-PC script:**
+  scripts/si_frame_callback.m — ScanImage frameAcquiredFcn callback
+  that sends hSI.hIntegrationRoiManager.outputChannelsData per frame.
+  All ScanImage property names marked %VERIFY pending Masato confirmation.
+
+**Verify:** runtests still green (mock path unaffected; streamLiveF defaults false).
+
+---
+
 ## COMPLETED TASKS
 
 TASK-15-01 through TASK-15-05: Phase 1.5 all-optical simulator

@@ -130,6 +130,32 @@ classdef MockScanImageBridge < handle
             result = obj.lastResult_;
         end
 
+        function F = getLiveTraces(obj)
+            %getLiveTraces Return the synthetic F matrix from the last trial.
+            %   Returns lastResult_.F (nCells × nFrames), or [] if
+            %   getLastAcquisition has not yet been called.
+            %   In the mock, F is computed all at once in getLastAcquisition
+            %   rather than streamed per-frame — the interface is identical
+            %   to the real ScanImageBridge for liveFigures compatibility.
+            if isempty(obj.lastResult_)
+                F = [];
+            else
+                F = obj.lastResult_.F;
+            end
+        end
+
+        function clearLiveTraces(obj)
+            %clearLiveTraces No-op for mock: SyntheticImaging computes F
+            %   all at once in getLastAcquisition; no per-frame accumulator.
+            obj.logEvent('clearLiveTraces', struct());
+        end
+
+        function tf = supportsStreaming(obj) %#ok<MANU>
+            %supportsStreaming Returns false — mock does not use the streaming socket.
+            %   Real ScanImageBridge returns true when config.streamLiveF is set.
+            tf = false;
+        end
+
         function entries = getLog(obj)
             %getLog Return the in-memory session log.
             %   entries is a struct array with fields {timestamp, eventType, payload}.

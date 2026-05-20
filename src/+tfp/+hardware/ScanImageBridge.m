@@ -96,6 +96,13 @@ classdef ScanImageBridge < handle
         connectTimeoutS_ % timeout for connection / msaccept (s)
         lastFilePath_    % TIFF path from last acquisition
         log_             % struct array {timestamp, eventType, payload}
+
+        % Real-time F streaming (port 3044, separate from control on 3043)
+        streamLiveF_     % logical; true = collect F packets in waitForCompletion
+        nCellsExpected_  % pre-allocate liveF_ rows (from config.nExpectedCells or armStreaming)
+        liveF_           % nCells × maxFrames double accumulator (NaN = not yet received)
+        liveFTimes_      % 1 × maxFrames double epoch-s (NaN = not yet received)
+        streamSocket_    % msocket handle for F streaming (port 3044; separate from siSocket_)
     end
 
     methods
@@ -127,6 +134,11 @@ classdef ScanImageBridge < handle
             obj.tcpClient_       = [];
             obj.lastFilePath_    = '';
             obj.log_ = struct('timestamp', {}, 'eventType', {}, 'payload', {});
+            obj.streamLiveF_    = logical(configField(config, 'streamLiveF',    false));
+            obj.nCellsExpected_ = configField(config, 'nExpectedCells', 10);
+            obj.liveF_          = [];
+            obj.liveFTimes_     = [];
+            obj.streamSocket_   = [];
 
             if strcmp(obj.mode_, 'tcp')
                 obj.tcpConnect();
@@ -219,8 +231,12 @@ classdef ScanImageBridge < handle
                 case 'tcp'
                     obj.pollUntilIdle(timeoutS);
                 otherwise  % 'msocket' and 'ttl_only'
-                    waitS = obj.nFrames_ / obj.frameRate_ * 1.1;
-                    pause(min(waitS, timeoutS));
+                    if strcmp(obj.mode_, 'msocket') && obj.streamLiveF_
+                        obj.pollLiveFrames(timeoutS);
+                    else
+                        waitS = obj.nFrames_ / obj.frameRate_ * 1.1;
+                        pause(min(waitS, timeoutS));
+                    end
             end
             obj.logEvent('waitForCompletion', struct('timeoutS', timeoutS));
         end
@@ -267,9 +283,79 @@ classdef ScanImageBridge < handle
             result = [];
         end
 
+        function clearLiveTraces(obj)
+            %clearLiveTraces Reset F accumulator at the start of each trial.
+            %   Must be called after armForExternalTrigger so nFrames_ is set.
+            %   When streamLiveF_ is false this is a no-op.
+            if ~obj.streamLiveF_
+                return;
+            end
+            obj.liveF_      = NaN(obj.nCellsExpected_, obj.nFrames_);
+            obj.liveFTimes_ = NaN(1, obj.nFrames_);
+            obj.logEvent('clearLiveTraces', ...
+                struct('nCells', obj.nCellsExpected_, 'nFrames', obj.nFrames_));
+        end
+
+        function F = getLiveTraces(obj)
+            %getLiveTraces Return accumulated F matrix (nCells × nFrames).
+            %   Returns [] if clearLiveTraces has not been called this trial
+            %   or if streamLiveF_ is false.
+            F = obj.liveF_;
+        end
+
+        function tf = supportsStreaming(obj)
+            %supportsStreaming True when live-F streaming is configured and usable.
+            %   False in ttl_only mode or when config.streamLiveF is not set.
+            tf = obj.streamLiveF_ && ~strcmp(obj.mode_, 'ttl_only');
+        end
+
+        function armStreaming(obj, nCells)
+            %armStreaming Open the F-streaming socket (port 3044) for this session.
+            %   Call ONCE per session, before the trial loop starts (Sequencer.run).
+            %   The imaging PC must have run SIStreamSetup.m first so it dials back
+            %   on port 3044 (separate from the per-trial control channel on 3043).
+            %
+            %   nCells: expected ROI count; pre-allocates liveF_ and liveFTimes_.
+            if ~obj.streamLiveF_
+                return;
+            end
+            if ~isempty(obj.msocketPath_)
+                addpath(obj.msocketPath_);
+            end
+            STREAM_PORT = 3044;
+            srvsock = mslisten(STREAM_PORT);
+            try
+                obj.streamSocket_ = msaccept(srvsock, obj.connectTimeoutS_);
+            catch ME
+                msclose(srvsock);
+                error('tfp:hardware:ScanImageBridge:streamTimeout', ...
+                    ['Imaging PC did not connect for F streaming within %.1f s ' ...
+                     'on port %d.\nEnsure SIStreamSetup.m was run on the imaging PC.\n' ...
+                     'Error: %s'], obj.connectTimeoutS_, STREAM_PORT, ME.message);
+            end
+            msclose(srvsock);
+
+            %VERIFY 'F_STREAM_READY' matches what SIStreamSetup.m sends (confirmed in script)
+            incoming = msrecv(obj.streamSocket_);
+            if ~(ischar(incoming) && strcmp(strtrim(incoming), 'F_STREAM_READY'))
+                warning('tfp:hardware:ScanImageBridge:unexpectedStreamHandshake', ...
+                    'Expected ''F_STREAM_READY'' from imaging PC, received: %s', ...
+                    mat2str(incoming));
+            end
+
+            obj.nCellsExpected_ = nCells;
+            obj.liveF_      = NaN(nCells, 500);
+            obj.liveFTimes_ = NaN(1, 500);
+            obj.logEvent('armStreaming', struct('nCells', nCells, 'port', STREAM_PORT));
+        end
+
         function disconnect(obj)
             %disconnect Close any open socket or TCP connection.
             obj.msocketClose();
+            if ~isempty(obj.streamSocket_)
+                try, msclose(obj.streamSocket_); catch, end
+                obj.streamSocket_ = [];
+            end
             if obj.isConnected && strcmp(obj.mode_, 'tcp')
                 try, delete(obj.tcpClient_); catch, end
                 obj.tcpClient_  = [];
@@ -443,6 +529,72 @@ classdef ScanImageBridge < handle
                 obj.siSocket_  = [];
                 obj.isConnected = false;
             end
+        end
+
+        function receiveLiveFrame(obj, data)
+            %receiveLiveFrame Accumulate one frame of ROI fluorescence from ScanImage.
+            %   data.frame: 1-based frame index within current trial
+            %   data.F:     nCells × 1 fluorescence values (ROI integration output)
+            if ~isfield(data, 'frame') || ~isfield(data, 'F') || isempty(obj.liveF_)
+                return;
+            end
+            idx = data.frame;
+            if idx < 1 || idx > size(obj.liveF_, 2)
+                return;
+            end
+            nCells = numel(data.F);
+            if nCells ~= size(obj.liveF_, 1)
+                % Cell count differs from expectation — resize on first real frame.
+                obj.liveF_ = NaN(nCells, size(obj.liveF_, 2));
+            end
+            obj.liveF_(:, idx)   = data.F(:);
+            obj.liveFTimes_(idx) = posixtime(datetime('now'));
+        end
+
+        function pollLiveFrames(obj, timeoutS)
+            %pollLiveFrames Receive per-frame F packets from streamSocket_ (port 3044).
+            %   Separate from the control socket siSocket_ (port 3043).
+            %   Falls back to a timing-based pause if streamSocket_ is not open
+            %   (armStreaming was not called this session).
+            %
+            %   %VERIFY msrecv(socket, timeoutSec) — 2-arg non-blocking form.
+            %     ASSUME: msrecv returns [] when no data arrives within the timeout.
+            %     TEST:   verifyProtocol() step 6 validates msrecv timeout behaviour.
+            %     CHANGE: If msrecv(sock, t) is not supported, wrap msrecv(sock) in
+            %             a timer or use try/catch to handle blocking behaviour.
+            if isempty(obj.streamSocket_)
+                % armStreaming was not called — fall back to timing-based wait.
+                waitS = obj.nFrames_ / obj.frameRate_ * 1.1;
+                pause(min(waitS, timeoutS));
+                return;
+            end
+            tStart = tic;
+            while toc(tStart) < timeoutS
+                try
+                    incoming = msrecv(obj.streamSocket_, 0.05);  %VERIFY 2-arg non-blocking msrecv
+                catch
+                    break;
+                end
+                if isempty(incoming)
+                    % No data within 50 ms — continue polling.
+                elseif isstruct(incoming)
+                    if isfield(incoming, 'F')
+                        obj.receiveLiveFrame(incoming);
+                    elseif isfield(incoming, 'done')
+                        break;
+                    end
+                end
+                if ~isempty(obj.liveFTimes_) && ...
+                        sum(~isnan(obj.liveFTimes_)) >= obj.nFrames_
+                    break;
+                end
+            end
+            nRx = 0;
+            if ~isempty(obj.liveFTimes_)
+                nRx = sum(~isnan(obj.liveFTimes_));
+            end
+            obj.logEvent('pollLiveFrames', ...
+                struct('elapsedS', toc(tStart), 'framesReceived', nRx));
         end
 
         % --- tcp mode (speculative) ---------------------------------------------

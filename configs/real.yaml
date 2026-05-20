@@ -21,6 +21,8 @@ daq:
     - 'port0/line0'    # DMD pattern-advance trigger
     - 'port0/line1'    # Pockels cell gate
     - 'port0/line10'   # ScanImage acquisition trigger
+  digitalInChannels:
+    - 'port0/line2'    # ScanImage frame clock (rising edge = frame acquired)
 
 # Imaging parameters. Consumed by ScanImageBridge (Phase 2+).
 imaging:
@@ -36,3 +38,12 @@ session:
 
 # No fake cells for real hardware — live cells identified by suite2p.
 fakeCells: []
+
+# ScanImage bridge: real-time ROI fluorescence streaming (TASK-P3-09).
+# streamLiveF requires a frameAcquiredFcn callback on the imaging PC
+# (see scripts/si_frame_callback.m) that mssend's F values back per frame.
+# %VERIFY with Masato: confirm ROI Integration is enabled before enabling.
+scanimage:
+  streamLiveF: true          # enable real-time F packet polling in waitForCompletion
+  nExpectedCells: 10         # pre-allocate liveF_ accumulator rows
+  frameStreamPort: 3043      # same socket as control channel

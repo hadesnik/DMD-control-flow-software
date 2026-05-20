@@ -40,10 +40,12 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
         configuredAiChannels_ = []
         configuredAoChannels_ = []
         configuredDoLines_    = {}
+        configuredDiLines_    = {}   % DI line names added via configureDigitalInput
         aiRangeV_             = []
         aoData_               = []   % nSamples × nAoCh, stored until start()
         digitalPulses_              % struct array: lineNames, times, durations
-        aiBuf_                = []   % filled by DataAvailable listener
+        aiBuf_                = []   % AI data filled by DataAvailable listener
+        diBuf_                = []   % DI data filled by DataAvailable listener (or startForeground)
         aiListener_           = []   % event.listener handle
         log_                        % struct array {timestamp, eventType, payload}
     end
@@ -103,6 +105,8 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
             obj.aoData_            = [];
             obj.digitalPulses_     = struct('lineNames', {}, 'times', {}, 'durations', {});
             obj.aiBuf_             = [];
+            obj.diBuf_             = [];
+            obj.configuredDiLines_ = {};
             obj.aiListener_        = [];
 
             obj.logEvent('initialize', struct( ...
@@ -150,6 +154,57 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
             end
             obj.configuredDoLines_ = linesC;
             obj.logEvent('configureDigitalOutput', struct('lines', {linesC}));
+        end
+
+        function configureDigitalInput(obj, lines)
+            %configureDigitalInput Add DI lines to the session for frame clock capture.
+            %   Call AFTER configureAnalogInput so AI columns precede DI columns
+            %   in the DataAvailable evt.Data matrix.
+            %
+            %   %LEGACY_API addDigitalChannel — same call as DO but direction 'InputOnly'.
+            %   %VERIFY AI+DI in a single daq.createSession on NI PCIe-6323.
+            %     ASSUME: PCIe-6323 supports synchronized AI+DI in one session with a
+            %             shared sample clock.  DataAvailable evt.Data columns are ordered:
+            %             [AI channels | DI channels], in the order they were added.
+            %     TEST:   After first real trial, inspect size(evt.Data,2) inside the
+            %             DataAvailable listener — should equal numel(aiChans)+numel(diLines).
+            %     CHANGE: If the device does not support mixed AI+DI sessions, use a
+            %             separate daq.createSession for DI synchronized via external trigger.
+            obj.requireInitialized('configureDigitalInput');
+            linesC = cellstr(lines);
+            for k = 1:numel(linesC)
+                obj.session_.addDigitalChannel( ...  %LEGACY_API
+                    obj.deviceName_, linesC{k}, 'InputOnly');
+            end
+            obj.configuredDiLines_ = linesC;
+            obj.digitalInChannels  = linesC;
+            obj.logEvent('configureDigitalInput', struct('lines', {linesC}));
+        end
+
+        function data = readDigitalInput(obj, lineName, nSamples)
+            %readDigitalInput Return DI samples buffered during the most recent readAnalogInput.
+            %   lineName: DI line string (must be in configuredDiLines_)
+            %   nSamples: samples to return (must be <= buffered count)
+            %   Returns:  nSamples × 1 double (0 or 1)
+            %
+            %   Call after readAnalogInput and before stop() — stop() clears diBuf_.
+            obj.requireInitialized('readDigitalInput');
+            lineNameC = char(lineName);
+            idx = find(strcmp(lineNameC, obj.configuredDiLines_), 1);
+            if isempty(idx)
+                error('tfp:hardware:NI6323_DAQ:badLines', ...
+                    'lineName ''%s'' not in configuredDiLines.', lineNameC);
+            end
+            if isempty(obj.diBuf_) || size(obj.diBuf_, 1) < nSamples
+                error('tfp:hardware:NI6323_DAQ:noDigitalData', ...
+                    ['Fewer than %d DI samples buffered (%d available). ' ...
+                     'Ensure configureDigitalInput and readAnalogInput were ' ...
+                     'called before readDigitalInput.'], ...
+                    nSamples, size(obj.diBuf_, 1));
+            end
+            data = double(obj.diBuf_(1:nSamples, idx));
+            obj.logEvent('readDigitalInput', struct( ...
+                'lineName', lineNameC, 'nSamples', nSamples));
         end
 
         function queueAnalogOutput(obj, data)
@@ -218,6 +273,7 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
             obj.isRunning      = false;
             obj.aoData_        = [];
             obj.aiBuf_         = [];
+            obj.diBuf_         = [];
             obj.digitalPulses_ = struct('lineNames', {}, 'times', {}, 'durations', {});
             obj.logEvent('stop', []);
         end
@@ -246,8 +302,9 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
                 raw  = obj.session_.inputSingleScan();  %LEGACY_API
                 data = reshape(raw(1:nChans), 1, nChans);
             elseif obj.isRunning
-                % Background AO is active — collect AI via DataAvailable listener.
-                obj.aiBuf_    = zeros(0, nChans);
+                % Background AO is active — collect AI (and DI if configured) via listener.
+                obj.aiBuf_ = zeros(0, nChans);
+                obj.diBuf_ = zeros(0, numel(obj.configuredDiLines_));
                 obj.aiListener_ = obj.session_.addlistener( ...  %LEGACY_API
                     'DataAvailable', @(src, evt) obj.onDataAvailable(evt, nChans));
                 timeout = nSamples / obj.sampleRate * 3;  % 3× headroom
@@ -268,6 +325,9 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
                 obj.session_.NumberOfScans = nSamples;  %LEGACY_API
                 [raw, ~] = obj.session_.startForeground();  %LEGACY_API
                 data     = raw(:, 1:nChans);
+                if size(raw, 2) > nChans && ~isempty(obj.configuredDiLines_)
+                    obj.diBuf_ = raw(:, nChans+1:end);
+                end
             end
 
             obj.logEvent('readAnalogInput', struct( ...
@@ -354,9 +414,11 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
             obj.configuredAiChannels_ = [];
             obj.configuredAoChannels_ = [];
             obj.configuredDoLines_    = {};
+            obj.configuredDiLines_    = {};
             obj.aiRangeV_          = [];
             obj.aoData_            = [];
             obj.aiBuf_             = [];
+            obj.diBuf_             = [];
             obj.digitalPulses_     = struct('lineNames', {}, 'times', {}, 'durations', {});
             obj.logEvent('cleanup', []);
         end
@@ -384,10 +446,13 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
             end
         end
 
-        function onDataAvailable(obj, evt, nChans)
-            %onDataAvailable DataAvailable listener callback; appends to aiBuf_.
-            chunk = evt.Data(:, 1:min(nChans, size(evt.Data, 2)));
-            obj.aiBuf_ = [obj.aiBuf_; chunk];  %#ok<AGROW>
+        function onDataAvailable(obj, evt, nAiChans)
+            %onDataAvailable DataAvailable listener; appends AI to aiBuf_, DI to diBuf_.
+            nCols = size(evt.Data, 2);
+            obj.aiBuf_ = [obj.aiBuf_; evt.Data(:, 1:min(nAiChans, nCols))];  %#ok<AGROW>
+            if nCols > nAiChans && ~isempty(obj.configuredDiLines_)
+                obj.diBuf_ = [obj.diBuf_; evt.Data(:, nAiChans+1:end)];  %#ok<AGROW>
+            end
         end
 
         function chNum = parseChannelName_(obj, channelName)  %#ok<MANU>
