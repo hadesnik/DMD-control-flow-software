@@ -1019,7 +1019,7 @@ intervention at the ScanImage workstation.
 
 ---
 
-## TASK-CAL-1: crossRegisterScanImage + verifyScanFieldComposition [IN PROGRESS]
+## TASK-CAL-1: crossRegisterScanImage + verifyScanFieldComposition [DONE]
 
 **No blocking dependencies (works with mock hardware).**
 **Files (NEW):**
