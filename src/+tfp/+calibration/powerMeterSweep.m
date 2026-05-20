@@ -149,13 +149,15 @@ pause();
 % =========================================================
 % Phase 2 - full rep rate
 % =========================================================
+% Zero AO before prompting rep-rate switch -- laser must be off while
+% the operator changes pulse-picker settings.
+daq.outputSingleAnalog(aoChannel, 0);
+
 fprintf('\n=== PHASE 2: FULL REP RATE (%.2f MHz) ===\n', repRateFullMhz);
 fprintf('Switch the pulse picker to FULL REP RATE (%.2f MHz) now.\n', repRateFullMhz);
 fprintf('Press any key when ready...\n');
 pause();
 
-% Zero the AO and wait for thermal sensor to relax to baseline.
-daq.outputSingleAnalog(aoChannel, 0);
 fprintf('Waiting 20 s for thermal sensor to relax to zero...\n');
 pause(20);
 
