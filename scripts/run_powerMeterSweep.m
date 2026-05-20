@@ -1,9 +1,17 @@
-%run_powerMeterSweep  Characterise FS-50 power vs. ao1 control voltage.
+%run_powerMeterSweep  Two-phase FS-50 power calibration vs. ao1 voltage.
 %
 %   Runs tfp.calibration.powerMeterSweep on the scope PC using the
-%   NI-6323 DAQ (Dev1) and a Thorlabs PM100D + S350C sensor.  The
-%   resulting curve is saved as 'power_curve_<date>.mat' in the current
-%   directory and can be loaded into a calibration struct for powerLUT.
+%   NI-6323 DAQ (Dev1) and a Thorlabs PM100D + S350C sensor.
+%
+%   Phase 1 (divided mode, ~10 kHz): sweeps 0–5 V at low total power so
+%   the thermal sensor and optics are safe.  Phase 2 (full rep rate,
+%   1.25 MHz): sweeps 0–1 V only.  A zero-intercept scale factor derived
+%   from the 0–1 V overlap is used to translate the divided-mode 1–5 V
+%   readings to full-rep-rate equivalent power, producing a single merged
+%   calibration curve.
+%
+%   The routine prompts you to switch the pulse picker rep rate between
+%   phases — follow the on-screen instructions.
 %
 %   Prerequisites:
 %     1. Thorlabs Optical Power Monitor (TLPM MATLAB driver) installed.
@@ -13,40 +21,47 @@
 %        for relative calibration — note position in the saved notes field).
 %
 %   Usage:
-%     cd to repo root, then run this script from the MATLAB command window:
+%     cd to repo root, then run from the MATLAB command window:
 %       >> run scripts/run_powerMeterSweep
-%     or add +tfp to path first:
+%     or add src/ to path first:
 %       >> addpath(fullfile(pwd, 'src'));
 %       >> run scripts/run_powerMeterSweep
 
 addpath(fullfile(fileparts(mfilename('fullpath')), '..', 'src'));
 
 % --- DAQ configuration ---
-config.deviceName  = 'Dev1';
-config.sampleRate  = 10000;
+config.deviceName = 'Dev1';
+config.sampleRate = 10000;
 
 d = tfp.hardware.NI6323_DAQ(config);
 
 % --- Sweep options ---
-options.voltageSteps = linspace(0, 5, 25);  % 0–5 V in 25 steps
-options.settleTimeS  = 0.1;                 % 100 ms settle (thermal sensor)
-options.nAverages    = 5;                   % readings averaged per step
-options.aoChannel    = 'ao1';               % FS-50 modulation input
-options.fovAreaUm2   = pi * 400^2;          % 800 µm diameter circle
-options.showFigure   = true;
-options.wavelengthNm = 1040;                % FS-50 centre wavelength
+options.voltageStepsDiv  = linspace(0, 5, 25);  % Phase 1: 0–5 V, 25 steps
+options.voltageStepsFull = linspace(0, 1, 11);  % Phase 2: 0–1 V, 11 steps
+options.settleTimeS      = 5.0;                 % 5 s recommended PM100D stabilization
+options.warmupTimeS      = 5.0;                 % thermal equilibration at start
+options.nAverages        = 5;                   % readings averaged per step
+options.aoChannel        = 'ao1';               % FS-50 modulation input
+options.fovAreaUm2       = pi * 400^2;          % 800 µm diameter circle
+options.showFigure       = true;
+options.wavelengthNm     = 1040;                % FS-50 centre wavelength
+options.repRateDivKhz    = 10;                  % divided-mode rep rate
+options.repRateFullMhz   = 1.25;                % full rep rate
 
-% --- Run sweep ---
-fprintf('Starting power meter sweep (%d steps × %d averages)...\n', ...
-    numel(options.voltageSteps), options.nAverages);
+% --- Run two-phase sweep ---
+fprintf('Starting two-phase power meter sweep.\n');
+fprintf('  Phase 1: %d steps, 0–5 V (divided mode)\n', numel(options.voltageStepsDiv));
+fprintf('  Phase 2: %d steps, 0–1 V (full rep rate)\n', numel(options.voltageStepsFull));
+fprintf('Follow the on-screen prompts to switch rep rate between phases.\n\n');
 
 curve = tfp.calibration.powerMeterSweep(d, options);
 
 % --- Save ---
 fname = sprintf('power_curve_%s.mat', datestr(curve.timestamp, 'yyyymmdd_HHMMSS'));
 save(fname, 'curve');
-fprintf('Saved: %s\n', fname);
-fprintf('Peak power: %.2f mW at %.1f V\n', max(curve.powerMw), ...
-    curve.voltageV(curve.powerMw == max(curve.powerMw)));
+fprintf('\nSaved: %s\n', fname);
+fprintf('Scale factor (P_full/P_div): %.4f\n', curve.scaleFactor);
+fprintf('Peak power (merged curve):   %.2f mW at %.1f V\n', ...
+    max(curve.powerMw), curve.voltageV(curve.powerMw == max(curve.powerMw)));
 
 d.cleanup();
