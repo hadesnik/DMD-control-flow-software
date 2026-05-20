@@ -300,6 +300,34 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
                 'lineName', lineNameC, 'durationS', durationS));
         end
 
+        function outputSingleAnalog(obj, channelName, voltageV)
+            %outputSingleAnalog Output a constant voltage on one AO channel.
+            %   channelName: 'aoN' string or integer channel number. Auto-adds the
+            %   channel to the session if not already configured.
+            %   voltageV must be in [-10, 10] V.
+            obj.requireInitialized('outputSingleAnalog');
+            chNum = obj.parseChannelName_(channelName);
+            if ~isnumeric(voltageV) || ~isscalar(voltageV) || ~isfinite(voltageV)
+                error('tfp:hardware:NI6323_DAQ:outputSingleAnalog:badVoltage', ...
+                    'voltageV must be a finite scalar; got %s.', mat2str(voltageV));
+            end
+            if voltageV < -10 || voltageV > 10
+                error('tfp:hardware:NI6323_DAQ:outputSingleAnalog:voltageOutOfRange', ...
+                    'voltageV %.4g V is outside [-10, 10] V.', voltageV);
+            end
+            idx = find(obj.configuredAoChannels_ == chNum, 1);
+            if isempty(idx)
+                obj.session_.addAnalogOutputChannel( ...  %LEGACY_API
+                    obj.deviceName_, chNum, 'Voltage');
+                obj.configuredAoChannels_(end+1) = chNum;
+                idx = numel(obj.configuredAoChannels_);
+            end
+            outVec      = zeros(1, numel(obj.configuredAoChannels_));
+            outVec(idx) = voltageV;
+            obj.session_.outputSingleScan(outVec);  %LEGACY_API
+            obj.logEvent('outputSingleAnalog', struct('channel', chNum, 'voltageV', voltageV));
+        end
+
         function cleanup(obj)
             %cleanup Stop and release the NI-DAQmx session.
             if obj.isInitialized_ && ~isempty(obj.session_)
@@ -360,6 +388,22 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
             %onDataAvailable DataAvailable listener callback; appends to aiBuf_.
             chunk = evt.Data(:, 1:min(nChans, size(evt.Data, 2)));
             obj.aiBuf_ = [obj.aiBuf_; chunk];  %#ok<AGROW>
+        end
+
+        function chNum = parseChannelName_(obj, channelName)  %#ok<MANU>
+            if ischar(channelName) || isstring(channelName)
+                tok = regexp(char(channelName), '^ao(\d+)$', 'tokens', 'ignorecase');
+                if isempty(tok)
+                    error('tfp:hardware:NI6323_DAQ:outputSingleAnalog:badChannel', ...
+                        'channelName must be ''aoN'' (e.g. ''ao1''); got ''%s''.', channelName);
+                end
+                chNum = str2double(tok{1}{1});
+            elseif isnumeric(channelName) && isscalar(channelName) && channelName >= 0
+                chNum = double(channelName);
+            else
+                error('tfp:hardware:NI6323_DAQ:outputSingleAnalog:badChannel', ...
+                    'channelName must be a string like ''ao1'' or a non-negative integer.');
+            end
         end
     end
 end

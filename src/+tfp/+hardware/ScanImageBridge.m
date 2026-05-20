@@ -44,11 +44,32 @@ classdef ScanImageBridge < handle
 %     bridge.waitForCompletion(timeoutS)      % wait (non-critical)
 %     [framesPath, ts] = bridge.getLastAcquisition() % retrieve path (non-critical)
 %
-%   %VERIFY against your ScanImage and msocket versions:
-%     - 'B' is the exact handshake reply ScanImage sends after 'A'
-%     - Whether ScanImage sends a completion signal after saving
-%     - Whether ScanImage sends the TIFF path back over the socket
-%     - msocket port (default 3043)
+%   %VERIFY — open protocol questions (run verifyProtocol() to diagnose):
+%
+%     1. Handshake reply 'B'
+%        ASSUME: ScanImage user function on imaging PC sends exactly 'B' after receiving
+%                'A'.  Source: SImsocketPrep.m on DAQ PC waits for 'B', but the imaging-
+%                PC-side script (ask Masato — likely DAQmSocketPrep.m or similar) has not
+%                been inspected to confirm it sends 'B'.
+%        TEST:   Run verifyProtocol() — step 4 prints what is actually received.
+%                Or: read the ScanImage-side user function source on the imaging PC.
+%        CHANGE: In msocketHandshake — update strcmp(strtrim(reply), 'B') to match the
+%                real reply string; remove the check entirely if SI sends nothing.
+%
+%     2. Completion signal after acquisition
+%        ASSUME: ScanImage sends NO completion signal over the socket after saving.
+%                waitForCompletion therefore uses a timing-based pause.
+%        TEST:   Run verifyProtocol() — step 6 watches for any incoming message.
+%        CHANGE: In waitForCompletion (msocket branch): replace pause(min(waitS,timeoutS))
+%                with msrecv(obj.siSocket_) inside a try/catch with timeoutS.
+%
+%     3. TIFF path over socket
+%        ASSUME: ScanImage does NOT send the TIFF path back; getLastAcquisition returns ''.
+%        TEST:   Run verifyProtocol() — step 6 watches for any string message after stim.
+%        CHANGE: In getLastAcquisition (msocket case): replace framesPath = '' with
+%                framesPath = msrecv(obj.siSocket_) inside a try/catch.
+%
+%     4. msocket port — CONFIRMED 2026-05-19: port 3043 verified; mslisten/msaccept work.
 %
 %   See ARCHITECTURE.md "ScanImageBridge" and CLAUDE.md Phase 2.
 
@@ -143,6 +164,9 @@ classdef ScanImageBridge < handle
                     obj.msocketHandshake();
                 case 'tcp'
                     %VERIFY hSI.hScan2D.logNumFrames — property name varies by SI version
+                    %  ASSUME: logNumFrames is the correct per-stack frame-count property (tcp mode).
+                    %  TEST:   ScanImage MATLAB console while idle: disp(hSI.hScan2D.logNumFrames)
+                    %  CHANGE: Replace logNumFrames with the correct name (inspect hSI.hScan2D).
                     obj.siCommand(sprintf('hSI.hScan2D.logNumFrames = %d;', obj.nFrames_));
                     % Do NOT call startGrab() here — ScanImage must be pre-armed
                     % in external-trigger mode; TTL from daq.start() fires it.
@@ -168,7 +192,9 @@ classdef ScanImageBridge < handle
                 end
                 sendThisSI.times = stimOnsetSec;       %#ok<STRNU>
                 sendThisSI.power = obj.pendingPowerMw_; %#ok<STRNU>
-                %VERIFY sendThisSI field names match what ScanImage expects
+                %CONFIRMED 2026-05-19: sendThisSI.times and sendThisSI.power are the correct
+                %  field names (verified from SImsocketPrep.m on DAQ PC).  The ScanImage-side
+                %  user function must read these same fields — inspect DAQmSocketPrep.m to confirm.
                 mssend(obj.siSocket_, sendThisSI);
                 obj.isConnected = true;
             end
@@ -184,8 +210,11 @@ classdef ScanImageBridge < handle
             %   msocket / ttl_only: timing-based wait (nFrames/frameRate + 10%).
             %   tcp: polls hSI.acqState until 'idle'.
             %
-            %   %VERIFY whether ScanImage sends a completion signal over the
-            %   socket after saving; if so, replace the pause with msrecv here.
+            %   %VERIFY completion signal after acquisition (unknown 2026-05-19)
+            %     ASSUME: ScanImage sends NO completion signal; timing-based pause is used.
+            %     TEST:   Run verifyProtocol() — step 6 listens for any post-acquisition message.
+            %     CHANGE: Replace pause(min(waitS, timeoutS)) with msrecv(obj.siSocket_) in a
+            %             try/catch with timeoutS — msocket branch only.
             switch obj.mode_
                 case 'tcp'
                     obj.pollUntilIdle(timeoutS);
@@ -204,8 +233,8 @@ classdef ScanImageBridge < handle
             %                    from the DAQ PC requires a mapped network share.
             %   frameTimestamps: 1×nFrames seconds (0-based linspace approximation).
             %
-            %   %VERIFY whether ScanImage sends the TIFF path back over the
-            %   msocket connection; if so, replace '' with msrecv(siSocket_).
+            %   %VERIFY TIFF path over socket (unknown 2026-05-19) — see inline comment
+            %   below and run verifyProtocol() step 6 to determine.
             %
             %   %FUTURE: parse per-frame timestamps from TIFF header using
             %   ScanImageTiffReader once that utility path is confirmed.
@@ -213,7 +242,11 @@ classdef ScanImageBridge < handle
 
             switch obj.mode_
                 case 'msocket'
-                    framesPath = '';  %VERIFY if SI sends path; replace with msrecv
+                    %VERIFY TIFF path over socket (unknown 2026-05-19)
+                    %  ASSUME: ScanImage does NOT send the TIFF path; return ''.
+                    %  TEST:   Run verifyProtocol() — step 6 watches for a string message.
+                    %  CHANGE: framesPath = msrecv(obj.siSocket_) if SI sends the path.
+                    framesPath = '';
                     obj.msocketClose();
                 case 'tcp'
                     framesPath = obj.queryLastTiffPath();
@@ -250,6 +283,113 @@ classdef ScanImageBridge < handle
             %   entries is a struct array with fields {timestamp, eventType, payload}.
             entries = obj.log_;
         end
+
+        function verifyProtocol(obj)
+            %verifyProtocol Interactive protocol diagnostic — run once before first real session.
+            %
+            %   Usage:
+            %     cfg = loadConfig('configs/real.yaml');
+            %     bridge = tfp.hardware.ScanImageBridge(cfg.scanimage);
+            %     bridge.verifyProtocol();
+            %
+            %   Prints, with timestamps, every message received from the ScanImage PC
+            %   so the operator can confirm the handshake and completion signals without
+            %   reading source code.
+            %
+            %   Step 6 may block indefinitely if ScanImage sends nothing after stim.
+            %   Press Ctrl-C — that confirms no completion signal is sent, which is the
+            %   assumed (and currently correct) behaviour.
+            %
+            %   NOT called automatically.  Run once to validate, then comment out.
+            PORT = obj.srvsockPort_;
+            if ~isempty(obj.msocketPath_)
+                addpath(obj.msocketPath_);
+            end
+
+            fprintf('\n[verifyProtocol] === ScanImageBridge protocol diagnostic ===\n');
+            fprintf('[verifyProtocol] DAQ PC (server) on port %d\n\n', PORT);
+
+            % Step 1 — listen for ScanImage PC to connect
+            fprintf('[verifyProtocol] Step 1: mslisten(%d)  (60 s timeout)...\n', PORT);
+            srvsock = mslisten(PORT);
+            sock = [];
+            try
+                sock = msaccept(srvsock, 60);
+            catch ME
+                msclose(srvsock);
+                fprintf('[verifyProtocol] FAILED — no connection within 60 s: %s\n', ME.message);
+                return;
+            end
+            msclose(srvsock);
+            fprintf('[verifyProtocol] %s  Connected.\n', datestr(now, 'HH:MM:SS.FFF'));
+
+            % Step 2 — pause to catch any unsolicited data before handshake
+            fprintf('\n[verifyProtocol] Step 2: pause 1 s — checking for unsolicited data...\n');
+            pause(1);
+            fprintf('[verifyProtocol]          (no data expected before handshake)\n');
+
+            % Step 3 — send 'A'
+            mssend(sock, 'A');
+            fprintf('\n[verifyProtocol] %s  Step 3: Sent ''A''.\n', datestr(now, 'HH:MM:SS.FFF'));
+
+            % Step 4 — wait for handshake reply (blocks until data arrives)
+            fprintf('[verifyProtocol] Step 4: Waiting for handshake reply (blocks)...\n');
+            reply = msrecv(sock);
+            fprintf('[verifyProtocol] %s  Received: %s\n', datestr(now, 'HH:MM:SS.FFF'), mat2str(reply));
+            if ischar(reply) && strcmp(strtrim(reply), 'B')
+                fprintf('[verifyProtocol]           => CONFIRMED: got ''B'' as expected.\n');
+            else
+                fprintf('[verifyProtocol]           => WARNING: expected ''B''; update msocketHandshake.\n');
+            end
+
+            % Step 5 — send test sendThisSI struct
+            testStruct.times = 0.5;
+            testStruct.power = 10.0;
+            mssend(sock, testStruct);
+            fprintf('\n[verifyProtocol] %s  Step 5: Sent sendThisSI (times=0.5, power=10).\n', ...
+                datestr(now, 'HH:MM:SS.FFF'));
+
+            % Step 6 — listen up to 10 s for any post-acquisition message.
+            % msrecv blocks indefinitely if no data arrives; Ctrl-C exits the try block.
+            % Ctrl-C here = ScanImage sends no completion signal (the assumed behaviour).
+            fprintf('\n[verifyProtocol] Step 6: Listening up to 10 s for post-acquisition data.\n');
+            fprintf('[verifyProtocol]          Ctrl-C here = ScanImage sends NO completion signal\n');
+            fprintf('[verifyProtocol]            (that is the expected / currently-assumed behaviour).\n\n');
+            nReceived = 0;
+            t0 = tic;
+            try
+                while toc(t0) < 10
+                    msg = msrecv(sock);   % blocks; Ctrl-C exits the try block
+                    nReceived = nReceived + 1;
+                    fprintf('[verifyProtocol] %s  Post-acq message #%d: %s\n', ...
+                        datestr(now, 'HH:MM:SS.FFF'), nReceived, mat2str(msg));
+                end
+            catch   %#ok<CTCH>
+                % Ctrl-C or msrecv error — fall through to summary
+            end
+
+            % Summary
+            fprintf('\n[verifyProtocol] ========= SUMMARY =========\n');
+            fprintf('  Handshake ''B'' received:      %s\n', ...
+                mat2str(ischar(reply) && strcmp(strtrim(reply), 'B')));
+            fprintf('  Post-acquisition messages:  %d\n', nReceived);
+            if nReceived == 0
+                fprintf('\n  ASSUMPTION CONFIRMED: ScanImage sends no completion signal.\n');
+                fprintf('  waitForCompletion timing-pause is correct.\n');
+                fprintf('  getLastAcquisition returning '''' is correct.\n');
+            else
+                fprintf('\n  ACTION REQUIRED: ScanImage sent %d post-acq message(s).\n', nReceived);
+                fprintf('  waitForCompletion (msocket branch):\n');
+                fprintf('    Replace: pause(min(waitS, timeoutS))\n');
+                fprintf('    With:    msrecv(obj.siSocket_)  [in try/catch with timeoutS]\n');
+                fprintf('  getLastAcquisition (msocket case):\n');
+                fprintf('    Replace: framesPath = ''''\n');
+                fprintf('    With:    framesPath = msrecv(obj.siSocket_)  [in try/catch]\n');
+            end
+            fprintf('[verifyProtocol] ===========================\n\n');
+
+            try, msclose(sock); catch, end %#ok<TRYNC>
+        end
     end
 
     methods (Access = private)
@@ -278,7 +418,14 @@ classdef ScanImageBridge < handle
 
             mssend(obj.siSocket_, 'A');  % signal DAQ is ready
 
-            %VERIFY 'B' is the exact string ScanImage sends in reply to 'A'
+            %VERIFY 'B' is the exact string ScanImage sends in reply to 'A' (unknown 2026-05-19)
+            %  ASSUME: The ScanImage-side user function on the imaging PC (ask Masato —
+            %          likely DAQmSocketPrep.m) sends exactly 'B' after connecting.
+            %          Source: SImsocketPrep.m on DAQ PC waits for 'B', but the imaging-PC
+            %          script has not been inspected to confirm it sends 'B'.
+            %  TEST:   Run verifyProtocol() — step 4 prints what is actually received.
+            %          OR: read the ScanImage-side user function on the imaging PC directly.
+            %  CHANGE: Update strcmp(strtrim(reply), 'B') to match the real reply string.
             reply = msrecv(obj.siSocket_);
             if ~(ischar(reply) && strcmp(strtrim(reply), 'B'))
                 warning('tfp:hardware:ScanImageBridge:unexpectedHandshake', ...
@@ -304,7 +451,11 @@ classdef ScanImageBridge < handle
             %tcpConnect Open TCP connection to ScanImage remote control server.
             %   This mode is speculative — not verified against the actual lab
             %   setup.  Prefer 'msocket' or 'ttl_only'.
-            %   %VERIFY port 5555 and whether ScanImage remote control is enabled.
+            %   %VERIFY port 5555 and whether ScanImage remote control is enabled (tcp mode)
+            %     ASSUME: ScanImage TCP remote-control server is enabled and listens on 5555.
+            %     TEST:   ScanImage menu → Configuration → confirm "Enable TCP Server".
+            %             From DAQ PC: nc -z 128.32.177.205 5555 to confirm port is open.
+            %     CHANGE: Update default obj.port_ in constructor (or set config.port).
             try
                 obj.tcpClient_ = tcpclient(obj.host_, obj.port_, ...
                     'Timeout', obj.connectTimeoutS_);
@@ -320,7 +471,12 @@ classdef ScanImageBridge < handle
 
         function siCommand(obj, cmd)
             %siCommand Send a MATLAB command to ScanImage (tcp mode); discard response.
-            %   %VERIFY response terminator matches ScanImage TCP server.
+            %   %VERIFY response terminator matches ScanImage TCP server (tcp mode)
+            %     ASSUME: writeline sends '\n'; any echoed bytes are fully drained by the
+            %             NumBytesAvailable read below.
+            %     TEST:   After writeline, check if tcpClient_.NumBytesAvailable remains > 0
+            %             after the read() — stale bytes mean drain is incomplete.
+            %     CHANGE: Switch to readline or adjust the byte count as needed.
             writeline(obj.tcpClient_, cmd);
             pause(0.02);
             if obj.tcpClient_.NumBytesAvailable > 0
@@ -330,7 +486,12 @@ classdef ScanImageBridge < handle
 
         function response = siQuery(obj, expr)
             %siQuery Evaluate a MATLAB expression in ScanImage; return result string.
-            %   %VERIFY response format — ScanImage may prefix/suffix differently.
+            %   %VERIFY response format — ScanImage may prefix/suffix differently (tcp mode)
+            %     ASSUME: ScanImage TCP server returns the evaluated result as a plain string
+            %             terminated by '\n', with no 'ans = ' prefix or other decoration.
+            %     TEST:   siQuery('hSI.acqState') and inspect the raw response — look for
+            %             leading/trailing characters.
+            %     CHANGE: Add prefix-stripping (e.g. regexprep) before returning response.
             writeline(obj.tcpClient_, expr);
             response = strtrim(readline(obj.tcpClient_));
         end
@@ -340,7 +501,10 @@ classdef ScanImageBridge < handle
             t0 = tic;
             while toc(t0) < timeoutS
                 try
-                    %VERIFY 'idle' is the exact acqState string ScanImage returns
+                    %VERIFY 'idle' is the exact acqState string ScanImage returns (tcp mode)
+                    %  ASSUME: hSI.acqState == 'idle' (case-insensitive) when not acquiring.
+                    %  TEST:   ScanImage MATLAB console while idle: disp(hSI.acqState)
+                    %  CHANGE: Update strcmpi check to match the real state string.
                     state = obj.siQuery('hSI.acqState');
                 catch
                     break;
@@ -356,7 +520,10 @@ classdef ScanImageBridge < handle
 
         function framesPath = queryLastTiffPath(obj)
             %queryLastTiffPath Query ScanImage for the most recent TIFF (tcp mode).
-            %   %VERIFY hSI.hScan2D.logFilePath and logFileStem property names.
+            %   %VERIFY hSI.hScan2D.logFilePath and logFileStem property names (tcp mode)
+            %     ASSUME: ScanImage 2020+ exposes logFilePath and logFileStem on hSI.hScan2D.
+            %     TEST:   ScanImage MATLAB console: hSI.hScan2D.logFilePath; hSI.hScan2D.logFileStem
+            %     CHANGE: Replace property names to match your installed ScanImage version's API.
             framesPath = '';
             try
                 logDir  = obj.siQuery('hSI.hScan2D.logFilePath');
