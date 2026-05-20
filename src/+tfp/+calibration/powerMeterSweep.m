@@ -80,6 +80,11 @@ voltageStepsDiv  = sort(voltageStepsDiv(:)');
 voltageStepsFull = sort(voltageStepsFull(:)');
 
 % --- Connect to PM100D via Thorlabs TLPM driver ---
+% TLPM is a MATLAB class provided by the Optical Power Monitor installer.
+% findRsrc() returns a device count; getRsrcName(0) returns the USB resource
+% string for the first device. Verified against TLPM MATLAB wrapper shipped
+% with Optical Power Monitor v3.x. If a future version changes the API,
+% check Thorlabs\TLPM\Examples\MATLAB\ for the updated call sequence.
 try
     pm = TLPM();
 catch
@@ -88,7 +93,12 @@ catch
          'https://www.thorlabs.com/software_pages/ViewSoftwarePage.cfm?Code=PM100D']);
 end
 
-resourceName = pm.findRsrc();
+deviceCount = pm.findRsrc();
+if deviceCount < 1
+    error('tfp:calibration:powerMeterSweep:noDevice', ...
+        'No PM100D found. Check USB connection and Thorlabs Optical Power Monitor software.');
+end
+resourceName = pm.getRsrcName(0);
 pm.init(resourceName, true, true);
 pm.setWavelength(wavelengthNm);
 
