@@ -36,6 +36,11 @@ session:
   dataDir: 'C:\data'
   calibration_file: ''   # fill in after first alignDMDtoCamera run
 
+# Power meter — Thorlabs PM100D, serial P0004058.
+# Accessed via TLPM_64.dll (vendor/thorlabs/TLPM.m); no config fields needed,
+# resource string is auto-discovered by TLPM.findRsrc().
+# Use with S350C thermal sensor head; set wavelengthNm to match laser.
+
 # Substage widefield camera — Basler acA2500-14um (USB3 Vision, serial 22016738).
 # Consumed by tfp.hardware.BaslerSubstageCamera.initialize.
 # imaqhwinfo('gentl',1) confirmed: DeviceIDs=[1], SupportedFormats={'Mono8','Mono12'}.

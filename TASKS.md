@@ -16,7 +16,7 @@ A Claude Code session should:
 ## TASK-P2-01: NI6323_DAQ — Legacy Session Interface [DONE]
 
 **CONFIRMED HARDWARE ENVIRONMENT:**
-- Target MATLAB version: R2019a
+- Target MATLAB version: R2019b (confirmed 2026-05-20; earlier entries saying R2024b were wrong)
 - NI-DAQmx version: 19.5.0
 - `daq.getVendors()` confirms `IsOperational: true`
 - Use `daq.createSession('ni')` — legacy interface
@@ -570,43 +570,23 @@ Error identifier: tfp:hardware:RealScanImageBridge:<reason>
 
 ---
 
-## TASK-P3-02: powerMeterSweep [IN PROGRESS]
+## TASK-P3-02: powerMeterSweep [DONE]
 
-**No dependencies.**
-**Files (NEW/MODIFY):**
-  src/+tfp/+calibration/powerMeterSweep.m (NEW)
-  src/+tfp/+hardware/NI6323_DAQ.m (MODIFY — add outputSingleAnalog)
-  scripts/run_powerMeterSweep.m (NEW)
+**Files:**
+  src/+tfp/+calibration/powerMeterSweep.m
+  src/+tfp/+hardware/NI6323_DAQ.m (outputSingleAnalog added)
+  scripts/run_powerMeterSweep.m
+  vendor/thorlabs/TLPM.m
+  vendor/thorlabs/tlpm_mini.h
 
-**Spec:**
-Sweep DMD active-pixel count (or analog output voltage controlling laser
-power), record photodiode voltage from power meter at each step via DAQ
-analog input, and return a calibration struct suitable for powerLUT.
-
-  function calib = powerMeterSweep(dmd, daq, options)
-    options.nSteps          — number of power steps (default 20)
-    options.analogOutCh     — DAQ AO channel for laser control
-    options.photodiodeInCh  — DAQ AI channel for power meter
-    options.settleMs        — settle time between steps (default 50)
-    options.fovAreaUm2      — FOV area for density conversion
-
-  Returns calib struct:
-    calib.powerCurve.dmdActivePx
-    calib.powerCurve.powerAtSample   % mW, from photodiode + cal factor
-    calib.powerCurve.fovAreaUm2
-    calib.timestamp
-    calib.config                     % echo of options
-
-NI6323_DAQ addition — outputSingleAnalog(obj, channel, voltageV):
-  session_.outputSingleScan([voltageV]) on the AO channel.
-  Used by powerMeterSweep to step laser power.
-
-scripts/run_powerMeterSweep.m:
-  Standalone script. Load real.yaml, instantiate DAQ + DMD,
-  call powerMeterSweep, save calib to configs/calibration_YYYYMMDD.mat,
-  plot power curve, print summary.
-
-**Status:** Being implemented now.
+**Implementation notes:**
+- Reads PM100D via TLPM_64.dll (calllib) — no NI-VISA required
+- TLPM.m uses vendor/thorlabs/tlpm_mini.h (stripped header, no __fastcall__)
+  because MATLAB R2019b loadlibrary cannot parse the full TLPM.h
+- MinGW-w64 (MATLAB Add-On) required for one-time thunk compilation
+- PM100D serial P0004058, resource auto-discovered by TLPM.findRsrc()
+- Two-phase sweep: divided mode (0-5V) + full rep rate (0-1V), merged
+  via zero-intercept scale factor over the overlap region
 
 ---
 
