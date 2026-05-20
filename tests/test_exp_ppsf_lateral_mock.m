@@ -79,6 +79,50 @@ classdef test_exp_ppsf_lateral_mock < matlab.unittest.TestCase
             testCase.verifyGreaterThan(responses(1), responses(end), ...
                 'meanResponse at d=0 must exceed meanResponse at d=40 um.');
         end
+
+        function ppsf2d_runs_end_to_end(testCase)
+            tempDataDir = tempname();
+            cleaner = onCleanup(@() rmdirSafe(tempDataDir)); %#ok<NASGU>
+
+            config.hardwareKind = 'mock';
+            config.dmd.nRows = 800;
+            config.dmd.nCols = 1280;
+            config.dmd.maxPatternRate = 12500;
+            config.dmd.loadLatencyMsPerPattern = 0;
+            config.dmd.debugFigure = false;
+            config.daq.sampleRate = 10000;
+            config.daq.analogInChannels = [0 1];
+            config.daq.analogOutChannels = [0];
+            config.daq.digitalOutChannels = {'port0/line0'};
+            config.daq.aiRangeV = [-5 5];
+            config.paths.dataDir = tempDataDir;
+            config.calibration_file = '';
+            config.scanimage.enabled = false;
+            config.imaging.frameRate = 30;
+            config.imaging.simulateLatency = false;
+            config.fakeCells = struct( ...
+                'tag',       {'cell_01',  'cell_02',  'cell_03'}, ...
+                'dmdCol',    {400,        500,        600}, ...
+                'dmdRow',    {400,        400,        400}, ...
+                'radiusDmd', {8,          8,          8}, ...
+                'amplitude', {1.5,        1.2,        1.8}, ...
+                'sigma',     {10,         10,         10}, ...
+                'aiChannel', {0,          1,          2});
+
+            result = tfp.experiments.exp_ppsf_2d(config, 'test-2d-session');
+
+            testCase.verifyTrue(isfield(result, 'ppsf2d_summary'));
+            testCase.verifyTrue(isfield(result, 'nTrialsCompleted'));
+            testCase.verifyGreaterThan(result.nTrialsCompleted, 0);
+
+            rmap = result.ppsf2d_summary.responseMap;
+            testCase.verifyTrue(size(rmap,1) > 1 && size(rmap,2) > 1, ...
+                'responseMap must be 2D with multiple rows and columns.');
+
+            testCase.verifyTrue(isfield(result, 'ppsf2d_figure_path'));
+            testCase.verifyTrue(isfile(result.ppsf2d_figure_path), ...
+                'ppsf2d_heatmap.png must exist on disk.');
+        end
     end
 end
 

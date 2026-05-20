@@ -144,14 +144,15 @@ end
 
 function cells = buildCells(fakeCellsCfg)
 nCells = numel(fakeCellsCfg);
-for k = nCells:-1:1
+cells  = cell(1, nCells);
+for k = 1:nCells
     fc   = fakeCellsCfg(k);
     args = {};
     if isfield(fc, 'amplitude'),   args = [args, {'amplitude',   double(fc.amplitude)}]; end %#ok<AGROW>
     if isfield(fc, 'sigma'),       args = [args, {'sigma',       double(fc.sigma)}]; end %#ok<AGROW>
     if isfield(fc, 'aiChannel'),   args = [args, {'aiChannel',   double(fc.aiChannel)}]; end %#ok<AGROW>
     if isfield(fc, 'tag'),         args = [args, {'responseTag', char(fc.tag)}]; end %#ok<AGROW>
-    cells(k) = tfp.sim.CellResponseModel( ...
+    cells{k} = tfp.sim.CellResponseModel( ...
         [double(fc.dmdCol), double(fc.dmdRow)], double(fc.radiusDmd), args{:});
 end
 end

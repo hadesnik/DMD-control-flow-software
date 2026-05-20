@@ -6,32 +6,52 @@ photostimulation system targeting single-cell resolution across a
 
 ## Status
 
-- **Phase 1 complete**: mock-only end-to-end pipeline. Pattern
+- **Phase 1 complete**: mock-only end-to-end pipeline — pattern
   generation → trial sequencing → mock hardware → 11-step Sequencer
   state machine → on-disk persistence.
-- **Tests**: 32 / 33 passing (`test_calibration_mock` deferred to
-  Phase 2/3).
-- **Hardware target**: Vialux ALP-4.3 driving a TI DLP650LNIR NIR DMD.
-  Currently running mock-only on macOS pending hardware arrival.
+- **Phase 2 complete**: real NI DAQ integration, ScanImageBridge TCP
+  protocol, verified trigger topology.
+- **Phase 3 in progress**: RealScanImageBridge, calibration routines
+  (`alignDMDtoCamera`, `powerMeterSweep`), SubstageCamera HAL,
+  2D PPSF experiment.
+- **Tests**: 42 / 42 passing.
+- **Hardware target**: DLi4130 (visible, ALP-4.1, borrowed from Waller
+  lab) for software validation now; TI DLP650LNIR NIR DMD arriving soon.
 
 ## How to run
 
-From the repo root, on a machine with MATLAB R2023a or later, with macOS 13.3+ required for R2023b and newer:
+From the repo root, on a machine with MATLAB R2023a or later:
 
 ```
 matlab -batch "runtests"
-matlab -batch "addpath('src'); result = tfp.experiments.exp_ppsf_lateral('configs/mock.yaml', 'manual_check'); disp(result)"
 ```
 
-The first command runs the full test suite (exit code 0 on full pass,
-1 on any failure). The second runs the PPSF experiment end-to-end
-against mocks and prints the summary struct.
+Exit code 0 = all pass. Run experiments against mocks:
+
+```matlab
+result = tfp.experiments.exp_ppsf_lateral('configs/mock.yaml', 'manual_check');
+disp(result)
+```
+
+### Calibration workflow (scope PC, real hardware)
+
+```matlab
+% 1. Spatial calibration — DMD pixels → sample µm
+tfp.calibration.alignDMDtoCamera('configs/windowed_mouse_v1.yaml');
+
+% 2. Power calibration — DAQ voltage → mW at sample
+tfp.calibration.powerMeterSweep('configs/windowed_mouse_v1.yaml');
+
+% 3. Run experiment
+tfp.experiments.exp_ppsf_lateral('configs/windowed_mouse_v1.yaml');
+% or: tfp.experiments.exp_ppsf_2d(...)
+```
 
 ## Repo layout
 
 - `configs/` — YAML configuration files (mock and per-rig profiles).
 - `docs/` — design notes and API audits.
-- `src/` — MATLAB source under the `+tfp/` package.
+- `+tfp/` — MATLAB source package.
 - `tests/` — `matlab.unittest.TestCase` suite, run via `runtests`.
 - `vendor/` — third-party references (Vialux ALP wrappers and headers).
 
