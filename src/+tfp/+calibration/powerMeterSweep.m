@@ -39,6 +39,7 @@ function curve = powerMeterSweep(daq, options)
 %                            default 1040
 %       .repRateDivKhz     - divided-mode rep rate in kHz; default 10
 %       .repRateFullMhz    - full rep rate in MHz; default 1.25
+%       .sensorRelaxTimeS  - wait after zeroing AO before Phase 2 (s); default 20
 %
 %   Output curve struct:
 %     .voltageV            - merged voltage axis (V), sorted ascending
@@ -70,8 +71,9 @@ aoChannel        = configField(options, 'aoChannel',     'ao3');
 fovAreaUm2       = configField(options, 'fovAreaUm2',    pi * 400^2);
 showFigure       = configField(options, 'showFigure',    true);
 wavelengthNm     = configField(options, 'wavelengthNm',  1040);
-repRateDivKhz    = configField(options, 'repRateDivKhz',  10);
-repRateFullMhz   = configField(options, 'repRateFullMhz', 1.25);
+repRateDivKhz    = configField(options, 'repRateDivKhz',   10);
+repRateFullMhz   = configField(options, 'repRateFullMhz',  1.25);
+sensorRelaxTimeS = configField(options, 'sensorRelaxTimeS', 20);
 
 voltageStepsDiv  = sort(voltageStepsDiv(:)');
 voltageStepsFull = sort(voltageStepsFull(:)');
@@ -158,8 +160,8 @@ fprintf('Switch the pulse picker to FULL REP RATE (%.2f MHz) now.\n', repRateFul
 fprintf('Press any key when ready...\n');
 pause();
 
-fprintf('Waiting 20 s for thermal sensor to relax to zero...\n');
-pause(20);
+fprintf('Waiting %.0f s for thermal sensor to relax to zero...\n', sensorRelaxTimeS);
+pause(sensorRelaxTimeS);
 
 [powerMw_full, powerStd_full] = runSweep(daq, pm, aoChannel, ...
     voltageStepsFull, settleTimeS, 0, nAverages, ...
