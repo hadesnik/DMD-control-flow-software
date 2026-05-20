@@ -570,23 +570,70 @@ Error identifier: tfp:hardware:RealScanImageBridge:<reason>
 
 ---
 
-## TASK-P3-02: powerMeterSweep [DONE]
+## TASK-P3-02: powerMeterSweep [NEEDS HARDWARE VERIFICATION]
 
-**Files:**
+**Code complete. All remaining steps require the scope PC.**
+
+**Files implemented:**
   src/+tfp/+calibration/powerMeterSweep.m
-  src/+tfp/+hardware/NI6323_DAQ.m (outputSingleAnalog added)
+  src/+tfp/+calibration/powerMeterSweep_mock.m
+  src/+tfp/+hardware/NI6323_DAQ.m  (outputSingleAnalog added)
   scripts/run_powerMeterSweep.m
-  vendor/thorlabs/TLPM.m
-  vendor/thorlabs/tlpm_mini.h
 
-**Implementation notes:**
-- Reads PM100D via TLPM_64.dll (calllib) — no NI-VISA required
-- TLPM.m uses vendor/thorlabs/tlpm_mini.h (stripped header, no __fastcall__)
-  because MATLAB R2019b loadlibrary cannot parse the full TLPM.h
-- MinGW-w64 (MATLAB Add-On) required for one-time thunk compilation
-- PM100D serial P0004058, resource auto-discovered by TLPM.findRsrc()
-- Two-phase sweep: divided mode (0-5V) + full rep rate (0-1V), merged
-  via zero-intercept scale factor over the overlap region
+**What was built:**
+Sweeps the FS-50 analog modulation input (Dev1/ao1) from 0–5 V in 25
+steps, reads sample-plane power at each step via Thorlabs PM100D (S350C
+thermal sensor) using the TLPM MATLAB driver, saves a `curve` struct
+(voltageV, powerMw, powerStdMw, timestamp, notes) to a dated .mat file,
+and plots the result. outputSingleAnalog auto-adds the AO channel to the
+NI session if not yet configured, so no pre-configuration is needed.
+
+**Pre-run checklist (do these before running on scope PC):**
+
+  [ ] Physical setup
+        PM100D connected via USB; S350C sensor attached.
+        FS-50 analog modulation BNC → Dev1/ao1 on NI-6323.
+        Sensor placed at sample plane (or exit pupil — note placement
+        in the script's options.notes field before saving).
+
+  [ ] Confirm FS-50 AO input polarity and range
+        The script assumes 0 V = minimum power, 5 V = maximum power.
+        Check FS-50 front panel or manual: if the sense is inverted
+        (5 V = off, 0 V = full power), reverse voltageSteps in the
+        script: options.voltageSteps = linspace(5, 0, 25).
+
+  [ ] Verify TLPM measPower calling convention
+        The real-hardware path uses a libpointer to receive the reading
+        (powerMeterSweep.m lines 105–107). On the scope PC, run:
+          pm = TLPM(); deviceCount = pm.findRsrc();
+          rn = pm.getRsrcName(0); pm.init(rn, true, true);
+          val = pm.measPower();
+        If measPower() returns a scalar directly (no libpointer), replace
+        the three-line block with: readings(j) = pm.measPower() * 1e3;
+        The comment in powerMeterSweep.m (line 102) describes the swap.
+
+  [ ] Verify pm.getRsrcName method name
+        The TLPM MATLAB class ships with a few different wrapper versions.
+        If pm.getRsrcName(0) throws "no such method", check:
+          methods(pm)
+        Common alternatives: getRsrcName, getResourceName, resourceName.
+        Update powerMeterSweep.m line 80 with the correct name.
+
+**Running the sweep:**
+  cd to repo root on scope PC, then:
+    >> addpath(fullfile(pwd, 'src'));
+    >> run scripts/run_powerMeterSweep.m
+  Expected duration: ~2 min (25 steps × 3 s settle + 5 s warmup).
+  Output: power_curve_YYYYMMDD_HHMMSS.mat in the current directory.
+
+**After a successful run:**
+  [ ] Move the saved .mat to configs/ and update calibration_file in
+      configs/windowed_mouse_v1.yaml:
+        calibration_file: 'configs/power_curve_YYYYMMDD_HHMMSS.mat'
+  [ ] Note in the .mat curve.notes: sensor position, NDF filters in
+      path (if any), beam block / shutter state.
+  [ ] Identify the AO voltage that delivers the target experiment power
+      (~5–15 mW at sample for ChRmine). Record it in the rig log.
 
 ---
 
