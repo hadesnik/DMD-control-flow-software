@@ -58,6 +58,11 @@ classdef MockScanImageBridge < handle
             obj.log_ = struct('timestamp', {}, 'eventType', {}, 'payload', {});
         end
 
+        function setPendingPower(obj, powerMw)
+            %setPendingPower No-op stub matching ScanImageBridge interface.
+            obj.logEvent('setPendingPower', struct('powerMw', double(powerMw)));
+        end
+
         function armForExternalTrigger(obj, nFrames)
             %armForExternalTrigger Prepare to acquire nFrames imaging frames.
             %   Call this before setActivePattern and daq.start().
