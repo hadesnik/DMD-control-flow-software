@@ -16,7 +16,7 @@ daq:
   deviceName: 'Dev1'
   sampleRate: 10000
   analogInChannels: [0, 1, 2, 3]
-  analogOutChannels: [0, 1]
+  analogOutChannels: [0, 1, 3]
   digitalOutChannels:
     - 'port0/line0'    # DMD pattern-advance trigger
     - 'port0/line1'    # Pockels cell gate
@@ -35,6 +35,14 @@ imaging:
 session:
   dataDir: 'C:\data'
   calibration_file: ''   # fill in after first alignDMDtoCamera run
+
+# Laser modulation (NKT FS-50). Analog output ao3 on the NI PCIe-6323.
+laser:
+  fs50_ao_channel: 'ao3'
+  modulation_voltage_max: 5.0
+  modulation_voltage_min: 0.0     # 0 V = laser off
+  calibration_file: ''
+  default_power_mw: 1.0
 
 # Power meter — Thorlabs PM100D, serial P0004058.
 # Accessed via TLPM_64.dll (vendor/thorlabs/TLPM.m); no config fields needed,
