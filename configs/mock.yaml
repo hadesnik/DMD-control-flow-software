@@ -69,8 +69,8 @@ fakeCells:
 # Laser modulation (NKT FS-50). Ignored in mock mode — included for
 # config schema parity with real.yaml.
 laser:
-  fs50_ao_channel: 'ao1'
-  modulation_voltage_max: 5.0     # ASSUMED — verify with NKT FS-50 manual
+  fs50_ao_channel: 'ao3'
+  modulation_voltage_max: 5.0
   modulation_voltage_min: 0.0     # 0 V = laser off
   calibration_file: ''
   default_power_mw: 1.0
