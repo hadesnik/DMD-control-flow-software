@@ -85,6 +85,7 @@ tf_photostim/
 │   │   └── liveFigures.m
 │   ├── +calibration/              ← rig calibration routines
 │   │   ├── alignDMDtoCamera.m
+│   │   ├── crossRegisterScanImage.m  ← scan-field → substage-camera affine
 │   │   ├── measurePSF.m
 │   │   └── powerMeterSweep.m
 │   ├── +experiments/              ← runnable experiment scripts
@@ -158,9 +159,35 @@ YAML configs (parsed via MATLAB's `yamlread` in R2024b+, or `yaml.loadFile` via 
 
 ### Phase 3 — DMD-real
 8. Swap to `DLP650LNIR_DMD` on NIR DMD arrival.
-9. Run `+calibration/alignDMDtoCamera.m` to produce the affine transform from DMD pixels to camera/sample coordinates.
+9. Run the two-step spatial calibration on a thin fluorescent film (see procedure below).
 10. Run `+calibration/measurePSF.m` on a fluorescent slab.
 11. Run experiments on windowed mice.
+
+#### Two-step spatial calibration procedure (Phase 3)
+
+The full DMD → ScanImage scan-field mapping is built by composing two affines, both measured using the substage widefield camera against the same fluorescent film:
+
+**Step A — DMD → substage camera** (`alignDMDtoCamera`):
+Project a 5×5 grid of DMD spots. Camera sees each spot; fit affine from DMD pixel coords to camera pixel coords. Already implemented.
+
+**Step B — ScanImage scan field → substage camera** (`crossRegisterScanImage`):
+The 2p imaging beam rastered by ScanImage excites fluorescence on the film; the substage camera sees the scanned region as a bright rectangle. The scan field's fast (resonant) and slow (galvo) axes are identified by using a **non-square pixel count** (e.g. 256 lines × 512 pixels per line): the rectangle's long axis on the camera is the fast axis (more pixels → wider resonant sweep at the sample). Fit an affine from scan-field coordinates to camera pixel coords.
+
+**Axis sign disambiguation**: the rectangle alone does not reveal which end of each axis is positive in ScanImage's scan-field convention (the resonant scanner sweeps symmetrically so fast-axis sign cannot be observed from a passive camera image; slow-axis sign similarly isn't resolved by a single centered scan). Both signs are stored as config entries (`scan_fast_axis_sign: 1` and `scan_slow_axis_sign: 1`, each ±1) and determined empirically by the **verify step** below.
+
+**Verify step** (mandatory after first calibration, or after any optics change):
+1. Project a single DMD spot at a known DMD coordinate.
+2. Compute the predicted ScanImage scan-field coordinate using the composed affine.
+3. Command ScanImage to scan a small mROI at that predicted coordinate.
+4. Operator confirms visually whether the spot is centered in the ScanImage live image.
+5. If not, flip `scan_fast_axis_sign` and/or `scan_slow_axis_sign` (4 combinations; typically resolved in ≤2 attempts) and re-verify.
+6. Write confirmed signs into the rig config YAML.
+
+**Composition**:
+```
+dmdToScan_affine = inv(scanToCam_affine) * dmdToCam_affine
+```
+Both new fields (`scanToCam_affine`, `dmdToScan_affine`) are appended to the calibration struct; the original `dmdToSample_affine` (DMD→camera) is preserved unchanged.
 
 ### Phase 4 — PLM integration (post-grant if needed)
 
@@ -218,7 +245,7 @@ Phase 1 implementation pinned the following conventions; treat them as load-bear
   The 2p imaging path uses galvo-scanned focused excitation and a PMT point detector. There is no widefield camera on the imaging PC. Consequently, projecting a DMD spot onto a fluorescent slab and "imaging it in ScanImage" does not work: ScanImage can only see fluorescence that its own scan beam excites.
 
   Two viable routes for DMD↔sample spatial calibration exist:
-  - **Substage camera (preferred):** A widefield camera viewing the sample from below (trans-illumination geometry) can image fluorescence excited by the DMD on a thin fluorescent film. A separate ScanImage raster of the same film gives the imaging coordinate frame. Cross-registering the two images (substage camera coords ↔ ScanImage scan coords) yields the full DMD → sample mapping. `alignDMDtoCamera` currently processes the substage-camera TIFF; the ScanImage↔substage cross-registration is a separate step not yet implemented.
+  - **Substage camera (preferred, implemented):** A widefield camera viewing the sample from below images fluorescence on a thin film. Two affines are fitted against the same camera frame: (A) DMD spots → camera (`alignDMDtoCamera`), and (B) ScanImage scan field → camera (`crossRegisterScanImage`). Composing them gives DMD → ScanImage scan-field coords with no data transfer between PCs. No ScanImage TIFF is needed — ScanImage just runs in Focus mode with a non-square pixel count (e.g. 256×512) so the camera sees an asymmetric rectangle that unambiguously identifies the fast (resonant) vs slow (galvo) scan axis. Axis signs are resolved by a verify step; see the Phase 3 calibration procedure above.
   - **Photobleach holes (backup):** Project DMD spots onto a fluorescent film at sufficient power density to bleach dark holes. Image the holes with ScanImage (they appear as dark spots against the fluorescent background). This gives a direct DMD → ScanImage pixel mapping with no substage camera required. Feasibility depends on achieving enough intensity at the sample with the NKT FS-50; may not be practical at low duty-cycle.
 
 - **MATLAB R2025b (and 2024+) require macOS 13.3+**; R2023a works on Monterey 12.x and is the current dev pin. Don't upgrade the dev machine's MATLAB until macOS is upgraded.
