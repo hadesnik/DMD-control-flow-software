@@ -87,14 +87,21 @@ end
 % Flush so subplot Position properties are populated before button layout.
 drawnow();
 
-% --- create buttons in the lower third of the panel [2,2] axes area ---
-apos = hAxes(4).Position;   % [x y w h] in normalised figure units
-bh   = max(0.035, apos(4) * 0.13);
-bw   = apos(3)  * 0.44;
-bx1  = apos(1);
-bx2  = apos(1)  + apos(3) * 0.53;
-by1  = apos(2)  + 0.005;
-by2  = apos(2)  + bh + 0.012;
+% --- split panel [2,2]: shrink axes(4) to the top 62%, buttons get the
+%     bottom 38%.  Axes and buttons no longer overlap.
+apos     = hAxes(4).Position;   % [x y w h] in normalised figure units
+btnFrac  = 0.38;
+btnAreaH = apos(4) * btnFrac;
+gap      = 0.010;
+set(hAxes(4), 'Position', ...
+    [apos(1),  apos(2) + btnAreaH + gap,  apos(3),  apos(4) - btnAreaH - gap]);
+
+bh  = btnAreaH * 0.42;
+bw  = apos(3)  * 0.44;
+bx1 = apos(1);
+bx2 = apos(1)  + apos(3) * 0.53;
+by1 = apos(2)  + 0.005;
+by2 = apos(2)  + bh + 0.010;
 
 hBtnPause = uicontrol('Parent', hFig, 'Style', 'pushbutton', ...
     'String', 'Pause', 'Units', 'normalized', ...
@@ -192,6 +199,13 @@ for k = 1:nPts
     % ScanImage frame (optional)
     if ~isempty(siBridge) && ishghandle(hFig)
         try, updateStatus(hAxes(4), k, nPts, 'Getting ScanImage frame...'); drawnow(); catch, end
+        % FUTURE: For more precise calibration, arm ScanImage to acquire
+        % exactly one frame per calibration point via:
+        %   siBridge.armForExternalTrigger(1)
+        %   daq.sendDigitalPulse('port0/line10', 0.025)  % 25ms trigger
+        %   [~, tiffPath] = siBridge.getLastAcquisition()
+        % Currently uses continuous ScanImage acquisition (simpler,
+        % sufficient for first sessions).
         siImg      = getScanImageFrame(siBridge);
         siCentroid = [];
         if ~isempty(siImg)
@@ -404,7 +418,7 @@ dy   = 0.13;
 for i = 1:numel(rows)
     text(0.04, yTop - (i-1)*dy, rows{i}, ...
         'Units', 'normalized', 'Parent', ax, ...
-        'FontSize', 9, 'FontName', 'Courier', ...
+        'FontSize', 11, 'FontName', 'Courier', ...
         'VerticalAlignment', 'top', 'Interpreter', 'none');
 end
 end
