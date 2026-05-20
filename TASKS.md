@@ -797,9 +797,229 @@ Scope PC (ScanImageBridge receives) → liveFigures plots in real time
 
 ---
 
+---
+
+## TASK-PLM-1: PLM pattern library generator [DONE]
+
+**Depends on:** PLM.m (complete).
+**Files (MODIFY):**
+  src/+tfp/+hardware/PLM.m
+
+**Context:**
+PLM.m already implements the abstract PLM interface and `computeDefocusPattern`.
+This task adds `generatePatternLibrary` — a convenience method that sweeps
+`computeDefocusPattern` over a range of axial offsets and returns the full
+pattern stack with system summary metadata.
+
+**Spec:**
+Add method to PLM:
+
+  function [patterns, dz_um, sys] = generatePatternLibrary(obj, n_planes, dz_range_um, obj_name)
+
+  Inputs:
+    n_planes      — integer number of axial planes
+    dz_range_um   — total axial range in µm (symmetric about 0)
+    obj_name      — string key into objective lookup table (see below)
+
+  Outputs:
+    patterns      — Ny × Nx × n_planes uint8 array (PLM gray levels 0–31)
+    dz_um         — 1 × n_planes double, linspace(-dz_range_um/2, dz_range_um/2, n_planes)
+    sys           — struct with fields:
+                      .r_PLM_um        radius of PLM active aperture (µm)
+                      .N_radius        number of pixels across radius
+                      .dz_nyquist_um   Nyquist-limited axial step (µm)
+                      .dz_3px_um       3-pixel-quantization axial step (µm)
+                      .memory_MB       total pattern stack size in MB
+
+  Implementation:
+    Look up objective from obj_name in private lookup table:
+      'Avocado'    — f_obj = 16.8 mm, NA = 0.6, tube lens = 180 mm
+      'Nikon16x'   — f_obj = 11.25 mm, NA = 0.8, tube lens = 180 mm
+      'Olympus20x' — f_obj = 9.0 mm,  NA = 1.0, tube lens = 180 mm
+    Throw tfp:hardware:PLM:unknownObjective if obj_name not in table.
+    Compute dz_um = linspace(-dz_range_um/2, dz_range_um/2, n_planes).
+    Loop: patterns(:,:,k) = obj.computeDefocusPattern(dz_um(k), objective).
+    Compute sys fields from objective + PLM geometry.
+    Print system summary table to console (fprintf):
+      PLM pattern library: <n_planes> planes, <dz_range_um> µm range
+      Objective: <obj_name>  NA=<NA>  f_obj=<f>mm
+      PLM aperture radius: <r_PLM_um> µm  (<N_radius> px)
+      Axial Nyquist step:  <dz_nyquist_um> µm
+      3-px quantization:   <dz_3px_um> µm
+      Pattern stack:       <memory_MB> MB
+
+Error identifier: tfp:hardware:PLM:<reason>
+
+**Verify:** runtests still green. File parses:
+  matlab -batch "addpath('src'); help tfp.hardware.PLM"
+
+---
+
+## TASK-PLM-2: PLM unit tests [DONE]
+
+**Depends on:** PLM.m, MockPLM.m, TIPLM_PLM.m (all complete).
+**Files (NEW):**
+  tests/+tfp/+hardware/PLMTest.m
+
+**Context:**
+No PLM tests exist yet. This task creates a full test class following the
+exact structure of the existing DMD tests (e.g. `tests/+tfp/+hardware/DMDTest.m`).
+All tests use MockPLM only — no real hardware required.
+
+**Spec:**
+classdef PLMTest < matlab.unittest.TestCase
+
+  Test methods to implement:
+
+  computeDefocusPattern_uint8Range:
+    MockPLM.computeDefocusPattern(dz_um, obj_struct) returns uint8 array.
+    All values in [0, 31].
+
+  computeDefocusPattern_zeroIsFlat:
+    dz = 0 gives an all-zero (or all-flat) pattern — verify max(pattern(:)) == 0.
+
+  computeDefocusPattern_outsidePupilIsZero:
+    Pixels outside the PLM pupil radius have state 0.
+    (Construct a small synthetic PLM with known geometry to make this testable.)
+
+  computeDefocusPattern_180degSymmetry:
+    pattern at +dz equals rot90(pattern at +dz, 2) — 180-degree rotational symmetry
+    of a circularly symmetric defocus wavefront.
+
+  mockPLM_getLog_recordsCalls:
+    Instantiate MockPLM. Call computeDefocusPattern. Call generatePatternLibrary.
+    getLog() returns entries with eventType 'computeDefocusPattern' and
+    'generatePatternLibrary'.
+
+  tiplm_stubs_throw:
+    Instantiate TIPLM_PLM (no hardware needed — constructor must not require
+    a connected device).
+    Calling displayPattern on TIPLM_PLM throws an MException with identifier
+    containing 'tfp:hardware:TIPLM_PLM:notImplemented'.
+
+Error identifier: test identifier not applicable — test class only.
+
+**Verify:** runtests — PLMTest adds ≥ 6 new passing tests.
+Total test count increases accordingly. Existing tests unaffected.
+
+---
+
+## TASK-PLM-3: Sync architecture design doc [DONE]
+
+**No code dependencies.**
+**Files (NEW):**
+  docs/SYNC.md
+
+**Context:**
+The PLM (TI NIR PLM, DLPC641 controller) must switch axial planes in sync
+with ScanImage frame acquisition. Two trigger architectures are being
+evaluated. This task documents both in enough concrete detail that TI can
+answer the open questions and the implementation can proceed.
+
+Read the existing DMD trigger logic in DLP650LNIR_DMD.m for context on
+how the DMD side of the timing is already structured.
+
+**Spec:**
+docs/SYNC.md must cover:
+
+1. Overview: one paragraph on why PLM sync matters (axial multiplexing
+   across ScanImage frames) and the two candidate architectures.
+
+2. Option A — PLM as slave (preferred):
+   - ScanImage frame-done TTL → DLPC641 TRIG_IN → advances one stored
+     pattern per pulse.
+   - ASCII timing diagram showing: ScanImage frame clock, TRIG_IN,
+     PLM pattern index, laser gate (if any), DAQ acquisition window.
+   - Configuration steps: how patterns are preloaded, how TRIG_IN mode
+     is armed (I2C command sequence — include known register names from
+     TI docs, mark unknowns as %TBD).
+   - Latency budget: expected PLM switching latency (~50 µs) vs.
+     ScanImage frame period (e.g. 33 ms at 30 Hz) — why this is acceptable.
+
+3. Option B — PLM as master (fallback):
+   - PLM sync-out → vDAQ digital input → delayed laser gate;
+     ScanImage slaved to PLM via external trigger.
+   - ASCII timing diagram for this topology.
+   - Why this is more complex (ScanImage frame rate becomes PLM-determined,
+     not freely settable).
+
+4. Open questions requiring TI confirmation:
+   - TRIG_IN voltage level (3.3 V or 5 V tolerant?).
+   - Minimum TRIG_IN pulse width (µs).
+   - I2C command sequence to arm trigger mode on DLPC641.
+   - Whether PLM sync-out is available on the evaluation board GPIO.
+   - Maximum preloaded pattern count in DLPC641 memory.
+
+5. Recommended path: Option A, pending TI answers to questions above.
+
+**Verify:** File exists at docs/SYNC.md. runtests unaffected.
+
+---
+
+## TASK-PLM-4: Psychtoolbox display scaffold [DONE]
+
+**Depends on:** TIPLM_PLM.m (complete).
+**Files (MODIFY):**
+  src/+tfp/+hardware/TIPLM_PLM.m
+
+**Context:**
+TIPLM_PLM.m currently stubs out `displayPattern` with
+`tfp:hardware:TIPLM_PLM:notImplemented`. This task implements the
+Psychtoolbox (PTB) display path up through `Screen('Flip')`, which is
+how the DLPC641 receives patterns over DisplayPort from the scope PC.
+
+Bitplane encoding (how uint8 gray levels map to DLPC641 binary pattern
+slots) is TBD pending TI documentation — leave a clearly marked TODO.
+
+**Spec:**
+Implement in TIPLM_PLM.m:
+
+  displayPattern(obj, pattern_uint8):
+    Validate pattern_uint8 is uint8, size matches obj.nRows × obj.nCols.
+    Detect secondary screen: screens = Screen('Screens').
+      If numel(screens) < 2, warn('tfp:hardware:TIPLM_PLM:noSecondScreen', ...).
+      Use screens(end) as the PLM display (last screen index = secondary monitor).
+    Open or reuse PTB window (persistent private property ptbWin_):
+      If ptbWin_ is empty or invalid: ptbWin_ = Screen('OpenWindow', screenIdx, 0).
+    Encode pattern: gray = obj.encode_for_DLPC641(pattern_uint8).
+    Upload texture: tex = Screen('MakeTexture', ptbWin_, gray).
+    Draw: Screen('DrawTexture', ptbWin_, tex).
+    Flip: Screen('Flip', ptbWin_).
+    Close texture: Screen('Close', tex).
+    Log call.
+
+  Private method encode_for_DLPC641(obj, pattern_uint8):
+    Scales uint8 states 0–31 linearly to 0–255 grayscale (multiply by 8,
+    clamp to 255). Returns uint8 Ny × Nx × 3 RGB image (replicate across
+    RGB channels for grayscale display).
+    Add comment block:
+      % TODO: bitplane packing TBD pending TI DLPC641 docs.
+      % Current implementation sends linear grayscale; DLPC641 may
+      % interpret specific bit patterns as binary pattern indices.
+      % Replace this encoding once TI confirms the DisplayPort protocol.
+
+  Teardown method closePTBWindow(obj):
+    If ptbWin_ is valid: Screen('Close', ptbWin_).
+    Set ptbWin_ = [].
+    Log call.
+
+  Private property: ptbWin_ (initialized to [] in constructor).
+
+Error identifier: tfp:hardware:TIPLM_PLM:<reason>
+
+**Verify:** runtests still green (TASK-PLM-2 test for notImplemented stub
+will need updating — TIPLM_PLM.displayPattern now runs rather than throwing;
+update that test to verify Screen is called, or skip if PTB not on path).
+File parses: matlab -batch "addpath('src'); help tfp.hardware.TIPLM_PLM"
+
+---
+
 ## COMPLETED TASKS
 
 TASK-15-01 through TASK-15-05: Phase 1.5 all-optical simulator
   (37/38 tests green, committed 2026-05-19)
 TASK-P3-01: RealScanImageBridge (msocket) — structured VERIFY docs +
   verifyProtocol() diagnostic method (committed 2026-05-19)
+TASK-PLM-2: PLM unit tests — tests/test_MockPLM.m, 13 tests covering
+  computeDefocusPattern physics, pupil mask, 180° symmetry, MockPLM log,
+  TIPLM_PLM stubs (committed 2026-05-20)
