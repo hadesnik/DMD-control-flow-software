@@ -27,6 +27,7 @@ classdef MockSubstageCamera < tfp.hardware.SubstageCamera
         truthAffine_  = []
         noiseLevel_   = 0.05
         spotSigmaPx_  = 4
+        scanRect_     = []   % [x1 y1 width height] 1-indexed px; renders scan rectangle
         lastFrame_    = []
         log_          = struct('timestamp', {}, 'eventType', {}, 'payload', {})
     end
@@ -45,6 +46,14 @@ classdef MockSubstageCamera < tfp.hardware.SubstageCamera
 
             if isfield(config, 'dmd')
                 obj.dmd_ = config.dmd;
+            end
+            if isfield(config, 'scanRect')
+                r = config.scanRect;
+                if ~isnumeric(r) || numel(r) ~= 4 || any(r < 1)
+                    error('tfp:hardware:MockSubstageCamera:badScanRect', ...
+                        'scanRect must be [x1 y1 width height] with all values >= 1.');
+                end
+                obj.scanRect_ = r(:)';
             end
             if isfield(config, 'truthAffine')
                 A = config.truthAffine;
@@ -89,6 +98,16 @@ classdef MockSubstageCamera < tfp.hardware.SubstageCamera
                 end
             end
 
+            if ~isempty(obj.scanRect_)
+                x1 = max(1, round(obj.scanRect_(1)));
+                y1 = max(1, round(obj.scanRect_(2)));
+                x2 = min(obj.nCols, round(obj.scanRect_(1) + obj.scanRect_(3) - 1));
+                y2 = min(obj.nRows, round(obj.scanRect_(2) + obj.scanRect_(4) - 1));
+                if x2 >= x1 && y2 >= y1
+                    frame(y1:y2, x1:x2) = 0.8 + 0.1 * rand(y2-y1+1, x2-x1+1);
+                end
+            end
+
             frame       = min(max(frame, 0), 1);   % clip to [0,1]
             obj.lastFrame_ = frame;
             obj.logEvent('snap', struct('hasDmdRef', ~isempty(obj.dmd_)));
@@ -114,6 +133,7 @@ classdef MockSubstageCamera < tfp.hardware.SubstageCamera
             obj.isInitialized = false;
             obj.dmd_          = [];
             obj.truthAffine_  = [];
+            obj.scanRect_     = [];
             obj.lastFrame_    = [];
             obj.logEvent('cleanup', []);
         end

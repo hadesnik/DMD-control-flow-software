@@ -991,6 +991,119 @@ File parses: matlab -batch "addpath('src'); help tfp.hardware.TIPLM_PLM"
 
 ---
 
+---
+
+## TASK-FUTURE-01: Bidirectional TCP ScanImage control [FUTURE]
+
+**Deferred:** 2026-05-20. Implement post-grant if needed.
+**Not on the critical path for preliminary data.**
+
+**Context:**
+`crossRegisterScanImage` currently uses Option A: the operator manually
+sets ScanImage's scan pixel count (e.g. 512×256) before calling the
+function. A future implementation would drive scan geometry directly from
+the DAQ PC via TCP, enabling fully automated calibration without operator
+intervention at the ScanImage workstation.
+
+**Scope:**
+  - Add `setScanGeometry(obj, nFast, nSlow)` to `ScanImageBridge` (tcp mode):
+      hSI.hScan2D.scanPixelsPerLine = nFast
+      hSI.hScan2D.linesPerFrame     = nSlow
+      hSI.hScan2D.pixelBinFactor    = 1  (ensure square pixels)
+    All property names marked %VERIFY against installed ScanImage version.
+  - Add `setScanMode(obj, mode)` for 'focus' | 'grab' (tcp mode only).
+  - Update `crossRegisterScanImage` to accept an optional `siBridge`
+    argument (Option B flow): when provided, call setScanGeometry and
+    setScanMode('focus') before snapping the camera.
+  - Resolve TASK-P3-06 %VERIFY items before implementing.
+
+---
+
+## TASK-CAL-1: crossRegisterScanImage + verifyScanFieldComposition [IN PROGRESS]
+
+**No blocking dependencies (works with mock hardware).**
+**Files (NEW):**
+  src/+tfp/+calibration/crossRegisterScanImage.m
+  src/+tfp/+calibration/crossRegisterScanImage_mock.m
+  src/+tfp/+calibration/verifyScanFieldComposition.m
+
+**Files (MODIFY):**
+  src/+tfp/+hardware/MockSubstageCamera.m  (add scan-rectangle rendering mode)
+  tests/test_calibration_mock.m            (add 3 new test methods)
+
+**Context:**
+Implements the critical gap in the prelim-data calibration pipeline.
+Step A (alignDMDtoCamera) is done. Step B is missing.
+The verify step (operator confirmation of axis signs) has no implementation.
+
+**crossRegisterScanImage spec:**
+  function calib = crossRegisterScanImage(camera, existingCalib, options)
+    Prereq: ScanImage running in Focus mode with non-square pixels
+    (e.g. 256 lines × 512 pixels per line); fluorescent film on stage.
+
+  options:
+    .scanNCols (default 512), .scanNRows (default 256)
+    .fovSizeUm (default 800), .exposureS (default 0.2)
+    .showFigure (default true), .fastSign (default 1), .slowSign (default 1)
+
+  Algorithm:
+    1. snap() camera frame
+    2. Otsu threshold → largest connected component → ConvexHull
+    3. Minimum-area bounding rectangle (rotating calipers on hull)
+    4. Assign 4 MABR corners to scan-field corner coords using fastSign/slowSign
+    5. fitAffineCalib(sfPts, camPts) → scanToCam_affine
+    6. Compose: dmdToScan_affine = inv(scanToCam) * dmdToCam
+       (only if existingCalib.dmdToSample_affine is present)
+
+  Output calib fields (extends existingCalib):
+    .scanToCam_affine, .dmdToScan_affine, .scanNCols, .scanNRows
+    .scan_fast_axis_sign, .scan_slow_axis_sign, .fovSizeUm
+    .scanResidualErrorPx, .scanTimestamp, .scanNotes, .scanVerified
+
+**verifyScanFieldComposition spec:**
+  function calib = verifyScanFieldComposition(dmd, calib, options)
+    options.testDmdCoord  — [col, row], default [dmd.nCols/2, dmd.nRows/2]
+    options.fovSizeUm     — default from calib.fovSizeUm or 800
+    options.mockResponse  — [fastSign, slowSign] to bypass input() in tests
+    options.showFigure    — display diagnostic (default true)
+
+  Algorithm:
+    1. Project a single DMD spot at testDmdCoord
+    2. Apply calib.dmdToScan_affine to get predicted scan-field [col, row]
+    3. Convert to µm: x_um = (col/(scanNCols-1) - 0.5) * fovSizeUm
+    4. Print: "Set ScanImage mROI center to: (X µm, Y µm)"
+    5. Ask operator: "Is the DMD spot centered in the mROI? [y/n]"
+       (or use mockResponse to bypass)
+    6. If 'n': try all 4 sign combinations; recompute dmdToScan each time
+    7. Update calib: scan_fast_axis_sign, scan_slow_axis_sign, dmdToScan_affine,
+       scanVerified = true, scanVerifyTimestamp
+
+**MockSubstageCamera scan-rectangle mode:**
+  New config fields in initialize():
+    config.scanTruthAffine  — 3×3, scan-field [col,row] → camera [x,y]
+    config.scanNCols        — scan cols (default 512)
+    config.scanNRows        — scan rows (default 256)
+    config.scanMode         — logical (default false)
+  When scanMode=true and scanTruthAffine is set, snap() renders a filled
+  bright rectangle instead of DMD spots.
+
+**Tests (add to test_calibration_mock.m):**
+  crossRegisterScanImage_mock_fields:
+    calib = crossRegisterScanImage_mock(); — verify required fields present.
+
+  crossRegisterScanImage_live_mock:
+    Build MockSubstageCamera in scanMode with a known scanTruthAffine.
+    Run crossRegisterScanImage. Recovered scanToCam_affine must match
+    truth within 1 px translation, 0.05 scale. scanResidualErrorPx < 2 px.
+
+  crossRegisterScanImage_composition:
+    Verify dmdToScan round-trip: apply dmdToScan_affine to a DMD point
+    and check consistency with manual inv(scanToCam) * dmdToCam. Error < 0.5 px.
+
+**Verify:** runtests gains 3 new passing tests. Existing tests unaffected.
+
+---
+
 ## COMPLETED TASKS
 
 TASK-15-01 through TASK-15-05: Phase 1.5 all-optical simulator

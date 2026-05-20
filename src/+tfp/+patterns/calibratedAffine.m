@@ -1,17 +1,23 @@
-function transformedCoords = calibratedAffine(coords, calibration)
-%calibratedAffine Apply DMD->sample affine from a calibration struct.
+function transformedCoords = calibratedAffine(coords, calibration, targetSpace)
+%calibratedAffine Apply a DMD->target-space affine from a calibration struct.
 %
 %   transformedCoords = calibratedAffine(coords, calibration)
+%   transformedCoords = calibratedAffine(coords, calibration, targetSpace)
 %
 %   Inputs:
 %     coords      - 1x2 or N x 2 numeric. Each row is [u v] in DMD pixel
 %                   space.
-%     calibration - struct with .dmdToSample_affine, a 3 x 3 matrix that
-%                   acts as: [x y 1]' = A * [u v 1]'.
+%     calibration - struct containing the requested affine field.
+%     targetSpace - char (default 'camera'). Selects which affine to apply:
+%                     'camera'    -> calibration.dmdToSample_affine (DMD->camera px)
+%                     'scanfield' -> calibration.dmdToScan_affine (DMD->scan-field)
 %
 %   Output:
-%     transformedCoords - same shape as coords (1x2 or N x 2), each row
-%                         transformed by A. Output is in sample-um space.
+%     transformedCoords - same shape as coords (1x2 or N x 2).
+
+if nargin < 3
+    targetSpace = 'camera';
+end
 
 if ~isnumeric(coords) || ndims(coords) > 2 || size(coords, 2) ~= 2
     error('tfp:patterns:calibratedAffine:badCoords', ...
@@ -19,15 +25,32 @@ if ~isnumeric(coords) || ndims(coords) > 2 || size(coords, 2) ~= 2
         num2str(size(coords)));
 end
 
-if ~isstruct(calibration) || ~isfield(calibration, 'dmdToSample_affine')
+if ~isstruct(calibration)
     error('tfp:patterns:calibratedAffine:badCalibration', ...
-        'calibration must be a struct with .dmdToSample_affine.');
+        'calibration must be a struct.');
 end
 
-A = calibration.dmdToSample_affine;
+switch targetSpace
+    case 'camera'
+        fieldName = 'dmdToSample_affine';
+    case 'scanfield'
+        fieldName = 'dmdToScan_affine';
+    otherwise
+        error('tfp:patterns:calibratedAffine:unknownTargetSpace', ...
+            'Unknown targetSpace ''%s''; must be ''camera'' or ''scanfield''.', ...
+            targetSpace);
+end
+
+if ~isfield(calibration, fieldName)
+    error('tfp:patterns:calibratedAffine:missingAffine', ...
+        'calibration.%s is not present; run the appropriate calibration step first.', ...
+        fieldName);
+end
+
+A = calibration.(fieldName);
 if ~isnumeric(A) || ~isequal(size(A), [3 3])
     error('tfp:patterns:calibratedAffine:badAffine', ...
-        'calibration.dmdToSample_affine must be a 3x3 numeric matrix.');
+        'calibration.%s must be a 3x3 numeric matrix.', fieldName);
 end
 
 N = size(coords, 1);
