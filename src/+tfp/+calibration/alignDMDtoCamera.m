@@ -98,75 +98,29 @@ for k = 1:nPts
         pause(exposureS);
     end
     frame       = camera.snap();
-    imgPts(k,:) = findSpotCentroid(frame, k);
+    imgPts(k,:) = findSpotCentroid(frame, k);   % private helper
 end
 
-% --- fit affine: DMD [col,row] → camera [x,y] ---
-tform              = fitgeotrans(dmdPts, imgPts, 'affine');
-dmdToSample_affine = extractAffineMatrix(tform);
-
-% --- RMS residual ---
-homDMD  = [dmdPts, ones(nPts,1)]';
-imgPred = (dmdToSample_affine * homDMD)';
-imgPred = imgPred(:, 1:2);
-residuals   = sqrt(sum((imgPts - imgPred).^2, 2));
-residualRMS = sqrt(mean(residuals.^2));
+% --- fit affine and compute residuals ---
+calib_fit = fitAffineCalib(dmdPts, imgPts, []);  % private helper
 
 if showFigure
-    plotCalibDiagnostic(dmdPts, imgPts, imgPred, residuals);
+    plotCalibDiagnostic(dmdPts, imgPts, calib_fit.imgPtsPredicted, calib_fit.residualsPerPt);
 end
 
-calib.dmdToSample_affine = dmdToSample_affine;
+calib.dmdToSample_affine = calib_fit.dmdToSample_affine;
 calib.umPerPixel         = umPerPixel;
 calib.pixelsPerUm        = 1 / umPerPixel;
 calib.powerCurve         = struct();
 calib.timestamp          = datetime('now');
 calib.notes              = notes;
-calib.residualErrorPx    = residualRMS;
+calib.residualErrorPx    = calib_fit.residualErrorPx;
 calib.nCalibrationPoints = nPts;
 end
 
 % =========================================================================
 % Local functions
 % =========================================================================
-
-function centroid = findSpotCentroid(frame, frameIdx)
-lo  = min(frame(:));
-hi  = max(frame(:));
-if hi <= lo
-    error('tfp:calibration:alignDMDtoCamera:blankFrame', ...
-        'Frame %d is blank (uniform intensity %.3g).', frameIdx, lo);
-end
-img = (frame - lo) / (hi - lo);
-
-level = graythresh(img);
-bw    = img > level;
-
-cc    = bwconncomp(bw);
-if cc.NumObjects == 0
-    error('tfp:calibration:alignDMDtoCamera:noSpot', ...
-        'No bright region found in frame %d (Otsu threshold %.3f).', ...
-        frameIdx, level);
-end
-
-props    = regionprops(cc, 'Area', 'Centroid');
-[~, idx] = max([props.Area]);
-centroid = props(idx).Centroid;   % [x y] = [col row] in image coords
-end
-
-function A = extractAffineMatrix(tform)
-% Both affinetform2d (R2022b+) and affine2d use row-vector convention:
-%   [xo, yo, 1] = [xi, yi, 1] * T
-% Ours is column-vector: [xo; yo; 1] = A * [xi; yi; 1]  →  A = T'
-if isa(tform, 'affinetform2d')
-    A = tform.A';
-elseif isa(tform, 'affine2d')
-    A = tform.T';
-else
-    error('tfp:calibration:alignDMDtoCamera:unsupportedTform', ...
-        'Unrecognized fitgeotrans output type: %s.', class(tform));
-end
-end
 
 function plotCalibDiagnostic(dmdPts, imgPts, imgPred, residuals)
 figure('Name', 'DMD-to-Camera Calibration', 'NumberTitle', 'off');
