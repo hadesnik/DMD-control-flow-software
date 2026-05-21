@@ -6,10 +6,9 @@ classdef MockPLM < tfp.hardware.PLM
     %   pattern for downstream mock inspection (e.g. synthesising defocused
     %   images in CellResponseModel or SyntheticImaging).
     %
-    %   displayPattern, configureTrigger, and advancePattern are logged as
-    %   events but perform no rendering — Psychtoolbox and I2C interfaces
-    %   are not yet implemented. computeDefocusPattern is inherited from
-    %   PLM and computes full paraxial phase patterns in mock mode.
+    %   configureTrigger and advancePattern are logged as events but perform
+    %   no hardware I2C calls. computeDefocusPattern and exportPatternImages
+    %   are inherited from PLM (exportPatternImages writes real PNG files).
     %
     %   See ARCHITECTURE.md "Hardware abstraction".
 
@@ -25,7 +24,7 @@ classdef MockPLM < tfp.hardware.PLM
 
     properties (Access = private)
         pattern_       = []       % uint8(nRows, nCols), current loaded pattern
-        state_         = 'idle'   % 'idle' | 'displaying'
+        state_         = 'idle'   % 'idle' | 'loaded'
         log_           = struct('timestamp', {}, 'eventType', {}, 'payload', {})
         loadLatencyMs_ = 0        % simulated load latency, ms
     end
@@ -60,25 +59,12 @@ classdef MockPLM < tfp.hardware.PLM
             obj.validatePattern(pattern);
 
             obj.pattern_ = pattern;
-            obj.state_   = 'idle';
+            obj.state_   = 'loaded';
             obj.logEvent('loadPattern', struct('size', size(pattern)));
 
             if obj.loadLatencyMs_ > 0
                 pause(obj.loadLatencyMs_ / 1000);
             end
-        end
-
-        function displayPattern(obj, pattern)
-            %displayPattern Log the display request; Psychtoolbox rendering TBD.
-            if ~obj.isInitialized
-                error('tfp:hardware:MockPLM:notInitialized', ...
-                    'initialize() must be called before displayPattern().');
-            end
-            obj.validatePattern(pattern);
-
-            obj.pattern_ = pattern;
-            obj.state_   = 'displaying';
-            obj.logEvent('displayPattern', struct('size', size(pattern)));
         end
 
         function configureTrigger(obj)

@@ -1,8 +1,8 @@
 classdef PLM < handle
     %PLM Abstract interface for PLM remote-focusing phase modulators.
     %   Subclasses include MockPLM (simulator) and TIPLM_PLM (real TI NIR
-    %   PLM via Psychtoolbox display + I2C trigger). Experiment code talks
-    %   to this interface, never to a concrete class.
+    %   PLM via DLPC900 Pre-stored Pattern Mode + I2C trigger). Experiment
+    %   code talks to this interface, never to a concrete class.
     %
     %   computeDefocusPattern is implemented here on the base because it
     %   depends only on the abstract pixel-geometry and phase-spec properties
@@ -26,13 +26,10 @@ classdef PLM < handle
         % pattern: uint8(nRows, nCols) with values in 0..nPhaseStates-1
         loadPattern(obj, pattern)
 
-        % Psychtoolbox full-screen display; TBD pending Psychtoolbox integration
-        displayPattern(obj, pattern)
-
-        % I2C trigger configuration; TBD pending TI response on register map
+        % Arm DLPC900 TRIG_IN_2 hardware trigger mode via I2C (DLPU018 §2.4)
         configureTrigger(obj)
 
-        % Assert trigger line to advance to the next pattern; TBD pending TI response
+        % Software-step one pattern (diagnostic only; hardware uses TRIG_IN_2)
         advancePattern(obj)
 
         status = getStatus(obj)
@@ -180,6 +177,53 @@ classdef PLM < handle
             fprintf('Axial Nyquist step:  %.2f µm\n', dz_nyquist_um);
             fprintf('3-px quantization:   %.2f µm\n', dz_3px_um);
             fprintf('Pattern stack:       %.1f MB\n\n', memory_MB);
+        end
+
+        function filePaths = exportPatternImages(obj, patterns, outputDir)
+            %exportPatternImages Export a uint8 pattern stack as grayscale PNG files.
+            %   patterns:  nRows × nCols × N uint8 (states 0..nPhaseStates-1)
+            %   outputDir: char or string; created if absent
+            %   filePaths: 1×N cell array of written absolute file paths
+            %
+            %   Each state is scaled: gray = uint8(state × 8), clamped to 255.
+            %   Files are named pattern_0001.png, pattern_0002.png, ...
+            %   Import into TI LightCrafter GUI → Firmware tab to flash Pre-stored
+            %   Pattern Mode sequences to the DLPC900.
+            %
+            % TODO: verify linear grayscale encoding against DLPU018 §3 before
+            % first hardware use. Grayscale intensity may map directly to phase-
+            % state index; if DLPC900 uses binary-plane packing instead, update
+            % this encoding and re-export.
+
+            if ~isa(patterns, 'uint8')
+                error('tfp:hardware:PLM:badPatterns', ...
+                    'patterns must be uint8; got %s.', class(patterns));
+            end
+            if size(patterns, 1) ~= obj.nRows || size(patterns, 2) ~= obj.nCols
+                error('tfp:hardware:PLM:badPatternShape', ...
+                    'patterns must be [%d × %d × N]; got [%s].', ...
+                    obj.nRows, obj.nCols, num2str(size(patterns)));
+            end
+            if any(patterns(:) >= obj.nPhaseStates)
+                error('tfp:hardware:PLM:badPatternValues', ...
+                    'pattern values must be in 0..%d; got max %d.', ...
+                    obj.nPhaseStates - 1, max(patterns(:)));
+            end
+
+            outputDir = char(outputDir);
+            if ~isfolder(outputDir)
+                mkdir(outputDir);
+            end
+
+            N = size(patterns, 3);
+            filePaths = cell(1, N);
+            for k = 1:N
+                gray  = min(uint8(255), patterns(:,:,k) .* uint8(8));
+                fname = fullfile(outputDir, sprintf('pattern_%04d.png', k));
+                imwrite(gray, fname);
+                filePaths{k} = fname;
+            end
+            fprintf('Exported %d pattern image(s) to: %s\n', N, outputDir);
         end
     end
 end

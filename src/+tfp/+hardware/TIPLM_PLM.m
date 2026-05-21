@@ -9,26 +9,24 @@ classdef TIPLM_PLM < tfp.hardware.PLM
 %   defocus pattern for a given axial shift (dz_um) and optical system
 %   parameters (M_relay, n, f_obj_um, NA).
 %
-%   Pattern preload workflow:
-%     1. Export patterns as PNG via exportPatternImages().
-%     2. Flash to device onboard flash via TI GUI Firmware tab (USB, ~30 s).
-%     3. Call configureTrigger() to arm TRIG_IN_2 hardware sequencing.
-%   Pattern display via Psychtoolbox is used only during the export/verify
-%   step, not during live acquisition.
+%   Pattern preload workflow (no Psychtoolbox required):
+%     1. Compute stack: [pats, dz] = plm.generatePatternLibrary(N, dz_um, obj).
+%     2. Export PNGs:   plm.exportPatternImages(pats, outputDir).
+%     3. Flash to DLPC900 via TI LightCrafter GUI → Firmware tab (USB, ~30 s).
+%     4. Arm trigger:   plm.configureTrigger()  [Phase 4 — DLPU018 §2.4].
+%     TRIG_IN_2 then advances patterns autonomously; no MATLAB call per frame.
 %
-%   Trigger: TRIG_IN_2 input, ≥ 20 µs pulse width, advancing one pattern
-%   per rising edge (Pre-stored Pattern Mode). Voltage level TBD — confirm
-%   from EVM schematic (likely 1.8 V; level shifter required from DAQ 3.3 V).
+%   Trigger: TRIG_IN_2 input, ≥ 20 µs pulse width (NI6323 counter must
+%   stretch the ScanImage frame-clock pulse — see docs/SYNC.md §5).
+%   Voltage level TBD: confirm from EVM schematic (likely 1.8 V; level
+%   shifter required from DAQ 3.3 V output).
 %   I2C API: DLPC900 Programmer's Guide (TI doc DLPU018).
 %
 %   Usage:
 %     cfg = struct();
 %     plm = tfp.hardware.TIPLM_PLM(cfg);
-%     sys.M_relay  = 2.4;   sys.n       = 1.33;
-%     sys.f_obj_um = 16800; sys.NA      = 0.6;
-%     pat = plm.computeDefocusPattern(50, sys);  % 50 µm defocus
-%     plm.loadPattern(pat);
-%     plm.displayPattern(pat);  % uses encode_for_DLPC900 (linear grayscale placeholder)
+%     [pats, dz] = plm.generatePatternLibrary(20, 400, 'Olympus20x');
+%     plm.exportPatternImages(pats, 'C:\plm_patterns\session_01');
 
     % ------------------------------------------------------------------ %
     properties (SetAccess = protected)
@@ -42,27 +40,25 @@ classdef TIPLM_PLM < tfp.hardware.PLM
     end
 
     properties (Access = private)
-        state_  = 'idle'    % 'idle' | 'displaying'
+        state_  = 'idle'    % 'idle' | 'loaded'
         log_    = struct('timestamp', {}, 'eventType', {}, 'payload', {})
-        ptbWin_ = []        % Psychtoolbox window handle; [] = not yet opened
     end
 
     % ------------------------------------------------------------------ %
     methods
         function obj = TIPLM_PLM(config)
             %TIPLM_PLM Construct and initialise the PLM.
-            %   config: struct; no required fields in Phase 3/4 stubs.
-            %   When Psychtoolbox and I2C integration are implemented, add
-            %   fields such as .screenId and .i2cPort here.
+            %   config: struct; no required fields in current stub.
+            %   When I2C is implemented, add fields such as .i2cPort and
+            %   .i2cAddress (default 0x36 per EVM schematic).
             obj.initialize(config);
         end
 
         % -------------------------------------------------------------- %
         function initialize(obj, config)
             %initialize Prepare the PLM for use.
-            %   Stores initialisation state. Hardware connections
-            %   (Psychtoolbox window, I2C) are opened in displayPattern and
-            %   configureTrigger once those stubs are filled.
+            %   Stores initialisation state. I2C handle is opened in
+            %   configureTrigger once Phase 4 stub is filled.
 
             if ~isstruct(config)
                 error('tfp:hardware:TIPLM_PLM:badConfig', ...
@@ -77,10 +73,9 @@ classdef TIPLM_PLM < tfp.hardware.PLM
 
         % -------------------------------------------------------------- %
         function loadPattern(obj, pattern)
-            %loadPattern Validate a uint8 phase pattern.
-            %   Validates shape and value range. Transferring pattern bytes
-            %   to the PLM frame buffer is deferred until displayPattern is
-            %   implemented via Psychtoolbox.
+            %loadPattern Validate a uint8 phase pattern and record it.
+            %   Use exportPatternImages() (inherited from PLM) to write PNGs,
+            %   then flash via TI LightCrafter GUI before calling configureTrigger.
 
             if ~obj.isInitialized
                 error('tfp:hardware:TIPLM_PLM:notInitialized', ...
@@ -88,61 +83,8 @@ classdef TIPLM_PLM < tfp.hardware.PLM
             end
             obj.validatePattern(pattern);
 
-            % TODO(Phase 4): transfer pattern bytes to PLM frame buffer via
-            % Psychtoolbox Screen('MakeTexture', ...) or equivalent.
+            obj.state_ = 'loaded';
             obj.logEvent('loadPattern', struct('size', size(pattern)));
-        end
-
-        % -------------------------------------------------------------- %
-        function displayPattern(obj, pattern)
-            %displayPattern Display a phase pattern on the PLM via Psychtoolbox.
-            %   Opens a full-screen PTB window on the secondary monitor (the
-            %   PLM DisplayPort output) if not already open, encodes the uint8
-            %   phase pattern for the DLPC900, and flips it to screen.
-            %   Used during the pattern export/verify step only; live acquisition
-            %   uses pre-stored patterns triggered by TRIG_IN_2 hardware input.
-
-            if ~obj.isInitialized
-                error('tfp:hardware:TIPLM_PLM:notInitialized', ...
-                    'initialize() must be called before displayPattern().');
-            end
-            obj.validatePattern(pattern);
-
-            % Detect secondary screen; PLM must appear as a separate monitor.
-            screens = Screen('Screens');
-            if numel(screens) < 2
-                warning('tfp:hardware:TIPLM_PLM:noSecondScreen', ...
-                    ['Fewer than 2 screens detected (%d found). ' ...
-                     'Verify the PLM is connected via DisplayPort.'], ...
-                    numel(screens));
-            end
-            screenIdx = screens(end);   % rightmost index = secondary monitor
-
-            % Open PTB window once; reuse on subsequent calls.
-            if isempty(obj.ptbWin_)
-                obj.ptbWin_ = Screen('OpenWindow', screenIdx, 0);
-            end
-
-            % Encode and display — linear grayscale placeholder (see encode_for_DLPC900).
-            gray = obj.encode_for_DLPC900(pattern);
-            tex  = Screen('MakeTexture', obj.ptbWin_, gray);
-            Screen('DrawTexture', obj.ptbWin_, tex);
-            Screen('Flip', obj.ptbWin_);
-            Screen('Close', tex);
-
-            obj.state_ = 'displaying';
-            obj.logEvent('displayPattern', struct('size', size(pattern)));
-        end
-
-        % -------------------------------------------------------------- %
-        function closePTBWindow(obj)
-            %closePTBWindow Close the Psychtoolbox window and release the handle.
-            %   Call explicitly when done, or let cleanup() call it.
-            if ~isempty(obj.ptbWin_)
-                Screen('Close', obj.ptbWin_);
-                obj.ptbWin_ = [];
-            end
-            obj.logEvent('closePTBWindow', []);
         end
 
         % -------------------------------------------------------------- %
@@ -210,8 +152,7 @@ classdef TIPLM_PLM < tfp.hardware.PLM
         % -------------------------------------------------------------- %
         function cleanup(obj)
             %cleanup Release hardware resources.
-            %   Closes the PTB window if open. I2C handle release: TODO(Phase 4).
-            obj.closePTBWindow();
+            %   I2C handle release: TODO(Phase 4).
             obj.state_        = 'idle';
             obj.isInitialized = false;
             obj.logEvent('cleanup', []);
@@ -227,23 +168,6 @@ classdef TIPLM_PLM < tfp.hardware.PLM
 
     % ------------------------------------------------------------------ %
     methods (Access = private)
-
-        function gray = encode_for_DLPC900(~, pattern_uint8)
-            %encode_for_DLPC900 Convert uint8 phase states to DLPC900 display image.
-            %   Scales 0–31 linearly to 0–255 grayscale (multiply by 8, clamp to
-            %   255), then replicates across RGB channels for Psychtoolbox display.
-            %   Returns uint8 [nRows × nCols × 3] RGB image.
-            %
-            % TODO: bitplane packing — verify against DLPC900 Programmer's Guide
-            % (DLPU018) §3 "Pre-stored Pattern Mode". The DLPC900 in 8-bit
-            % grayscale DisplayPort mode may interpret pixel intensity directly
-            % as a phase-state index (linear mapping is likely correct), but
-            % confirm before first hardware use. Binary pattern modes pack
-            % multiple 1-bit patterns per frame — not needed here since we use
-            % 5-bit (32-state) grayscale patterns.
-            scaled = min(uint8(255), uint8(pattern_uint8) .* uint8(8));
-            gray   = repmat(scaled, [1, 1, 3]);
-        end
 
         function validatePattern(obj, pattern)
             %validatePattern Throw typed errors for bad pattern arguments.

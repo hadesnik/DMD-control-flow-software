@@ -135,17 +135,14 @@ classdef test_MockPLM < matlab.unittest.TestCase
             testCase.verifyTrue(plm.getStatus().isPatternLoaded);
         end
 
+        function loadPattern_setsLoadedState(testCase)
+            plm = testCase.makePlm();
+            plm.loadPattern(testCase.zeroPattern(plm));
+            testCase.verifyEqual(plm.getStatus().state, 'loaded');
+        end
+
         % ---------------------------------------------------------------- %
         % stub methods — log entries and state transitions
-
-        function displayPattern_logsAndSetsState(testCase)
-            plm = testCase.makePlm();
-            plm.displayPattern(testCase.zeroPattern(plm));
-
-            entries = plm.getLog();
-            testCase.verifyTrue(any(strcmp({entries.eventType}, 'displayPattern')));
-            testCase.verifyEqual(plm.getStatus().state, 'displaying');
-        end
 
         function configureTrigger_logs(testCase)
             plm = testCase.makePlm();
@@ -170,7 +167,6 @@ classdef test_MockPLM < matlab.unittest.TestCase
             plm = testCase.makePlm();
             pat = testCase.zeroPattern(plm);
             plm.loadPattern(pat);
-            plm.displayPattern(pat);
             plm.configureTrigger();
             plm.advancePattern();
 
@@ -180,18 +176,33 @@ classdef test_MockPLM < matlab.unittest.TestCase
             % First entry is 'initialize' (from makePlm).
             testCase.verifyEqual(eventTypes{1}, 'initialize');
             testCase.verifyTrue(any(strcmp(eventTypes, 'loadPattern')));
-            testCase.verifyTrue(any(strcmp(eventTypes, 'displayPattern')));
             testCase.verifyTrue(any(strcmp(eventTypes, 'configureTrigger')));
             testCase.verifyTrue(any(strcmp(eventTypes, 'advancePattern')));
 
-            % Ordering: load < display < configureTrigger < advancePattern.
+            % Ordering: load < configureTrigger < advancePattern.
             iLoad = find(strcmp(eventTypes, 'loadPattern'),      1);
-            iDisp = find(strcmp(eventTypes, 'displayPattern'),   1);
             iCfg  = find(strcmp(eventTypes, 'configureTrigger'), 1);
             iAdv  = find(strcmp(eventTypes, 'advancePattern'),   1);
-            testCase.verifyLessThan(iLoad, iDisp);
-            testCase.verifyLessThan(iDisp, iCfg);
+            testCase.verifyLessThan(iLoad, iCfg);
             testCase.verifyLessThan(iCfg,  iAdv);
+        end
+
+        function exportPatternImages_writesFiles(testCase)
+            plm = testCase.makePlm();
+            pat = testCase.zeroPattern(plm);
+            patterns = cat(3, pat, pat);   % 2-plane stack
+
+            outDir = fullfile(tempdir, sprintf('plm_test_%s', ...
+                char(datetime('now','Format','HHmmssSSS'))));
+            files = plm.exportPatternImages(patterns, outDir);
+
+            testCase.verifyEqual(numel(files), 2);
+            testCase.verifyTrue(isfile(files{1}));
+            testCase.verifyTrue(isfile(files{2}));
+
+            % Cleanup
+            delete(files{:});
+            rmdir(outDir);
         end
 
         % ---------------------------------------------------------------- %
@@ -212,11 +223,6 @@ classdef test_MockPLM < matlab.unittest.TestCase
 
         function tiplm_stubs_throwNotImplemented(testCase)
             tiplm = testCase.makeTiplm();
-
-            % displayPattern scaffolds the PTB path; encode_for_DLPC900 now
-            % returns successfully (linear grayscale). displayPattern itself
-            % is skipped here because Screen('Screens') is unavailable in
-            % CI/dev — tested manually on the scope PC with PTB installed.
 
             testCase.verifyError(@() tiplm.configureTrigger(), ...
                 'tfp:hardware:TIPLM_PLM:notImplemented');
