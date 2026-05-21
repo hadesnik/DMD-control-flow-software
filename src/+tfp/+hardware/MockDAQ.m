@@ -234,6 +234,19 @@ classdef MockDAQ < tfp.hardware.DAQ
             obj.logEvent('cleanup', []);
         end
 
+        function outputSingleAnalog(obj, channelName, voltageV)
+            %outputSingleAnalog Immediately output a constant voltage on one AO channel.
+            %   Mock implementation: validates args and logs the call; does not
+            %   drive any real hardware.
+            obj.requireInitialized('outputSingleAnalog');
+            if ~isnumeric(voltageV) || ~isscalar(voltageV) || ~isfinite(voltageV)
+                error('tfp:hardware:MockDAQ:outputSingleAnalog:badVoltage', ...
+                    'voltageV must be a finite scalar; got %s.', mat2str(voltageV));
+            end
+            obj.logEvent('outputSingleAnalog', struct( ...
+                'channel', char(channelName), 'voltageV', voltageV));
+        end
+
         function entries = getLog(obj)
             %getLog Return the in-memory session log.
             %   entries is a struct array with fields

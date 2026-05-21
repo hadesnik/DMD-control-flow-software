@@ -35,6 +35,11 @@ classdef DAQ < handle
         data = readDigitalInput(obj, lineName, nSamples)
 
         sendDigitalPulse(obj, lineName, durationS)
+
+        % Immediately drive one AO channel to a constant voltage (no waveform queue).
+        % channelName: string, e.g. 'ao1'.  voltageV: scalar.
+        outputSingleAnalog(obj, channelName, voltageV)
+
         cleanup(obj)
     end
 end
