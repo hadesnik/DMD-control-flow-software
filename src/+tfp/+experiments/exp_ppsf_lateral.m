@@ -6,11 +6,9 @@ function result = exp_ppsf_lateral(configOrPath, sessionName)
 %   configOrPath may be a path to a YAML config or a pre-built config
 %   struct (test path).
 %
-%   Phase 1: 3 hardcoded mock targets x 9 distances x 2 reps = 54 trials.
-%   For real hardware, targets would be picked interactively from a
-%   GCaMP FOV.
-%
-%   TODO(Phase 3): replace hardcoded targets with interactive picking.
+%   Target cells are received from the ScanImage imaging PC via msocket
+%   when hardwareKind='real' (config.roi options control port/timeout).
+%   In mock mode, config.mockTargets overrides the built-in defaults.
 
 config = loadOrUseConfig(configOrPath);
 
@@ -29,8 +27,7 @@ daq.configureDigitalOutput(config.daq.digitalOutChannels);
 
 calibration = loadCalibrationOrIdentity(config);
 
-% Phase 1 mock target picking.
-targets     = [400, 400; 500, 400; 600, 400];
+targets     = resolveTargets(config, calibration);
 distancesUm = [0, 3, 6, 9, 12, 15, 20, 30, 40];
 nReps       = 2;
 powerMw     = 5;
@@ -134,10 +131,44 @@ if isfield(config, 'calibration_file') && ~isempty(char(config.calibration_file)
         'calibration_file loading is Phase 3.');
 end
 calibration.dmdToSample_affine = eye(3);
+calibration.dmdToScan_affine   = eye(3);
 calibration.pixelsPerUm        = 1;
 calibration.umPerPixel         = 1;
 calibration.timestamp          = datetime('now');
 calibration.notes              = 'identity fallback (mock)';
+end
+
+function targets = resolveTargets(config, calibration)
+%resolveTargets Return Nx2 target cell centres in DMD pixel coordinates.
+%   Mock: uses config.mockTargets if provided, otherwise built-in defaults.
+%   Real: receives ROI centroids from ScanImage PC via msocket and converts
+%         scan-field coords -> DMD pixels using calibration.dmdToScan_affine.
+if strcmpi(char(config.hardwareKind), 'mock')
+    if isfield(config, 'mockTargets') && ~isempty(config.mockTargets)
+        targets = double(config.mockTargets);
+    else
+        targets = [400, 400; 500, 400; 600, 400];
+    end
+    return
+end
+roiOpts = struct();
+if isfield(config, 'roi')
+    roiOpts = config.roi;
+end
+centroids_scan = tfp.io.receiveROIsFromScanImage(roiOpts);
+targets = scanFieldToDMD(centroids_scan, calibration);
+end
+
+function dmdCoords = scanFieldToDMD(scanCoords, calibration)
+if ~isfield(calibration, 'dmdToScan_affine')
+    dmdCoords = scanCoords;
+    return
+end
+scanToDmd = inv(calibration.dmdToScan_affine);
+nPts  = size(scanCoords, 1);
+pts_h = [scanCoords, ones(nPts, 1)]';
+dmd_h = scanToDmd * pts_h;
+dmdCoords = dmd_h(1:2, :)';
 end
 
 function cells = buildCells(fakeCellsCfg)

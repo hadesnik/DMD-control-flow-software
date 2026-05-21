@@ -1,9 +1,9 @@
 function result = exp_rapid_sequential(configOrPath, sessionName)
 %exp_rapid_sequential Run a rapid-sequential session and return summary.
 %
-%   Phase 1: 3 hardcoded targets, ISI=0.1s, 2 reps = 6 trials.
-%
-%   TODO(Phase 3): replace hardcoded targets with interactive picking.
+%   Target cells are received from the ScanImage imaging PC via msocket
+%   when hardwareKind='real' (config.roi options control port/timeout).
+%   In mock mode, config.mockTargets overrides the built-in defaults.
 
 config = loadOrUseConfig(configOrPath);
 
@@ -20,8 +20,8 @@ daq.configureAnalogInput(config.daq.analogInChannels, config.daq.aiRangeV);
 daq.configureAnalogOutput(config.daq.analogOutChannels);
 daq.configureDigitalOutput(config.daq.digitalOutChannels);
 
-% Mock targets.
-targets  = [400, 400; 500, 400; 600, 400];
+calibration = loadCalibrationOrIdentity(config);
+targets     = resolveTargets(config, calibration);
 isi_s    = 0.1;
 nReps    = 2;
 radiusPx = 5;
@@ -95,6 +95,48 @@ end
 function teardownHardware(dmd, daq)
 try, daq.cleanup(); catch, end %#ok<CTCH>
 try, dmd.cleanup(); catch, end %#ok<CTCH>
+end
+
+function calibration = loadCalibrationOrIdentity(config)
+if isfield(config, 'calibration_file') && ~isempty(char(config.calibration_file))
+    error('tfp:experiments:exp_rapid_sequential:notImplemented', ...
+        'calibration_file loading is Phase 3.');
+end
+calibration.dmdToSample_affine = eye(3);
+calibration.dmdToScan_affine   = eye(3);
+calibration.pixelsPerUm        = 1;
+calibration.umPerPixel         = 1;
+calibration.timestamp          = datetime('now');
+calibration.notes              = 'identity fallback (mock)';
+end
+
+function targets = resolveTargets(config, calibration)
+if strcmpi(char(config.hardwareKind), 'mock')
+    if isfield(config, 'mockTargets') && ~isempty(config.mockTargets)
+        targets = double(config.mockTargets);
+    else
+        targets = [400, 400; 500, 400; 600, 400];
+    end
+    return
+end
+roiOpts = struct();
+if isfield(config, 'roi')
+    roiOpts = config.roi;
+end
+centroids_scan = tfp.io.receiveROIsFromScanImage(roiOpts);
+targets = scanFieldToDMD(centroids_scan, calibration);
+end
+
+function dmdCoords = scanFieldToDMD(scanCoords, calibration)
+if ~isfield(calibration, 'dmdToScan_affine')
+    dmdCoords = scanCoords;
+    return
+end
+scanToDmd = inv(calibration.dmdToScan_affine);
+nPts  = size(scanCoords, 1);
+pts_h = [scanCoords, ones(nPts, 1)]';
+dmd_h = scanToDmd * pts_h;
+dmdCoords = dmd_h(1:2, :)';
 end
 
 function r = tracePeakResponse(ai)

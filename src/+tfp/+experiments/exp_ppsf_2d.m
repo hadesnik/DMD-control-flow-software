@@ -31,7 +31,7 @@ daq.configureDigitalOutput(config.daq.digitalOutChannels);
 calibration = loadCalibrationOrIdentity(config);
 
 % Target cells and 2D offset grid (overridable via config.ppsf2d for tests).
-targets = [400, 400; 500, 400; 600, 400];
+targets = resolveTargets(config, calibration);
 g = struct('maxUm', 40, 'nPointsPerHalfAxis', 4, 'sigmaPsfUm', 8, 'nReps', 2);
 if isfield(config, 'ppsf2d')
     ov = config.ppsf2d;
@@ -144,10 +144,40 @@ if isfield(config, 'calibration_file') && ~isempty(char(config.calibration_file)
         'calibration_file loading is Phase 3.');
 end
 calibration.dmdToSample_affine = eye(3);
+calibration.dmdToScan_affine   = eye(3);
 calibration.pixelsPerUm        = 1;
 calibration.umPerPixel         = 1;
 calibration.timestamp          = datetime('now');
 calibration.notes              = 'identity fallback (mock)';
+end
+
+function targets = resolveTargets(config, calibration)
+if strcmpi(char(config.hardwareKind), 'mock')
+    if isfield(config, 'mockTargets') && ~isempty(config.mockTargets)
+        targets = double(config.mockTargets);
+    else
+        targets = [400, 400; 500, 400; 600, 400];
+    end
+    return
+end
+roiOpts = struct();
+if isfield(config, 'roi')
+    roiOpts = config.roi;
+end
+centroids_scan = tfp.io.receiveROIsFromScanImage(roiOpts);
+targets = scanFieldToDMD(centroids_scan, calibration);
+end
+
+function dmdCoords = scanFieldToDMD(scanCoords, calibration)
+if ~isfield(calibration, 'dmdToScan_affine')
+    dmdCoords = scanCoords;
+    return
+end
+scanToDmd = inv(calibration.dmdToScan_affine);
+nPts  = size(scanCoords, 1);
+pts_h = [scanCoords, ones(nPts, 1)]';
+dmd_h = scanToDmd * pts_h;
+dmdCoords = dmd_h(1:2, :)';
 end
 
 function cells = buildCells(fakeCellsCfg)
