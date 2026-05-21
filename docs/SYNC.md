@@ -1,7 +1,9 @@
 # PLM–ScanImage Synchronisation Architecture
 
-**Status:** Design doc — open questions require TI confirmation before implementation.
-**Scope:** DLPC641 trigger interface, wiring from NI PCIe-6323, and ScanImage frame-clock routing.
+**Status:** Design doc — Q1 (DLPC900 GPIO voltage level) still requires EVM schematic
+confirmation. Q2–Q5 resolved; see §4. Controller correction: the 0.67" PLM EVM uses **dual
+DLPC900**, not DLPC641 (confirmed by TI FAE, 2026-05-21). All DLPC641 references updated.
+**Scope:** DLPC900 trigger interface, wiring from NI PCIe-6323, and ScanImage frame-clock routing.
 **See also:** `src/+tfp/+hardware/TIPLM_PLM.m` (stub), `src/+tfp/+hardware/DLP650LNIR_DMD.m`
   (reference for how the DMD side of timing is already structured).
 
@@ -9,8 +11,8 @@
 
 ## 1. Overview
 
-The TI NIR PLM (DLPC641 controller, 904×800, ~50 µs switching) enables axial multiplexing of
-the temporal-focusing photostimulation beam: a different defocus wavefront is loaded onto the
+The TI NIR PLM (dual DLPC900 controller, 904×800, ~50 µs switching) enables axial multiplexing
+of the temporal-focusing photostimulation beam: a different defocus wavefront is loaded onto the
 PLM each ScanImage frame, steering the 2-photon excitation volume to a different z-plane.
 Collecting N consecutive frames while stepping the PLM through N pre-computed defocus patterns
 yields a 3-D stimulation stack without moving the objective.
@@ -20,10 +22,10 @@ transient (~50 µs) is complete before the photostimulation laser fires within t
 Two candidate architectures achieve this:
 
 - **Option A (preferred): PLM as slave.** The ScanImage frame-done TTL is routed to the
-  DLPC641 TRIG\_IN input. Each rising edge advances the PLM by one stored pattern. Timing
+  DLPC900 TRIG\_IN\_2 input. Each rising edge advances the PLM by one stored pattern. Timing
   authority stays with ScanImage / the resonant scanner; the PLM follows passively.
 
-- **Option B (fallback): PLM as master.** The DLPC641 sync-out pulse is fed to the NI6323
+- **Option B (fallback): PLM as master.** The DLPC900 TRIG\_OUT pulse is fed to the NI6323
   digital input. The DAQ uses that pulse to gate the laser and optionally trigger ScanImage
   acquisition. The PLM sets the frame rhythm rather than following it.
 
@@ -41,18 +43,21 @@ Imaging PC (ScanImage)
          │                                              │
          │  (existing wire, already wired)              │  (new wire, Option A)
          ▼                                              ▼
-  DAQ PC, NI6323 DI port0/line2                  DLPC641 TRIG_IN
-  (post-hoc frame-stim alignment,                (advances PLM pattern
-   already in configs/real.yaml)                  on each rising edge)
+  DAQ PC, NI6323 DI port0/line2             [level shifter?]
+  (post-hoc frame-stim alignment,                  │
+   already in configs/real.yaml)                   ▼
+                                          DLPC900 TRIG_IN_2
+                                      (advances PLM pattern
+                                        on each rising edge)
 ```
 
 The frame-clock line from the imaging PC is split: one leg runs to the NI6323 digital input
-(already implemented for frame-stim alignment); the second leg runs directly to the DLPC641
-TRIG\_IN connector. No additional DAQ processing is required for the split path — the DLPC641
-listens passively.
+(already implemented for frame-stim alignment); the second leg runs to the DLPC900 TRIG\_IN\_2
+connector, potentially via a level shifter (see §4 Q1). No additional DAQ processing is required
+for the split path — the DLPC900 listens passively.
 
-Alternatively the NI6323 can re-drive the signal (DI → loopback to DO → DLPC641 TRIG\_IN) if
-electrical isolation or fanout buffering is needed. This adds ≤1 µs propagation through the
+Alternatively the NI6323 can re-drive the signal (DI → loopback to DO → DLPC900 TRIG\_IN\_2) if
+electrical isolation or level-shifting is needed. This adds ≤1 µs propagation through the
 NI6323 digital re-drive path, which is negligible against the 33 ms frame period.
 
 ### 2.2 Timing diagram
@@ -68,12 +73,12 @@ ScanImage frame clock (imaging PC output):
                   ↑ frame-done edge               ↑ frame-done edge
                   (≈ 33.3 ms period)
 
-DLPC641 TRIG_IN (same rising edge, direct wire):
+DLPC900 TRIG_IN_2 (same rising edge, direct wire or via level shifter):
                   ┐               ┐
 ──────────────────┘               └──────────────────────────────── ...
-                  (pulse width %TBD µs — see §4 Q2)
+                  (min pulse width ≥ 20 µs — confirmed by TI FAE)
 
-PLM pattern index (advances ~50 µs after each TRIG_IN edge):
+PLM pattern index (advances ~50 µs after each TRIG_IN_2 edge):
   [  Pattern k               ][  ~50 µs  ][  Pattern k+1          ][...]
                                   settle
 
@@ -89,50 +94,61 @@ The laser gate is programmed by the DAQ to open at a fixed delay after the frame
 chosen to be longer than the worst-case PLM settling time. Using 200 µs (4× the nominal 50 µs)
 leaves a comfortable margin while consuming only 0.6 % of the 33 ms frame period.
 
-### 2.3 Pre-loading patterns on the DLPC641
+### 2.3 Pre-loading patterns on the DLPC900
 
-Before the first frame-clock edge, all N defocus patterns for the axial stack must reside in
-DLPC641 internal memory. The proposed sequence:
+**Important:** The 0.67" PLM EVM uses **Pre-stored Pattern Mode** (confirmed by TI FAE). In this
+mode, patterns are embedded in the device firmware image and flashed to onboard flash memory via
+USB — **not** loaded dynamically over I2C at runtime. The TI GUI 'Firmware' tab packages patterns
+into a `.bin` firmware file and programs it to the device. This is a one-time setup per
+experiment type (or whenever the axial stack changes).
 
-1. Compute the full pattern stack via `PLM.generatePatternLibrary(N, dz_range_um, obj_name)`.
-2. Encode each uint8 pattern to the DLPC641 display format
-   (bitplane encoding — see TASK-PLM-4 and §4 Q5 below).
-3. For each pattern k = 0..N-1:
-   - Display via Psychtoolbox `Screen('Flip', ...)` — this writes the pattern to the DLPC641
-     frame buffer at index k.
-   - Send I2C command to store frame k into persistent pattern slot k.
-     (%TBD: specific I2C register — see §4 Q3.)
-4. Send I2C command to enable TRIG\_IN mode:
-   - Set trigger source to TRIG\_IN pin. (%TBD: register address — see §4 Q3.)
-   - Set pattern advance mode to "one step per rising edge." (%TBD: register value.)
-   - Optionally set wrap-around: after pattern N-1 return to pattern 0. (%TBD.)
-5. Assert "arm" — DLPC641 enters trigger-wait state. (%TBD: I2C command or GPIO.)
+The workflow is therefore:
 
-After step 5 the DLPC641 is idle, holding pattern 0. Each subsequent TRIG\_IN rising edge
-advances to the next slot. The host (MATLAB on DAQ PC) does not need to send any I2C command
-per frame; the DLPC641 handles sequencing autonomously.
+**One-time setup (before an experiment session):**
 
-MATLAB call sequence in `TIPLM_PLM.configureTrigger()` (to be implemented):
+1. Compute the full pattern stack offline:
+   `[pats, dz_um, sys] = plm.generatePatternLibrary(N, dz_range_um, 'Olympus20x')`.
+2. Export each pattern as an image file (PNG, 8-bit grayscale, 0–31 scaled to 0–255).
+   `TIPLM_PLM.exportPatternImages(pats, outputDir)` — **to be implemented**.
+3. Open the TI LightCrafter / PLM GUI on the DAQ PC. In the **Firmware** tab:
+   - Import the N exported images as a pre-stored pattern sequence.
+   - Set trigger mode: **External Positive** (TRIG\_IN\_2 rising edge advances one pattern).
+   - Set sequence: wrap-around after pattern N−1 → return to pattern 0.
+   - Program firmware to device (USB flash). This takes ~30 s.
+4. In the **Pattern Settings** tab: enable TRIG\_IN\_2, confirm trigger mode is active.
+5. Optionally verify via the GUI: toggle TRIG\_IN manually and confirm pattern index advances.
+
+**At experiment runtime (each session):**
+
+- Patterns are already in flash. No per-session MATLAB upload needed.
+- `TIPLM_PLM.configureTrigger()` sends I2C commands to arm the DLPC900 trigger-wait state:
 
 ```matlab
-% Pseudocode — I2C register addresses are %TBD pending TI response (§4 Q3)
-obj.i2c_write(REG_TRIG_SOURCE,  TRIG_SRC_TRIG_IN);     % %TBD
-obj.i2c_write(REG_TRIG_MODE,    TRIG_MODE_STEP);        % %TBD
-obj.i2c_write(REG_PATTERN_WRAP, TRIG_WRAP_ENABLE);      % %TBD
-obj.i2c_write(REG_ARM,          ARM_TRIGGER_MODE);       % %TBD
+% DLPC900 I2C — see DLPC900 Programmer's Guide (DLPU018), §2.4
+% I2C address: 0x36 (primary DLPC900 on EVM — confirm from EVM schematic)
+obj.i2c_write(0x1A, 0x00);   % Pattern Display Mode: Pre-stored sequence
+obj.i2c_write(0x75, 0x01);   % Trigger In 2: enable, positive edge
+obj.i2c_write(0x1A, 0x02);   % Start pattern sequence (arm)
+% Note: exact register map — verify against DLPU018 before use.
 ```
 
-MATLAB I2C access on the DAQ PC is via the Instrument Control Toolbox `i2cdev` object
-(R2019a+). The DLPC641 I2C address is %TBD (check EVM schematic or TI application note).
+- After `configureTrigger()`, the DLPC900 holds pattern 0 and waits.
+- Each TRIG\_IN\_2 rising edge (≥ 20 µs wide) advances one pattern autonomously.
+- MATLAB does **not** send any I2C command per frame during acquisition.
+
+**Implication for pattern changes:** If the axial stack (N planes, dz\_range) changes between
+experiments, the firmware must be reprogrammed via the GUI (~30 s). For sessions with a fixed
+stack this is negligible. If rapid stack changes are required during a session, a more complex
+approach (video-mode DisplayPort streaming) would be needed — out of scope for current prelim.
 
 ### 2.4 Latency budget
 
 | Event | Latency | Source |
 |---|---|---|
-| Frame-done TTL → DLPC641 TRIG\_IN edge | < 1 µs | wire propagation |
-| DLPC641 internal trigger recognition | %TBD | TI datasheet (§4 Q2) |
+| Frame-done TTL → DLPC900 TRIG\_IN\_2 edge | < 1 µs | wire propagation |
+| DLPC900 trigger recognition (min pulse width) | ≥ 20 µs | TI FAE, 2026-05-21 |
 | PLM mirror settling | ~50 µs | TI NIR PLM datasheet |
-| Total PLM advance latency | < 100 µs (%TBD) | — |
+| Total PLM advance latency | < 100 µs | — |
 | ScanImage frame period at 30 Hz | 33,333 µs | ScanImage |
 | **Margin (frame period − PLM latency)** | **> 33,200 µs** | — |
 
@@ -148,7 +164,7 @@ the resonant scanner.
 ### 3.1 Signal routing
 
 ```
-DLPC641 sync-out (GPIO / %TBD connector)
+DLPC900 TRIG_OUT (GPIO header on EVM — see §4 Q4)
          │
          ▼
   DAQ PC, NI6323 DI port0/line3   ──► delayed laser gate (Pockels)
@@ -199,76 +215,88 @@ The ScanImage resonant scanner operates at a fixed resonance frequency (~7.9 kHz
 - If the PLM pattern rate drifts, ScanImage frame rate drifts with it, disrupting the
   expected relationship between trial index and frame timestamp.
 
+- Additionally, with Pre-stored Pattern Mode (§2.3), the DLPC900 is already designed to
+  follow an external trigger, not generate its own clock. Using it as a master would require
+  switching to a different controller mode, adding implementation complexity.
+
 In Option A none of these problems arise: the resonant scanner and ScanImage timing are
 unchanged; the PLM simply follows the existing frame clock.
 
 ---
 
-## 4. Open Questions Requiring TI Confirmation
+## 4. Open Questions
 
-Send to TI FAE with reference to the TI NIR PLM EVM (DLPC641 controller) and the
-photostimulation use case. Propose Option A as the intended architecture.
+**Q1 — TRIG\_IN\_2 voltage level: OPEN (check EVM schematic)**
+The DLPC900 GPIO is nominally 1.8 V logic. The ScanImage frame-clock output (imaging PC BNC)
+is 5 V TTL. A level shifter is almost certainly required (e.g., SN74LVC1T45: 5V → 1.8V, or
+use the NI6323 DO which is 3.3V, then a second stage to 1.8V). Confirm the exact TRIG\_IN\_2
+voltage tolerance from the EVM schematic or DLPC900 datasheet (DLPS027) before wiring.
 
-**Q1 — TRIG\_IN voltage level:**
-Is the DLPC641 TRIG\_IN input 3.3 V logic or 5 V tolerant?
-The ScanImage frame-clock output (from imaging PC BNC) is 5 V TTL. If DLPC641 is 3.3 V only,
-a level-shifter (e.g., SN74LVC1T45 or equivalent) is required before the TRIG\_IN pin.
+**Q2 — Minimum TRIG\_IN\_2 pulse width: RESOLVED**
+≥ 20 µs recommended (TI FAE response, 2026-05-21). The ScanImage frame-done TTL is typically
+1–10 µs wide — **this is too short**. The NI6323 must re-drive the signal with a stretched
+pulse (≥ 20 µs) via a DAQ counter output configured as a retriggerable one-shot. See §5 step 1.
 
-**Q2 — Minimum TRIG\_IN pulse width:**
-What is the minimum pulse width (µs) on TRIG\_IN to guarantee recognition of a rising edge?
-The frame-done TTL from ScanImage is typically 1–10 µs wide. If the minimum is larger, we
-must stretch the pulse using a monostable or DAQ re-drive.
+**Q3 — I2C command sequence to arm trigger mode: RESOLVED (consult DLPU018)**
+The DLPC900 I2C API is fully documented in the DLPC900 Programmer's Guide (TI doc DLPU018).
+The device uses the same protocol as the DLP6500 LightCrafter. Key references:
+  - I2C address: 0x36 (primary controller on EVM — verify from EVM schematic/User's Guide)
+  - Pattern Display Mode register: DLPU018 §2.4 "Pattern Display Mode"
+  - Trigger input configuration: DLPU018 §2.4 "External Trigger Input"
+  - Pattern sequence start/stop: DLPU018 §2.4 "Pattern Sequence Control"
+No further TI input needed — implement from DLPU018 directly.
 
-**Q3 — I2C command sequence to arm trigger mode:**
-Provide the I2C register address and write sequence to:
-  (a) enable TRIG\_IN as the pattern-advance source,
-  (b) set "one-step-per-edge" mode (as opposed to continuous internal clock),
-  (c) enable wrap-around after the last pattern,
-  (d) arm the DLPC641 to enter trigger-wait state.
-Include the I2C device address of the DLPC641 on the EVM.
+**Q4 — TRIG\_OUT availability (Option B prerequisite / diagnostic): OPEN**
+Is a TRIG\_OUT signal available on the DLPC900 EVM GPIO header?
+Useful as a diagnostic even in Option A (confirm trigger is being received). Check the
+PLM EVM User's Guide or schematic for connector/pin reference and voltage level.
 
-**Q4 — Sync-out availability (Option B prerequisite):**
-Is a sync-out signal (TTL pulse coincident with each pattern transition) available on the
-DLPC641 EVM GPIO header? If so, what is the connector/pin reference and voltage level?
-This is needed only for Option B but useful as a diagnostic even in Option A.
-
-**Q5 — Maximum preloaded pattern count:**
-What is the maximum number of patterns that can be stored in DLPC641 internal memory for
-hardware-sequenced TRIG\_IN playback? The nominal requirement is 20–50 planes for a
-±500 µm axial stack at 20 µm steps. If the limit is lower, patterns must be reloaded
-between sweeps, which requires a synchronisation gap.
+**Q5 — Maximum pre-stored pattern count: RESOLVED**
+Pre-stored Pattern Mode on the DLPC900 uses onboard flash (same as DLP6500 LightCrafter).
+The LightCrafter 6500 supports up to 24-bit patterns (3 × 8-bit planes) with a total flash
+capacity of ~128 MB, accommodating hundreds of binary frames. Our requirement of 20–50
+patterns at 904×800 uint8 (~0.7 MB each uncompressed) is well within capacity. No constraint.
 
 ---
 
 ## 5. Recommended Path
 
-**Implement Option A** once TI answers Q1–Q3 above.
+**Implement Option A.** The primary remaining blocker is Q1 (voltage level / level-shifter
+selection). Q2–Q5 are resolved.
 
 Implementation steps, in order:
 
-1. **Electrical:** confirm TRIG\_IN voltage tolerance (Q1). If 3.3 V only, add level-shifter
-   on the frame-clock wire before it reaches the DLPC641.
+1. **Electrical — level shifter + pulse stretcher (critical):**
+   - Confirm TRIG\_IN\_2 voltage tolerance from EVM schematic (Q1).
+   - Add a level shifter (e.g., SN74LVC1T45) between the ScanImage frame-clock line and
+     TRIG\_IN\_2 to bring the signal to 1.8 V (or whatever the EVM requires).
+   - The ScanImage frame-done pulse is ~1–10 µs wide, below the 20 µs minimum (Q2).
+     Use an NI6323 counter output configured as a retriggerable one-shot (monostable) to
+     re-drive the pulse at ≥ 20 µs width. MATLAB configuration:
+     ```matlab
+     % Counter output: retriggerable one-shot, 25 µs pulse, triggered by frame-clock DI
+     % (Instrument Control Toolbox / DAQ Toolbox — exact call TBD for NI6323)
+     ```
 
-2. **I2C wiring:** connect the DAQ PC I2C bus (USB-to-I2C adapter, e.g., Total Phase Aardvark,
-   or NI USB-8452) to the DLPC641 I2C header on the EVM. Verify communication by reading a
-   known register (device ID or firmware version).
+2. **I2C wiring:** connect the DAQ PC I2C bus (USB-to-I2C adapter, e.g., Total Phase
+   Aardvark or NI USB-8452) to the DLPC900 I2C header on the EVM. Verify communication
+   by reading the firmware version register (DLPU018 §2.1).
 
-3. **MATLAB I2C driver:** implement `configureTrigger()` and `advancePattern()` in
-   `TIPLM_PLM.m` using MATLAB `i2cdev` (Instrument Control Toolbox). Fill in register
-   addresses from TI's answer to Q3.
+3. **Pattern firmware upload (one-time per session):**
+   - Run `TIPLM_PLM.exportPatternImages(pats, dir)` to export uint8 patterns as PNGs.
+   - Use the TI LightCrafter GUI → Firmware tab to package patterns and flash to device.
+   - In Pattern Settings tab: enable TRIG\_IN\_2, positive edge, wrap-around mode.
 
-4. **Pattern preload:** implement pattern preload loop in `TIPLM_PLM.loadPattern()` —
-   display via Psychtoolbox (TASK-PLM-4), then I2C store-to-slot command. Verify with
-   `getStatus()` that N patterns are resident.
+4. **MATLAB I2C driver:** implement `configureTrigger()` in `TIPLM_PLM.m` using MATLAB
+   `i2cdev` (Instrument Control Toolbox). Register map from DLPU018 — no further TI input
+   needed. Verify by reading pattern index register after each manual trigger pulse.
 
-5. **Arm and test with frame clock:** connect the frame-clock wire, call `configureTrigger()`,
-   then manually toggle TRIG\_IN with a function generator at 30 Hz. Confirm via `getStatus()`
-   that the pattern index advances once per pulse.
+5. **Integration test:** connect the stretched frame-clock wire, call `configureTrigger()`,
+   run ScanImage in Focus mode at 30 Hz. Confirm via `getStatus()` that the pattern index
+   advances once per frame.
 
-6. **Full integration test:** run `exp_ppsf_lateral.m` with `MockDAQ` replaced by
-   `NI6323_DAQ`, PLM enabled. Verify pattern index and frame index are aligned in the
-   saved trial data.
+6. **Full experiment test:** run `exp_pseudo_axial.m` with `NI6323_DAQ` and TIPLM\_PLM
+   enabled. Verify pattern index and frame index are aligned in saved trial data.
 
-Option B should only be revisited if TI reports that DLPC641 does not support TRIG\_IN
-hardware sequencing (Q3) — in which case the DAQ must software-poll the sync-out and
-re-arm the PLM each frame, significantly increasing latency and jitter.
+Option B should only be revisited if the EVM hardware does not expose TRIG\_IN\_2 as a
+usable external input — which the TI FAE response confirms it does.

@@ -213,10 +213,10 @@ classdef test_MockPLM < matlab.unittest.TestCase
         function tiplm_stubs_throwNotImplemented(testCase)
             tiplm = testCase.makeTiplm();
 
-            % displayPattern now scaffolds the PTB path; encode_for_DLPC641
-            % throws notImplemented on scope PC (PTB installed). Skipped here
-            % because Screen('Screens') is unavailable in CI/dev — tested
-            % manually on the scope PC once PTB is on the MATLAB path.
+            % displayPattern scaffolds the PTB path; encode_for_DLPC900 now
+            % returns successfully (linear grayscale). displayPattern itself
+            % is skipped here because Screen('Screens') is unavailable in
+            % CI/dev — tested manually on the scope PC with PTB installed.
 
             testCase.verifyError(@() tiplm.configureTrigger(), ...
                 'tfp:hardware:TIPLM_PLM:notImplemented');
