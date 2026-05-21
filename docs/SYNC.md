@@ -4,7 +4,7 @@
 confirmation. Q2–Q5 resolved; see §4. Controller correction: the 0.67" PLM EVM uses **dual
 DLPC900**, not DLPC641 (confirmed by TI FAE, 2026-05-21). All DLPC641 references updated.
 **Scope:** DLPC900 trigger interface, wiring from NI PCIe-6323, and ScanImage frame-clock routing.
-**See also:** `src/+tfp/+hardware/TIPLM_PLM.m` (stub), `src/+tfp/+hardware/DLP650LNIR_DMD.m`
+**See also:** `src/+tfp/+hardware/DLPC900_PLM.m` (stub), `src/+tfp/+hardware/DLP650LNIR_DMD.m`
   (reference for how the DMD side of timing is already structured).
 
 ---
@@ -109,7 +109,7 @@ The workflow is therefore:
 1. Compute the full pattern stack offline:
    `[pats, dz_um, sys] = plm.generatePatternLibrary(N, dz_range_um, 'Olympus20x')`.
 2. Export each pattern as an image file (PNG, 8-bit grayscale, 0–31 scaled to 0–255).
-   `TIPLM_PLM.exportPatternImages(pats, outputDir)` — **to be implemented**.
+   `DLPC900_PLM.exportPatternImages(pats, outputDir)` — **to be implemented**.
 3. Open the TI LightCrafter / PLM GUI on the DAQ PC. In the **Firmware** tab:
    - Import the N exported images as a pre-stored pattern sequence.
    - Set trigger mode: **External Positive** (TRIG\_IN\_2 rising edge advances one pattern).
@@ -121,7 +121,7 @@ The workflow is therefore:
 **At experiment runtime (each session):**
 
 - Patterns are already in flash. No per-session MATLAB upload needed.
-- `TIPLM_PLM.configureTrigger()` sends I2C commands to arm the DLPC900 trigger-wait state:
+- `DLPC900_PLM.configureTrigger()` sends I2C commands to arm the DLPC900 trigger-wait state:
 
 ```matlab
 % DLPC900 I2C — see DLPC900 Programmer's Guide (DLPU018), §2.4
@@ -283,11 +283,11 @@ Implementation steps, in order:
    by reading the firmware version register (DLPU018 §2.1).
 
 3. **Pattern firmware upload (one-time per session):**
-   - Run `TIPLM_PLM.exportPatternImages(pats, dir)` to export uint8 patterns as PNGs.
+   - Run `DLPC900_PLM.exportPatternImages(pats, dir)` to export uint8 patterns as PNGs.
    - Use the TI LightCrafter GUI → Firmware tab to package patterns and flash to device.
    - In Pattern Settings tab: enable TRIG\_IN\_2, positive edge, wrap-around mode.
 
-4. **MATLAB I2C driver:** implement `configureTrigger()` in `TIPLM_PLM.m` using MATLAB
+4. **MATLAB I2C driver:** implement `configureTrigger()` in `DLPC900_PLM.m` using MATLAB
    `i2cdev` (Instrument Control Toolbox). Register map from DLPU018 — no further TI input
    needed. Verify by reading pattern index register after each manual trigger pulse.
 

@@ -881,7 +881,7 @@ Error identifier: tfp:hardware:PLM:<reason>
 
 ## TASK-PLM-2: PLM unit tests [DONE]
 
-**Depends on:** PLM.m, MockPLM.m, TIPLM_PLM.m (all complete).
+**Depends on:** PLM.m, MockPLM.m, DLPC900_PLM.m (all complete).
 **Files (NEW):**
   tests/+tfp/+hardware/PLMTest.m
 
@@ -916,10 +916,10 @@ classdef PLMTest < matlab.unittest.TestCase
     'generatePatternLibrary'.
 
   tiplm_stubs_throw:
-    Instantiate TIPLM_PLM (no hardware needed — constructor must not require
+    Instantiate DLPC900_PLM (no hardware needed — constructor must not require
     a connected device).
-    Calling displayPattern on TIPLM_PLM throws an MException with identifier
-    containing 'tfp:hardware:TIPLM_PLM:notImplemented'.
+    Calling displayPattern on DLPC900_PLM throws an MException with identifier
+    containing 'tfp:hardware:DLPC900_PLM:notImplemented'.
 
 Error identifier: test identifier not applicable — test class only.
 
@@ -1148,6 +1148,81 @@ The verify step (operator confirmation of axis signs) has no implementation.
     and check consistency with manual inv(scanToCam) * dmdToCam. Error < 0.5 px.
 
 **Verify:** runtests gains 3 new passing tests. Existing tests unaffected.
+
+---
+
+## TASK-PLM-5: Single-spot remote focus validation patterns [DONE]
+
+**Depends on:** PLM.m (complete).
+**Files (NEW):**
+  scripts/generate_plm_single_spot_validation.m
+
+**Description:** Generate 3 phase patterns demonstrating remote focusing of a
+single diffraction-limited spot, laterally offset to avoid the zero-order
+block. Each pattern = blazed grating tilt (100 µm lateral offset at sample) +
+defocus phase. Three planes: dz = -150, 0, +150 µm. Wrap mod max_phase,
+quantize to 32 states. Save .mat files per pattern plus a preview PNG montage
+to `data/plm_patterns/validation/`.
+
+---
+
+## TASK-PLM-6: 50-spot multi-target CGH validation patterns [DONE]
+
+**Depends on:** PLM.m (complete).
+**Files (NEW):**
+  scripts/generate_plm_multispot_validation.m
+
+**Description:** Generate phase patterns producing 50 random diffraction-
+limited spots via the random superposition (RS) algorithm: per-spot tilt +
+defocus + random phase offset, sum complex fields, take angle, quantize.
+Three patterns: spots in z = [-150, 0], z = 0, z = [0, +150] µm. Spot xy
+positions uniformly random in 200×200 µm FOV at sample, excluding 30 µm
+radius around optical axis. Save .mat files + preview PNG showing pattern and
+expected far-field (2D FFT of exp(1j·phi)) to `data/plm_patterns/validation/`.
+
+---
+
+## TASK-PLM-7a: Rename TIPLM_PLM → DLPC900_PLM [DONE]
+
+**Depends on:** TIPLM_PLM.m (complete).
+**Files (RENAME/MODIFY):**
+  src/+tfp/+hardware/TIPLM_PLM.m → src/+tfp/+hardware/DLPC900_PLM.m
+  src/+tfp/+hardware/PLM.m            (update TIPLM_PLM in class comment, lines 3 and 10)
+  tests/test_MockPLM.m                (update 4 references: class comment line 3,
+                                       makeTiplm line 20, tiplm_stubs error IDs lines 228+230)
+  TASKS.md                            (update TIPLM_PLM references in PLM-2 spec and PLM-7 depends-on)
+
+**Context:**
+TI confirmed the 0.67" PLM EVM uses the dual-DLPC900 controller (same
+as DLP6500), not the DLPC641 as initially assumed. Rename reflects this.
+This is a pure rename — no behavioural changes. All notImplemented stubs
+and tests preserved. Update error identifiers:
+  tfp:hardware:TIPLM_PLM:* → tfp:hardware:DLPC900_PLM:*
+
+**Verify:** runtests still passes the same count. PLM tests pass with updated
+error identifier strings.
+
+---
+
+## TASK-PLM-7: DLPC900 USB pattern loading and external trigger configuration [DONE]
+
+**Depends on:** TASK-PLM-7a (rename complete), DLPC900 Programmer's Guide (DLPU018).
+**Files (MODIFY):**
+  src/+tfp/+hardware/DLPC900_PLM.m
+**Files (NEW):**
+  tests/test_DLPC900_PLM.m
+
+**Description:** Implement USB HID interface to dual-DLPC900 controller per
+TI's confirmation that the 0.67" PLM EVM uses the same controller as the
+DLP6500. Reference Pycrafter6500 (public GitHub) for command structure.
+Methods to add: `connect()`, `uploadPatternSequence(patterns, exposure_us,
+triggerMode)`, `configureTrigger(mode)`, `startSequence()`, `stopSequence()`,
+`uploadTwoPatternFlipTest(flat, grating, freq_Hz)`. Encode 5-bit phase states
+into DLPC900 bitplane format. Configure TRIG_IN_2 for external pattern
+advance (rising edge, ~20 µs min pulse width per TI). Every USB command
+validates return status; failures throw `tfp:hardware:DLPC900_PLM:usbError`
+with command and status detail. Unit tests exercise bitplane encoding on
+mock data (no USB). Hardware testing deferred until EVM arrives.
 
 ---
 

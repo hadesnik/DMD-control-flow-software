@@ -170,6 +170,73 @@ classdef TrialSequence < handle
             seq.description = sprintf('PowerCurve: %d powers x %d reps', nPowers, nReps);
         end
 
+        function seq = generateAxialPPSF(targets, dzUm, nReps, powerMw)
+            %generateAxialPPSF Build an axial-PPSF sequence.
+            %
+            %   Inputs:
+            %     targets - N x 2 numeric [col row] DMD pixel coords.
+            %     dzUm    - 1D vector of axial defocus steps (um). 0 = focal plane.
+            %     nReps   - positive integer, reps per (target, dz).
+            %     powerMw - non-negative numeric scalar; same power for every trial.
+            %
+            %   The DMD stim pattern is centred on the target for every trial
+            %   (no lateral offset). The PLM pattern encoding defocus dz is
+            %   pre-attached to trial.targetSpec.plmPattern by the experiment
+            %   script after calling plm.computeDefocusPattern(dz, sys).
+            %
+            %   Iteration order: rep outer, target middle, dz inner.
+            %
+            %   Metadata stored per trial:
+            %     .dzUm    axial defocus applied (um).
+            %     .repIdx  rep number.
+            %
+            %   Defaults applied to every Trial:
+            %     duration_s  = 2.0      pulseTrain.pulseWidth_s = 0.1
+            %     preStim_s   = 0.5      pulseTrain.nPulses      = 1
+            %     postStim_s  = 1.0      pulseTrain.interPulse_s = 0
+
+            validateTargets(targets, 'generateAxialPPSF');
+            validateVector(dzUm, 'dzUm', 'generateAxialPPSF');
+            validatePosInt(nReps, 'nReps', 'generateAxialPPSF');
+            validateScalarNonNeg(powerMw, 'powerMw', 'generateAxialPPSF');
+
+            nTargets  = size(targets, 1);
+            nDz       = numel(dzUm);
+            nExpected = nTargets * nDz * nReps;
+
+            trials(nExpected, 1) = tfp.trial.Trial();
+            idx = 0;
+            for rep = 1:nReps
+                for t = 1:nTargets
+                    for d = 1:nDz
+                        idx = idx + 1;
+                        tr = trials(idx);
+                        tr.trialIdx   = idx;
+                        tr.targetSpec = struct( ...
+                            'cellIds',    [], ...
+                            'dmdCoords',  targets(t, :), ...
+                            'patternRef', [], ...
+                            'plmPattern', []);
+                        tr.powerMw    = powerMw;
+                        tr.duration_s = 2.0;
+                        tr.pulseTrain = struct( ...
+                            'nPulses', 1, 'interPulse_s', 0, 'pulseWidth_s', 0.1);
+                        tr.preStim_s  = 0.5;
+                        tr.postStim_s = 1.0;
+                        tr.metadata   = struct( ...
+                            'dzUm',   dzUm(d), ...
+                            'repIdx', rep);
+                    end
+                end
+            end
+
+            seq = tfp.trial.TrialSequence();
+            seq.trials = trials;
+            seq.description = sprintf( ...
+                'AxialPPSF: %d targets x %d dz steps x %d reps', ...
+                nTargets, nDz, nReps);
+        end
+
         function offsets = gaussianGrid2D(maxUm, nPointsPerHalfAxis, sigmaPsfUm)
             %gaussianGrid2D Gaussian-spaced 2D offset grid for PPSF experiments.
             %

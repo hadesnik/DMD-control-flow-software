@@ -1,13 +1,13 @@
 classdef PLM < handle
     %PLM Abstract interface for PLM remote-focusing phase modulators.
-    %   Subclasses include MockPLM (simulator) and TIPLM_PLM (real TI NIR
+    %   Subclasses include MockPLM (simulator) and DLPC900_PLM (real TI NIR
     %   PLM via DLPC900 Pre-stored Pattern Mode + I2C trigger). Experiment
     %   code talks to this interface, never to a concrete class.
     %
     %   computeDefocusPattern is implemented here on the base because it
     %   depends only on the abstract pixel-geometry and phase-spec properties
     %   (nRows, nCols, pitchX_um, pitchY_um, nPhaseStates, lambda_nm) that
-    %   every subclass must define. Both MockPLM and TIPLM_PLM inherit it
+    %   every subclass must define. Both MockPLM and DLPC900_PLM inherit it
     %   without re-implementing the physics.
 
     properties (Abstract, SetAccess = protected)

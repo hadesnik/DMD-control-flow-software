@@ -1,6 +1,6 @@
 classdef test_MockPLM < matlab.unittest.TestCase
     %test_MockPLM Phase 1 MockPLM and PLM.computeDefocusPattern tests.
-    %   All tests use MockPLM; no real hardware required. TIPLM_PLM stub
+    %   All tests use MockPLM; no real hardware required. DLPC900_PLM stub
     %   behaviour is covered in tiplm_stubs_throwNotImplemented.
 
     methods (Access = private)
@@ -17,7 +17,7 @@ classdef test_MockPLM < matlab.unittest.TestCase
         end
 
         function tiplm = makeTiplm(~)
-            tiplm = tfp.hardware.TIPLM_PLM(struct());
+            tiplm = tfp.hardware.DLPC900_PLM(struct());
         end
 
         function pat = zeroPattern(~, plm)
@@ -219,15 +219,15 @@ classdef test_MockPLM < matlab.unittest.TestCase
         end
 
         % ---------------------------------------------------------------- %
-        % TIPLM_PLM stubs
+        % DLPC900_PLM stubs
 
         function tiplm_stubs_throwNotImplemented(testCase)
             tiplm = testCase.makeTiplm();
 
             testCase.verifyError(@() tiplm.configureTrigger(), ...
-                'tfp:hardware:TIPLM_PLM:notImplemented');
+                'tfp:hardware:DLPC900_PLM:notImplemented');
             testCase.verifyError(@() tiplm.advancePattern(), ...
-                'tfp:hardware:TIPLM_PLM:notImplemented');
+                'tfp:hardware:DLPC900_PLM:notImplemented');
         end
 
     end

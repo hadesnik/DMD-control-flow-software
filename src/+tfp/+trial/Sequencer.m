@@ -19,6 +19,7 @@ classdef Sequencer < handle
         dmd
         daq
         siBridge
+        plm              % optional PLM for per-trial defocus (axial PPSF)
         sequence
         log              % path to session directory
         sessionStartTime % datetime set at the top of run()
@@ -41,6 +42,11 @@ classdef Sequencer < handle
                 obj.siBridge = opts.siBridge;
             else
                 obj.siBridge = [];
+            end
+            if isfield(opts, 'plm')
+                obj.plm = opts.plm;
+            else
+                obj.plm = [];
             end
             if isfield(opts, 'nStreamCells')
                 obj.nStreamCells_ = opts.nStreamCells;
@@ -103,6 +109,7 @@ classdef Sequencer < handle
             tfp.util.safetyChecks('abort');
             try, obj.daq.stop(); catch, end %#ok<CTCH>
             try, obj.dmd.cleanup(); catch, end %#ok<CTCH>
+            try, if ~isempty(obj.plm), obj.plm.cleanup(); end; catch, end %#ok<CTCH>
             tfp.io.sessionLog(obj.log, 'abort', []);
         end
     end
@@ -110,6 +117,12 @@ classdef Sequencer < handle
     methods (Access = private)
         function runOne(obj, trial)
             %runOne Execute the 11-step trial loop for a single trial.
+
+            % Load PLM defocus pattern for this trial (axial PPSF; no-op otherwise).
+            if ~isempty(obj.plm) && isfield(trial.targetSpec, 'plmPattern') && ...
+                    ~isempty(trial.targetSpec.plmPattern)
+                obj.plm.loadPattern(trial.targetSpec.plmPattern);
+            end
 
             % Step 2: load DMD pattern and arm.
             loadOpts.exposureUs = trial.pulseTrain.pulseWidth_s * 1e6;
@@ -192,6 +205,10 @@ classdef Sequencer < handle
             end
 
             % Steps 9-10: package data.
+            plmLog = [];
+            if ~isempty(obj.plm)
+                plmLog = obj.plm.getLog();
+            end
             data = struct( ...
                 'aiData',             ai, ...
                 'frameClock',         frameClock, ...
@@ -200,6 +217,7 @@ classdef Sequencer < handle
                 'imagingTiffPath',    imagingTiffPath, ...
                 'dmdLog',             obj.dmd.getLog(), ...
                 'daqLog',             obj.daq.getLog(), ...
+                'plmLog',             plmLog, ...
                 'trialIdx',           trial.trialIdx, ...
                 'commandedPowerMw',   trial.powerMw, ...
                 'completedAt',        datetime('now'));
