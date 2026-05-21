@@ -27,6 +27,7 @@ classdef Sequencer < handle
 
     properties (Access = private)
         nStreamCells_  % ROI count passed to siBridge.armStreaming(); 0 = streaming disabled
+        saveRawData_   % logical: write trial_NNNN_raw.mat per trial (default true)
     end
 
     methods
@@ -53,6 +54,11 @@ classdef Sequencer < handle
             else
                 obj.nStreamCells_ = 0;
             end
+            if isfield(opts, 'saveRawData')
+                obj.saveRawData_ = logical(opts.saveRawData);
+            else
+                obj.saveRawData_ = true;
+            end
         end
 
         function run(obj)
@@ -75,10 +81,10 @@ classdef Sequencer < handle
                     tfp.util.safetyChecks('check');
                     trial.markRunning();
                     obj.runOne(trial);                 % calls markComplete
-                    tfp.io.saveTrial(trial, obj.log);
+                    tfp.io.saveTrial(trial, obj.log, struct('saveRawData', obj.saveRawData_));
                 catch ME
                     trial.markFailed(ME);
-                    tfp.io.saveTrial(trial, obj.log);  % save failed trials too
+                    tfp.io.saveTrial(trial, obj.log, struct('saveRawData', obj.saveRawData_));  % save failed trials too
                     tfp.io.sessionLog(obj.log, 'trial-failed', struct( ...
                         'trialIdx',   trial.trialIdx, ...
                         'identifier', ME.identifier, ...

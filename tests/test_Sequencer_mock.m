@@ -55,7 +55,7 @@ classdef test_Sequencer_mock < matlab.unittest.TestCase
                     sprintf('trial %d status', k));
             end
 
-            files = dir(fullfile(sessionDir, 'trials', 'trial_*.mat'));
+            files = dir(fullfile(sessionDir, 'trials', 'trial_*_meta.mat'));
             testCase.verifyEqual(numel(files), numel(sequence.trials));
         end
 
@@ -66,11 +66,11 @@ classdef test_Sequencer_mock < matlab.unittest.TestCase
 
             for k = 1:numel(sequence.trials)
                 fname = fullfile(sessionDir, 'trials', ...
-                    sprintf('trial_%04d.mat', sequence.trials(k).trialIdx));
+                    sprintf('trial_%04d_meta.mat', sequence.trials(k).trialIdx));
                 testCase.verifyTrue(isfile(fname), sprintf('missing %s', fname));
                 loaded = load(fname);
-                testCase.verifyEqual(loaded.trial.trialIdx, sequence.trials(k).trialIdx);
-                testCase.verifyEqual(loaded.trial.status, 'complete');
+                testCase.verifyEqual(loaded.meta.trialIdx, sequence.trials(k).trialIdx);
+                testCase.verifyEqual(loaded.meta.status, 'complete');
             end
         end
 
@@ -132,12 +132,12 @@ classdef test_Sequencer_mock < matlab.unittest.TestCase
             % Failed trial's .mat file: exists, loadable, status=failed,
             % carries the safety-abort error in data.error.
             fname = fullfile(sessionDir, 'trials', ...
-                sprintf('trial_%04d.mat', sequence.trials(1).trialIdx));
+                sprintf('trial_%04d_meta.mat', sequence.trials(1).trialIdx));
             testCase.verifyTrue(isfile(fname));
             loaded = load(fname);
-            testCase.verifyEqual(loaded.trial.status, 'failed');
-            testCase.verifyTrue(isfield(loaded.trial.data, 'error'));
-            testCase.verifyEqual(loaded.trial.data.error.identifier, ...
+            testCase.verifyEqual(loaded.meta.status, 'failed');
+            testCase.verifyNotEmpty(loaded.meta.error);
+            testCase.verifyEqual(loaded.meta.error.identifier, ...
                 'tfp:util:safetyAbort');
         end
     end

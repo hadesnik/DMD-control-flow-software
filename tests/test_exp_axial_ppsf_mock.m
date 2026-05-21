@@ -67,13 +67,12 @@ classdef test_exp_axial_ppsf_mock < matlab.unittest.TestCase
             testCase.verifyEqual(result.nTrialsCompleted, 6);
             testCase.verifyEqual(result.nTrialsFailed,    0);
 
-            % 6 .mat files on disk; each loadable and complete.
-            files = dir(fullfile(result.sessionDir, 'trials', 'trial_*.mat'));
-            testCase.verifyEqual(numel(files), 6);
-            for k = 1:numel(files)
-                loaded = load(fullfile(files(k).folder, files(k).name));
-                testCase.verifyEqual(loaded.trial.status, 'complete');
-                testCase.verifyNotEmpty(loaded.trial.data);
+            % 6 _meta.mat files on disk; each loadable and complete.
+            metaFiles = dir(fullfile(result.sessionDir, 'trials', 'trial_*_meta.mat'));
+            testCase.verifyEqual(numel(metaFiles), 6);
+            for k = 1:numel(metaFiles)
+                loaded = load(fullfile(metaFiles(k).folder, metaFiles(k).name));
+                testCase.verifyEqual(loaded.meta.status, 'complete');
             end
 
             % Summary: one entry per dz step, 2 trials each.
@@ -85,10 +84,12 @@ classdef test_exp_axial_ppsf_mock < matlab.unittest.TestCase
                 testCase.verifyEqual(result.summary(d).nTrials, 2);
             end
 
-            % PLM integration: last trial data must contain a non-empty plmLog
-            % with at least one loadPattern entry (confirms Sequencer called PLM).
-            lastFile = load(fullfile(files(end).folder, files(end).name));
-            plmLog = lastFile.trial.data.plmLog;
+            % PLM integration: last trial's raw file must contain a non-empty
+            % plmLog with at least one loadPattern entry (confirms Sequencer
+            % called PLM before each trial).
+            lastRaw = load(fullfile(result.sessionDir, 'trials', ...
+                sprintf('trial_%04d_raw.mat', 6)));
+            plmLog = lastRaw.raw.plmLog;
             testCase.verifyNotEmpty(plmLog);
             nLoadEntries = sum(strcmp({plmLog.eventType}, 'loadPattern'));
             testCase.verifyGreaterThanOrEqual(nLoadEntries, 1, ...

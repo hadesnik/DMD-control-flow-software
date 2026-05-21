@@ -51,13 +51,12 @@ classdef test_exp_ppsf_lateral_mock < matlab.unittest.TestCase
             testCase.verifyEqual(result.nTrialsCompleted, 54);
             testCase.verifyEqual(result.nTrialsFailed, 0);
 
-            % 54 .mat files on disk, each loadable, status complete.
-            files = dir(fullfile(result.sessionDir, 'trials', 'trial_*.mat'));
+            % 54 _meta.mat files on disk, each loadable, status complete.
+            files = dir(fullfile(result.sessionDir, 'trials', 'trial_*_meta.mat'));
             testCase.verifyEqual(numel(files), 54);
             for k = 1:numel(files)
                 loaded = load(fullfile(files(k).folder, files(k).name));
-                testCase.verifyEqual(loaded.trial.status, 'complete');
-                testCase.verifyNotEmpty(loaded.trial.data);
+                testCase.verifyEqual(loaded.meta.status, 'complete');
             end
 
             % Summary shape: 9 rows (one per distance), expected fields,
