@@ -50,6 +50,20 @@ function result = exp_ensemble_fill_factor_power(dmd, daq, roiCentroids_scan, ca
 %                                outside, and draws a yellow dashed outline on
 %                                the live figure so the operator can see the
 %                                active zone. Pass [] (default) to disable.
+%       .syncDOLine            - DO line name to pulse as the ScanImage sync
+%                                marker (default 'port0/line10'). One long
+%                                pulse at session start, one short pulse at
+%                                each trial onset. Set to '' (empty) to
+%                                disable TTL output entirely. If the line is
+%                                not in daq.digitalOutChannels, sync is
+%                                skipped with a warning (mock-friendly).
+%       .sessionStartPulseS    - Width of the session-start pulse (default
+%                                0.025 s). Long pulse so the operator can see
+%                                a single distinct edge before the run.
+%       .trialOnsetPulseS      - Width of the per-trial onset pulse (default
+%                                0.002 s). Each trial's stim-on TTL edge marks
+%                                t_onset for that trial in ScanImage's recorded
+%                                aux trace.
 %
 %     Condition 1 (uniform sweep):
 %       .runUniform            - Enable condition 1 (default true).
@@ -89,6 +103,9 @@ sessionDir     = configField(options, 'sessionDir',     '');
 exposureUs     = configField(options, 'exposureUs',     5000);
 darkTimeUs     = configField(options, 'darkTimeUs',     0);
 illuminatedRegion = configField(options, 'illuminatedRegion', []);
+syncDOLine         = configField(options, 'syncDOLine',         'port0/line10');
+sessionStartPulseS = configField(options, 'sessionStartPulseS', 0.025);
+trialOnsetPulseS   = configField(options, 'trialOnsetPulseS',   0.002);
 
 if ~isempty(illuminatedRegion)
     if numel(illuminatedRegion) ~= 4 || ~all(isfinite(illuminatedRegion))
@@ -313,6 +330,55 @@ daq.outputSingleAnalog(aoChannel, 0);
 cleanupLaser = onCleanup(@() safetyOff(daq, aoChannel));  %#ok<NASGU>
 
 % =========================================================================
+% Sync line setup — TTL marker into ScanImage for posthoc trial alignment
+% =========================================================================
+syncEnabled = ~isempty(syncDOLine) && trialOnsetPulseS > 0;
+if syncEnabled
+    availLines = cellstr(daq.digitalOutChannels);
+    if isempty(availLines) || ~any(strcmp(syncDOLine, availLines))
+        warning('tfp:experiments:exp_ensemble_fill_factor_power:syncLineUnavailable', ...
+            ['syncDOLine ''%s'' is not in daq.digitalOutChannels = [%s]. ' ...
+             'Sync TTLs disabled — only software timestamps will be logged.'], ...
+            syncDOLine, strjoin(availLines, ', '));
+        syncEnabled = false;
+    else
+        daq.configureDigitalOutput({syncDOLine});
+    end
+end
+
+% Pre-allocate per-trial timing buffers — indexed by execution order k.
+% A unified "run" table (cond1 then cond2 in temporal order) is also built
+% at the end for easy posthoc alignment with the ScanImage TTL trace.
+timing = struct();
+timing.syncDOLine         = syncDOLine;
+timing.syncEnabled        = syncEnabled;
+timing.sessionStartPulseS = sessionStartPulseS;
+timing.trialOnsetPulseS   = trialOnsetPulseS;
+
+if c1.nTrials > 0
+    c1.onsetDatetime  = NaT(c1.nTrials, 1);
+    c1.offsetDatetime = NaT(c1.nTrials, 1);
+    c1.onsetTSec      = nan(c1.nTrials, 1);
+    c1.offsetTSec     = nan(c1.nTrials, 1);
+end
+if c2.nTrials > 0
+    c2.onsetDatetime  = NaT(c2.nTrials, 1);
+    c2.offsetDatetime = NaT(c2.nTrials, 1);
+    c2.onsetTSec      = nan(c2.nTrials, 1);
+    c2.offsetTSec     = nan(c2.nTrials, 1);
+end
+
+% Session start: long TTL marker + master tic. The session-start TTL is the
+% reference edge against which all per-trial onsets are measured in
+% ScanImage's recorded aux trace.
+timing.sessionStartDatetime = datetime('now');
+if syncEnabled && sessionStartPulseS > 0
+    daq.sendDigitalPulse(syncDOLine, sessionStartPulseS);
+end
+t0 = tic;   % monotonic reference for all per-trial onsetTSec / offsetTSec
+timing.sessionStartTSec = 0;
+
+% =========================================================================
 % Run condition 1
 % =========================================================================
 if runUniform
@@ -333,9 +399,19 @@ if runUniform
                 k, c1.nTrials, fill*100, rep, c1.nRepeats, lvl, c1.nLevels), ...
             false);    % no per-cell labels in cond 1 (all cells same)
 
+        % Sync TTL rising edge + onset timestamps (before AO ramps on so
+        % the recorded edge precedes the laser by exactly trialOnsetPulseS).
+        c1.onsetDatetime(k) = datetime('now');
+        c1.onsetTSec(k)     = toc(t0);
+        if syncEnabled
+            daq.sendDigitalPulse(syncDOLine, trialOnsetPulseS);
+        end
+
         daq.outputSingleAnalog(aoChannel, powerV);
         pause(stimDurationS);
         daq.outputSingleAnalog(aoChannel, 0);
+        c1.offsetDatetime(k) = datetime('now');
+        c1.offsetTSec(k)     = toc(t0);
 
         updateFigure(lh, patternStack(:,:,sIdx), dmdCentroids, ...
             c1.fillPerCell(:, t), ...
@@ -374,9 +450,17 @@ if runDifferential
                 k, c2.nTrials, d, c2.nDistributions, rep, c2.nRepeats), ...
             true);    % show per-cell fill labels
 
+        c2.onsetDatetime(k) = datetime('now');
+        c2.onsetTSec(k)     = toc(t0);
+        if syncEnabled
+            daq.sendDigitalPulse(syncDOLine, trialOnsetPulseS);
+        end
+
         daq.outputSingleAnalog(aoChannel, powerV);
         pause(stimDurationS);
         daq.outputSingleAnalog(aoChannel, 0);
+        c2.offsetDatetime(k) = datetime('now');
+        c2.offsetTSec(k)     = toc(t0);
 
         updateFigure(lh, patternStack(:,:,sIdx), dmdCentroids, ...
             c2.fillPerCell(:, t), ...
@@ -393,6 +477,42 @@ if runDifferential
 end
 
 % =========================================================================
+% Build unified time-ordered run table (cond1 then cond2 — matches the
+% temporal sequence of TTL edges recorded by ScanImage)
+% =========================================================================
+nRun = c1.nTrials + c2.nTrials;
+timing.run = struct();
+timing.run.condition        = zeros(nRun, 1);
+timing.run.trialInCondition = zeros(nRun, 1);   % column index into c{1,2}.fillPerCell
+timing.run.stackIdx         = zeros(nRun, 1);
+timing.run.onsetDatetime    = NaT(nRun, 1);
+timing.run.offsetDatetime   = NaT(nRun, 1);
+timing.run.onsetTSec        = nan(nRun, 1);
+timing.run.offsetTSec       = nan(nRun, 1);
+
+j = 0;
+for k = 1:c1.nTrials
+    j = j + 1;
+    timing.run.condition(j)        = 1;
+    timing.run.trialInCondition(j) = c1.runOrder(k);
+    timing.run.stackIdx(j)         = c1.stackIdx(k);
+    timing.run.onsetDatetime(j)    = c1.onsetDatetime(k);
+    timing.run.offsetDatetime(j)   = c1.offsetDatetime(k);
+    timing.run.onsetTSec(j)        = c1.onsetTSec(k);
+    timing.run.offsetTSec(j)       = c1.offsetTSec(k);
+end
+for k = 1:c2.nTrials
+    j = j + 1;
+    timing.run.condition(j)        = 2;
+    timing.run.trialInCondition(j) = c2.runOrder(k);
+    timing.run.stackIdx(j)         = c2.stackIdx(k);
+    timing.run.onsetDatetime(j)    = c2.onsetDatetime(k);
+    timing.run.offsetDatetime(j)   = c2.offsetDatetime(k);
+    timing.run.onsetTSec(j)        = c2.onsetTSec(k);
+    timing.run.offsetTSec(j)       = c2.offsetTSec(k);
+end
+
+% =========================================================================
 % Log + return
 % =========================================================================
 if ~isempty(sessionDir) && isfolder(sessionDir)
@@ -401,7 +521,10 @@ if ~isempty(sessionDir) && isfolder(sessionDir)
         'cond1Trials', c1.nTrials, 'cond2Trials', c2.nTrials, ...
         'powerV', powerV, ...
         'stimDurationS', stimDurationS, 'interStimS', interStimS, ...
-        'rngSeed', rngSeed));
+        'rngSeed', rngSeed, ...
+        'syncDOLine', syncDOLine, ...
+        'syncEnabled', syncEnabled, ...
+        'sessionStartDatetime', char(timing.sessionStartDatetime)));
 end
 
 result.nROIs          = nROIs;
@@ -414,6 +537,7 @@ result.interStimS     = interStimS;
 result.rngSeed        = rngSeed;
 result.condition1     = c1;
 result.condition2     = c2;
+result.timing         = timing;
 result.completedAt    = datetime('now');
 
 fprintf('\n[fill_factor_power] Complete: cond1=%d trials, cond2=%d trials.\n', ...

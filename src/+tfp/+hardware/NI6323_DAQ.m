@@ -41,6 +41,12 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
         configuredAoChannels_ = []
         configuredDoLines_    = {}
         configuredDiLines_    = {}   % DI line names added via configureDigitalInput
+        % Output-channel order in the session, as appended. Each entry is a
+        % struct('kind','ao'|'do','name',scalar|string). outputSingleScan
+        % expects an N-element vector in this exact order (AO + DO share one
+        % output scan on the NI legacy session), so this is the source of
+        % truth for building outVec in outputSingleAnalog / sendDigitalPulse.
+        outputOrder_          = struct('kind', {}, 'name', {})
         aiRangeV_             = []
         aoData_               = []   % nSamples × nAoCh, stored until start()
         digitalPulses_              % struct array: lineNames, times, durations
@@ -101,6 +107,7 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
             obj.configuredAiChannels_ = [];
             obj.configuredAoChannels_ = [];
             obj.configuredDoLines_    = {};
+            obj.outputOrder_       = struct('kind', {}, 'name', {});
             obj.aiRangeV_          = [];
             obj.aoData_            = [];
             obj.digitalPulses_     = struct('lineNames', {}, 'times', {}, 'durations', {});
@@ -139,6 +146,8 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
             for k = 1:numel(channels)
                 obj.session_.addAnalogOutputChannel( ...  %LEGACY_API
                     obj.deviceName_, channels(k), 'Voltage');
+                obj.outputOrder_(end+1) = struct( ...
+                    'kind', 'ao', 'name', channels(k));
             end
             obj.configuredAoChannels_ = channels(:)';
             obj.logEvent('configureAnalogOutput', struct('channels', channels));
@@ -151,6 +160,8 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
             for k = 1:numel(linesC)
                 obj.session_.addDigitalChannel( ...  %LEGACY_API
                     obj.deviceName_, linesC{k}, 'OutputOnly');
+                obj.outputOrder_(end+1) = struct( ...
+                    'kind', 'do', 'name', linesC{k});
             end
             obj.configuredDoLines_ = linesC;
             obj.logEvent('configureDigitalOutput', struct('lines', {linesC}));
@@ -337,6 +348,10 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
         function sendDigitalPulse(obj, lineName, durationS)
             %sendDigitalPulse Immediately output a high-then-low digital pulse.
             %   lineName must be in configuredDoLines.  durationS > 0.
+            %   The full session output vector (covering both AO and DO
+            %   channels in addition order) is built from outputOrder_ so a
+            %   mixed AO+DO session passes the correct shape to
+            %   outputSingleScan.
             obj.requireInitialized('sendDigitalPulse');
             lineNameC = char(lineName);
             if ~any(strcmp(lineNameC, obj.configuredDoLines_))
@@ -348,11 +363,11 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
                 error('tfp:hardware:NI6323_DAQ:badDuration', ...
                     'durationS must be a positive finite scalar.');
             end
-            nLines       = numel(obj.configuredDoLines_);
-            idx          = find(strcmp(lineNameC, obj.configuredDoLines_), 1);
-            highVec      = zeros(1, nLines);
-            highVec(idx) = 1;
-            lowVec       = zeros(1, nLines);
+            slot = obj.outputSlotForDOLine_(lineNameC);
+            n    = numel(obj.outputOrder_);
+            highVec       = zeros(1, n);
+            highVec(slot) = 1;
+            lowVec        = zeros(1, n);
             obj.session_.outputSingleScan(highVec);  %LEGACY_API
             pause(durationS);
             obj.session_.outputSingleScan(lowVec);   %LEGACY_API
@@ -380,10 +395,12 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
                 obj.session_.addAnalogOutputChannel( ...  %LEGACY_API
                     obj.deviceName_, chNum, 'Voltage');
                 obj.configuredAoChannels_(end+1) = chNum;
-                idx = numel(obj.configuredAoChannels_);
+                obj.outputOrder_(end+1) = struct('kind', 'ao', 'name', chNum);
             end
-            outVec      = zeros(1, numel(obj.configuredAoChannels_));
-            outVec(idx) = voltageV;
+            slot   = obj.outputSlotForAOChannel_(chNum);
+            n      = numel(obj.outputOrder_);
+            outVec       = zeros(1, n);
+            outVec(slot) = voltageV;
             obj.session_.outputSingleScan(outVec);  %LEGACY_API
             obj.logEvent('outputSingleAnalog', struct('channel', chNum, 'voltageV', voltageV));
         end
@@ -415,6 +432,7 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
             obj.configuredAoChannels_ = [];
             obj.configuredDoLines_    = {};
             obj.configuredDiLines_    = {};
+            obj.outputOrder_       = struct('kind', {}, 'name', {});
             obj.aiRangeV_          = [];
             obj.aoData_            = [];
             obj.aiBuf_             = [];
@@ -453,6 +471,32 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
             if nCols > nAiChans && ~isempty(obj.configuredDiLines_)
                 obj.diBuf_ = [obj.diBuf_; evt.Data(:, nAiChans+1:end)];  %#ok<AGROW>
             end
+        end
+
+        function slot = outputSlotForAOChannel_(obj, chNum)
+            %outputSlotForAOChannel_ Find session-output-vector index for AO channel.
+            for k = 1:numel(obj.outputOrder_)
+                entry = obj.outputOrder_(k);
+                if strcmp(entry.kind, 'ao') && isequal(entry.name, chNum)
+                    slot = k;
+                    return
+                end
+            end
+            error('tfp:hardware:NI6323_DAQ:outputSlotMissing', ...
+                'AO channel %g not found in session outputOrder_.', chNum);
+        end
+
+        function slot = outputSlotForDOLine_(obj, lineName)
+            %outputSlotForDOLine_ Find session-output-vector index for DO line.
+            for k = 1:numel(obj.outputOrder_)
+                entry = obj.outputOrder_(k);
+                if strcmp(entry.kind, 'do') && strcmp(entry.name, lineName)
+                    slot = k;
+                    return
+                end
+            end
+            error('tfp:hardware:NI6323_DAQ:outputSlotMissing', ...
+                'DO line ''%s'' not found in session outputOrder_.', lineName);
         end
 
         function chNum = parseChannelName_(obj, channelName)  %#ok<MANU>

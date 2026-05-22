@@ -36,7 +36,7 @@ daq.initialize(struct( ...
     'analogInChannels',   [], ...
     'analogOutChannels',  1, ...
     'digitalInChannels',  {{}}, ...
-    'digitalOutChannels', {{}}));
+    'digitalOutChannels', {{'port0/line10'}}));
 
 % Identity calibration: scan-field coords == DMD pixel coords for the mock.
 calib.dmdToScan_affine    = eye(3);
@@ -104,6 +104,11 @@ options.differentialNRepeats     = 3;
 options.differentialFillSet      = [0.2 0.4 0.6 0.8 1.0];
 options.differentialMaxCorr      = 0.15;
 
+% Sync TTL — exercise the per-trial onset pulse path in the mock.
+options.syncDOLine         = 'port0/line10';
+options.sessionStartPulseS = 0.025;
+options.trialOnsetPulseS   = 0.002;
+
 % -------------------------------------------------------------------------
 % Run
 % -------------------------------------------------------------------------
@@ -125,6 +130,28 @@ aoEvents = strcmp({aoLog.eventType}, 'outputSingleAnalog');
 assert(sum(aoEvents) == 2 * expected + 2, ...
     'Expected %d AO events, saw %d.', 2 * expected + 2, sum(aoEvents));
 
+% Sync TTL log: 1 session-start pulse + 1 per-trial onset pulse.
+pulseEvents = strcmp({aoLog.eventType}, 'sendDigitalPulse');
+assert(sum(pulseEvents) == expected + 1, ...
+    'Expected %d sendDigitalPulse events (1 session-start + %d trials), saw %d.', ...
+    expected + 1, expected, sum(pulseEvents));
+
+% Per-trial timing tables are populated and monotonic.
+assert(isfield(result, 'timing') && isfield(result.timing, 'run'), ...
+    'result.timing.run missing.');
+assert(numel(result.timing.run.onsetTSec) == expected, ...
+    'result.timing.run.onsetTSec must have %d entries, saw %d.', ...
+    expected, numel(result.timing.run.onsetTSec));
+assert(all(isfinite(result.timing.run.onsetTSec)) ...
+        && all(isfinite(result.timing.run.offsetTSec)), ...
+    'All onset/offset timestamps must be finite.');
+assert(all(diff(result.timing.run.onsetTSec) > 0), ...
+    'Trial onsetTSec must be strictly increasing across the run.');
+assert(all(result.timing.run.offsetTSec > result.timing.run.onsetTSec), ...
+    'Each offset must follow its onset.');
+assert(all(ismember(result.timing.run.condition, [1 2])), ...
+    'Run condition labels must be 1 or 2.');
+
 % Decorrelation sanity: pairwise |r| should all be <= the requested threshold
 % (unless the fallback path was taken — we still report).
 maxR = max(abs(result.condition2.pairwiseCorr));
@@ -141,8 +168,8 @@ if ~result.condition2.fallback
         maxR, result.condition2.maxCorrAccepted);
 end
 
-fprintf('\n[test_ensemble_fill_factor_mock] PASS — %d patterns advanced, %d AO events.\n', ...
-    nAdvance, sum(aoEvents));
+fprintf('\n[test_ensemble_fill_factor_mock] PASS — %d patterns advanced, %d AO events, %d sync TTLs.\n', ...
+    nAdvance, sum(aoEvents), sum(pulseEvents));
 
 % =========================================================================
 % Local helper

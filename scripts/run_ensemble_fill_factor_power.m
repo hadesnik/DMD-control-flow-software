@@ -45,6 +45,14 @@ DAQ_DEVICE   = 'Dev1';
 DAQ_RATE     = 10000;
 AO_CHANNEL   = 'ao1';     % FS-50 power modulation input
 
+% Stim-sync TTL to ScanImage PC (per rig convention in configs/real.yaml).
+% One long pulse fires at session start, one short pulse fires at each trial
+% onset; the imaging PC records the line on an aux AI channel so each trial
+% can be aligned to the 2p frame stream posthoc.
+SYNC_DO_LINE          = 'port0/line10';   % matches configs/real.yaml
+SESSION_START_PULSE_S = 0.025;            % long, easy-to-spot reference edge
+TRIAL_ONSET_PULSE_S   = 0.002;            % short marker just before AO ramps on
+
 % DMD (ALP-4.1 DLi4130 until DLP650LNIR arrives)
 DMD_ROWS     = 768;
 DMD_COLS     = 1024;
@@ -91,7 +99,7 @@ daqCfg.deviceName          = DAQ_DEVICE;
 daqCfg.sampleRate          = DAQ_RATE;
 daqCfg.analogOutChannels   = {AO_CHANNEL};
 daqCfg.analogInChannels    = {};
-daqCfg.digitalOutChannels  = {};
+daqCfg.digitalOutChannels  = {SYNC_DO_LINE};
 daqCfg.digitalInChannels   = {};
 daq = tfp.hardware.NI6323_DAQ(daqCfg);
 daq.initialize(daqCfg);
@@ -158,6 +166,10 @@ opts.illuminatedRegion = [cCenter - half, cCenter + half, ...
                           rCenter - half, rCenter + half];
 fprintf('Illuminated DMD region: cols [%g..%g], rows [%g..%g] (%dx%d px).\n', ...
     opts.illuminatedRegion, ILLUMINATED_REGION_SIZE_PX, ILLUMINATED_REGION_SIZE_PX);
+
+opts.syncDOLine         = SYNC_DO_LINE;
+opts.sessionStartPulseS = SESSION_START_PULSE_S;
+opts.trialOnsetPulseS   = TRIAL_ONSET_PULSE_S;
 
 opts.runUniform           = true;
 opts.uniformFillFractions = UNIFORM_FRACTIONS;
