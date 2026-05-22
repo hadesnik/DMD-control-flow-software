@@ -1319,15 +1319,19 @@ Once both are in, the per-trial result struct records:
 
 ### Sub-tasks
 
-**Round 0 — Out-pulse path [PARTIAL, in flight]**
+**Round 0 — Out-pulse path [PARTIAL]**
 
 - [x] T-OUT-1  options + per-trial DO pulse in `exp_ensemble_fill_factor_power.m`
       Files: `src/+tfp/+experiments/exp_ensemble_fill_factor_power.m`,
+             `src/+tfp/+hardware/NI6323_DAQ.m` (mixed AO/DO output fix),
              `tests/test_ensemble_fill_factor_mock.m`,
              `scripts/run_ensemble_fill_factor_power.m`
       `syncDOLine` + `sessionStartPulseS` + `trialOnsetPulseS` options
       wired through; pulses fired via `daq.sendDigitalPulse` on session
-      start and each trial onset.
+      start and each trial onset. Per-trial wall-clock + tic/toc
+      timestamps recorded into `result.timing.run` (host-side; Round 3
+      will add canonical DAQ-sample fields alongside).
+      Commit: 3c6def9
 
 - [ ] T-OUT-2  same options + pulse emission in `exp_ensemble_activation.m`
       Files: `src/+tfp/+experiments/exp_ensemble_activation.m`,
