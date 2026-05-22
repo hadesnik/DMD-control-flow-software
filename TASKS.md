@@ -1285,6 +1285,175 @@ sequencer end-to-end on the mock stack; existing test count unaffected.
 
 ---
 
+## TASK-SYNC-ALIGN: Frame-precise stim → ScanImage frame association [IN PROGRESS]
+
+**Goal:** Every ScanImage acquired frame is unambiguously tagged with the
+stim condition active during that frame (trial id, condition 1/2,
+sub-condition index, repeat index, per-cell fill fractions, phase relative
+to stim onset). Achieved via two complementary timestamp paths recorded in
+the trial schema so post-hoc analysis can use either or cross-check both:
+
+  **(a) Out-pulse path** — DAQ emits a TTL on a DO line at every trial
+       onset (and a longer pulse at session start). ScanImage records this
+       on its aux input. Each rising edge in the aux trace = one trial
+       onset in ScanImage's clock. Robust and minimal: only needs ScanImage
+       to record the aux channel.
+
+  **(b) In-capture path** — DAQ captures ScanImage's frame TTL on a DI
+       line via a continuous hardware-clocked session running for the
+       whole experiment. Each frame's rising edge gets a DAQ sample index.
+       Trial onsets/offsets are also recorded in DAQ samples (clocked AO,
+       not `outputSingleAnalog` + `pause`). A post-hoc lookup table assigns
+       each frame to a trial/condition. This is the canonical precision
+       path; the out-pulse path is the resilient backup + cross-check.
+
+Once both are in, the per-trial result struct records:
+  - `t_onset_daq_samples`, `t_offset_daq_samples`     (in-capture)
+  - `t_onset_si_aux_edge_index`                       (out-pulse, filled
+                                                       post-hoc from the
+                                                       aux trace)
+  - `frame_indices_during_stim`, `frame_indices_baseline`  (post-hoc)
+  - `daq_master_sample_rate_hz`, `session_start_datetime`
+
+---
+
+### Sub-tasks
+
+**Round 0 — Out-pulse path [PARTIAL, in flight]**
+
+- [x] T-OUT-1  options + per-trial DO pulse in `exp_ensemble_fill_factor_power.m`
+      Files: `src/+tfp/+experiments/exp_ensemble_fill_factor_power.m`,
+             `tests/test_ensemble_fill_factor_mock.m`,
+             `scripts/run_ensemble_fill_factor_power.m`
+      `syncDOLine` + `sessionStartPulseS` + `trialOnsetPulseS` options
+      wired through; pulses fired via `daq.sendDigitalPulse` on session
+      start and each trial onset.
+
+- [ ] T-OUT-2  same options + pulse emission in `exp_ensemble_activation.m`
+      Files: `src/+tfp/+experiments/exp_ensemble_activation.m`,
+             `tests/test_ensemble_activation_mock.m`,
+             `scripts/run_ensemble_activation.m`
+
+- [ ] T-OUT-3  propagate to remaining experiments (optional for R01 prelim)
+      Files: `src/+tfp/+experiments/{exp_ppsf_lateral,exp_power_curve,exp_pseudo_axial,exp_axial_ppsf,exp_rapid_sequential,exp_ppsf_2d}.m`
+
+**Round 1 — Sync spec + abstract base + trial schema [SEQUENTIAL, single agent]**
+
+Must land before anything in Round 2 starts. Single commit, no
+implementations — only signatures, schema, and docs.
+
+- [ ] T-SYNC-1  `docs/SYNC_FRAME.md` (or extend `docs/SYNC.md`):
+                  - DAQ master-clock model
+                  - Out-pulse pulse spec (line, widths, edges) — already in
+                    code; this just documents it.
+                  - In-capture continuous-session API contracts:
+                      `startContinuousSession(cfg)`,
+                      `stopContinuousSession()`,
+                      `currentSampleIndex()`,
+                      `queueClockedAO(samples, rate, startTrigger)`
+                  - Frame-clock DI encoding (rising edges = frame start,
+                    one pulse per frame, polarity)
+                  - Trial schema fields and units
+                Files: NEW `docs/SYNC_FRAME.md`,
+                       `src/+tfp/+hardware/DAQ.m` (add abstract method
+                       signatures, no body),
+                       `src/+tfp/+trial/Trial.m` (add new schema fields,
+                       SetAccess private, with markRunning/markComplete
+                       transitions updated)
+
+**Round 2 — Independent implementations [6 parallel agents, each touches one file]**
+
+All 6 code against the locked Round 1 spec; no inter-agent dependencies.
+
+- [ ] T-SYNC-2  MockDAQ continuous session + clocked AO + synthetic frame clock
+                Files: `src/+tfp/+hardware/MockDAQ.m`
+
+- [ ] T-SYNC-3  NI6323_DAQ continuous session + clocked AO + frame-clock DI capture
+                Files: `src/+tfp/+hardware/NI6323_DAQ.m`
+                Note: only mock-verifiable on Mac; final verification
+                belongs to T-SYNC-7 on the scope PC.
+
+- [ ] T-SYNC-4  `tfp.io.decodeFrameClock(diVec, sampleRate)` → frame start
+                samples + inferred frame rate. Unit tests with synthetic
+                pulse trains (regular, jittered, missing pulses, polarity).
+                Files: NEW `src/+tfp/+io/decodeFrameClock.m`,
+                       NEW `tests/test_decodeFrameClock.m`
+
+- [ ] T-SYNC-5  `tfp.io.alignTrialsToFrames(trials, frameStartSamples)` →
+                per-trial frame index lists + per-frame condition table.
+                Files: NEW `src/+tfp/+io/alignTrialsToFrames.m`,
+                       NEW `tests/test_alignTrialsToFrames.m`
+
+- [ ] T-SYNC-6  Extend `tfp.io.saveTrial` for the new schema fields
+                (preserve backward compat with existing trial files).
+                Files: `src/+tfp/+io/saveTrial.m`, related test
+
+- [ ] T-SYNC-7  Sync verification script for the scope PC: scopes the
+                TTL + AO lines, captures and decodes the frame clock,
+                asserts timing precision (jitter, latency, edge alignment).
+                Codes against Round-1 API only; doesn't need Round-2 done.
+                Files: NEW `scripts/verify_sync.m`
+
+**Round 3 — Experiment refactor [3 parallel agents]**
+
+Depends on T-SYNC-2 (mock path) and T-SYNC-6 (trial schema persistence).
+
+- [ ] T-SYNC-8  Refactor `exp_ensemble_fill_factor_power.m`:
+                  - Start continuous DAQ session at top, stop at end.
+                  - Replace `outputSingleAnalog + pause` with clocked AO
+                    (the DO out-pulse already records onset; keep it).
+                  - Record `t_onset_daq_samples` / `t_offset_daq_samples`
+                    per trial in the result struct.
+                  - Save per-trial `.mat` via `tfp.io.saveTrial`.
+                Files: `src/+tfp/+experiments/exp_ensemble_fill_factor_power.m`
+
+- [ ] T-SYNC-9  Same refactor for `exp_ensemble_activation.m`.
+                Files: `src/+tfp/+experiments/exp_ensemble_activation.m`
+
+- [ ] T-SYNC-10 Same refactor for the remaining experiments
+                (optional for R01 prelim; can defer).
+                Files: `src/+tfp/+experiments/{exp_ppsf_lateral,exp_power_curve,exp_pseudo_axial,exp_axial_ppsf,exp_rapid_sequential,exp_ppsf_2d}.m`
+                Note: `exp_axial_ppsf.m` already has PLM Sequencer
+                integration; this refactor is more invasive there —
+                handle separately.
+
+**Round 4 — Tests + runners + integration [3 parallel agents]**
+
+Depends on Round 3.
+
+- [ ] T-SYNC-11 Update mock tests to assert new behavior — frame-clock
+                decode roundtrip, monotonic trial samples, per-trial
+                onset/offset present, out-pulse + in-capture cross-check
+                within tolerance.
+                Files: `tests/test_ensemble_fill_factor_mock.m`,
+                       `tests/test_ensemble_activation_mock.m`
+
+- [ ] T-SYNC-12 Update scope-PC runner scripts to enable continuous
+                session capture + save the full session DI/AI buffers.
+                Files: `scripts/run_ensemble_fill_factor_power.m`,
+                       `scripts/run_ensemble_activation.m`
+
+- [ ] T-SYNC-13 End-to-end mock integration test: full session →
+                `saveTrial` → reload → reconstruct frame→condition table
+                → verify a synthetic GCaMP trace bins correctly by
+                condition.
+                Files: NEW `tests/test_sync_endtoend_mock.m`
+
+---
+
+**Parallelism summary:**
+  Round 0: 1 agent (T-OUT-2), 1 deferred (T-OUT-3)
+  Round 1: 1 agent (sequential prereq)
+  Round 2: 6 parallel agents
+  Round 3: 3 parallel agents
+  Round 4: 3 parallel agents
+
+**File-conflict map:** Each Round-2/3/4 sub-task touches a distinct file
+list above; parallel agents will not collide as long as they stay within
+their assigned file lists.
+
+---
+
 ## COMPLETED TASKS
 
 TASK-15-01 through TASK-15-05: Phase 1.5 all-optical simulator
