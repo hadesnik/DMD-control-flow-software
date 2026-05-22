@@ -56,6 +56,11 @@ INTER_STIM_S    = 3.0;    % ISI; long enough for GCaMP recovery
 POWER_V         = 5.0;    % AO voltage (HELD CONSTANT across trials)
 RNG_SEED        = 0;      % reproducibility
 
+% Illuminated DMD region (the pi-Shaper flat-top footprint on the chip).
+% Default: 300x300 px centered on the chip — at ~3 DMD px / µm at sample,
+% that's the 100 µm pilot FOV. Pass [] to disable the warning + outline.
+ILLUMINATED_REGION_SIZE_PX = 300;
+
 % Cond 1 — uniform sweep
 UNIFORM_FRACTIONS  = 0.1:0.1:1.0;   % 10% .. 100% in 10% steps
 UNIFORM_N_REPEATS  = 10;            % 10 reps per level -> 100 trials
@@ -144,6 +149,15 @@ opts.powerV         = POWER_V;
 opts.rngSeed        = RNG_SEED;
 opts.showLiveFigure = true;
 opts.sessionDir     = SESSION_DIR;
+
+% Centered illuminated region computed from DMD geometry.
+half = ILLUMINATED_REGION_SIZE_PX / 2;
+cCenter = floor(dmd.nCols / 2);
+rCenter = floor(dmd.nRows / 2);
+opts.illuminatedRegion = [cCenter - half, cCenter + half, ...
+                          rCenter - half, rCenter + half];
+fprintf('Illuminated DMD region: cols [%g..%g], rows [%g..%g] (%dx%d px).\n', ...
+    opts.illuminatedRegion, ILLUMINATED_REGION_SIZE_PX, ILLUMINATED_REGION_SIZE_PX);
 
 opts.runUniform           = true;
 opts.uniformFillFractions = UNIFORM_FRACTIONS;

@@ -3,11 +3,12 @@
 %   Exercises both conditions of tfp.experiments.exp_ensemble_fill_factor_power
 %   against MockDMD + MockDAQ — no real hardware needed.
 %
-%   Cond 1: 10 fill levels (10% .. 100%) x 10 repeats = 100 trials, shuffled.
-%   Cond 2: 3 decorrelated per-cell distributions x 10 repeats = 30 trials.
+%   Cond 1: 10 fill levels (10% .. 100%) x 3 repeats = 30 trials, shuffled.
+%   Cond 2: 3 decorrelated per-cell distributions x 3 repeats = 9 trials.
 %
 %   Timing is compressed for the dev machine (150 ms ON / 150 ms ISI):
-%   130 trials -> ~39 s total. On the scope PC you'd use 0.5 s / 3 s ISI.
+%   39 trials -> ~12 s total. The real-hardware runner uses 10 repeats per
+%   sub-condition and 0.5 s / 3 s ISI.
 %
 %   Live figure: pops up the DMD-mask viewer that updates every trial. During
 %   Cond 2 the per-cell fill fractions are overlaid as yellow text labels
@@ -43,46 +44,63 @@ calib.scan_fast_axis_sign = 1;
 calib.scan_slow_axis_sign = 1;
 
 % -------------------------------------------------------------------------
-% 10 ROI centroids scattered across the DMD FOV.
+% Illuminated DMD region — 300x300 px centered on the chip.
+% At ~3 DMD px / µm at the sample, 300 px == 100 µm pilot FOV at the brain.
+% -------------------------------------------------------------------------
+diskRadiusPx   = 15;
+regionSizePx   = 300;
+cCenter        = floor(dmd.nCols / 2);
+rCenter        = floor(dmd.nRows / 2);
+half           = regionSizePx / 2;
+illuminatedRegion = [cCenter - half, cCenter + half, ...
+                     rCenter - half, rCenter + half];   % [c0 c1 r0 r1]
+
+% -------------------------------------------------------------------------
+% 10 ROI centroids placed inside the illuminated region, with a one-radius
+% margin so every disk fits fully within the lit zone.
 % -------------------------------------------------------------------------
 rng(7);
-nROIs  = 10;
-margin = 80;
+nROIs = 10;
+m = diskRadiusPx;
 roiCentroids_scan = [ ...
-    randi([margin, dmd.nCols - margin], nROIs, 1), ...
-    randi([margin, dmd.nRows - margin], nROIs, 1)];
+    randi([illuminatedRegion(1) + m, illuminatedRegion(2) - m], nROIs, 1), ...
+    randi([illuminatedRegion(3) + m, illuminatedRegion(4) - m], nROIs, 1)];
 roiCentroids_scan = double(roiCentroids_scan);
 
-fprintf('\nMock ROI centroids (DMD pixel coords):\n');
+fprintf('\nIlluminated DMD region: cols [%g..%g], rows [%g..%g] (300x300 px).\n', ...
+    illuminatedRegion);
+fprintf('Mock ROI centroids (DMD pixel coords, inside illuminated region):\n');
 for k = 1:nROIs
     fprintf('  ROI %2d: col=%4d  row=%3d\n', k, ...
         roiCentroids_scan(k,1), roiCentroids_scan(k,2));
 end
 
 % -------------------------------------------------------------------------
-% Companion live figure — static reference of the full disks (100% fill).
+% Companion live figure — static reference of the full disks (100% fill),
+% with the illuminated-region outline overlaid.
 % -------------------------------------------------------------------------
-initCompanionFigure(dmd, roiCentroids_scan, 15);
+initCompanionFigure(dmd, roiCentroids_scan, diskRadiusPx, illuminatedRegion);
 
 % -------------------------------------------------------------------------
 % Experiment options (compressed timing for the mock)
 % -------------------------------------------------------------------------
-options.radiusPx       = 15;          % ~709 px/neuron; use 17 for ~925 px
+options.radiusPx          = diskRadiusPx;          % ~709 px/neuron at r=15
+options.illuminatedRegion = illuminatedRegion;     % yellow outline + range check
 options.stimDurationS  = 0.15;        % short for snappy mock; 0.5 on scope
 options.interStimS     = 0.15;        % short for mock; 3.0 on scope (GCaMP recovery)
 options.aoChannel      = 'ao1';
 options.powerV         = 5.0;
 options.rngSeed        = 0;           % reproducible
 
-% Cond 1
+% Cond 1 — 3 repeats per fill level in the mock (real run uses 10)
 options.runUniform           = true;
 options.uniformFillFractions = 0.1:0.1:1.0;
-options.uniformNRepeats      = 10;
+options.uniformNRepeats      = 3;
 
-% Cond 2
+% Cond 2 — 3 repeats per distribution in the mock (real run uses 10)
 options.runDifferential          = true;
 options.differentialNDistributions = 3;
-options.differentialNRepeats     = 10;
+options.differentialNRepeats     = 3;
 options.differentialFillSet      = [0.2 0.4 0.6 0.8 1.0];
 options.differentialMaxCorr      = 0.15;
 
@@ -129,7 +147,7 @@ fprintf('\n[test_ensemble_fill_factor_mock] PASS — %d patterns advanced, %d AO
 % =========================================================================
 % Local helper
 % =========================================================================
-function initCompanionFigure(dmd, centroids, radiusPx)
+function initCompanionFigure(dmd, centroids, radiusPx, illuminatedRegion)
 %initCompanionFigure  Static reference figure: full disks at 100% fill.
 
 full = tfp.patterns.fillFactorEnsemble( ...
@@ -145,6 +163,15 @@ clim(ax, [0 1]);
 axis(ax, 'image');
 axis(ax, 'off');
 hold(ax, 'on');
+
+% Illuminated-region outline
+if nargin >= 4 && ~isempty(illuminatedRegion)
+    c0 = illuminatedRegion(1); c1 = illuminatedRegion(2);
+    r0 = illuminatedRegion(3); r1 = illuminatedRegion(4);
+    plot(ax, [c0 c1 c1 c0 c0], [r0 r0 r1 r1 r0], ...
+        '--', 'Color', [1.0 0.85 0.2], 'LineWidth', 1.5);
+end
+
 plot(ax, centroids(:,1), centroids(:,2), 'ro', ...
     'MarkerSize', 22, 'LineWidth', 1.5);
 for k = 1:size(centroids, 1)
@@ -152,7 +179,7 @@ for k = 1:size(centroids, 1)
         sprintf('%d', k), 'Color', 'y', ...
         'FontSize', 11, 'FontWeight', 'bold');
 end
-title(ax, sprintf('Reference: %d disks at 100%% fill (r = %d px)', ...
+title(ax, sprintf('Reference: %d disks at 100%% fill (r = %d px), illuminated region dashed', ...
     size(centroids, 1), radiusPx), ...
     'Color', 'w', 'FontSize', 12, 'FontWeight', 'bold');
 drawnow;

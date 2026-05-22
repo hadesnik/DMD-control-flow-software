@@ -43,6 +43,13 @@ function result = exp_ensemble_fill_factor_power(dmd, daq, roiCentroids_scan, ca
 %       .sessionDir            - Session log dir (default '').
 %       .exposureUs            - DMD per-frame exposure (default 5000).
 %       .darkTimeUs            - DMD dark time (default 0).
+%       .illuminatedRegion     - [c0 c1 r0 r1] bounding box of the DMD region
+%                                actually lit by the laser (e.g. the pi-Shaper
+%                                flat-top footprint). Used purely as a hint:
+%                                emits a warning if any ROI's disk extends
+%                                outside, and draws a yellow dashed outline on
+%                                the live figure so the operator can see the
+%                                active zone. Pass [] (default) to disable.
 %
 %     Condition 1 (uniform sweep):
 %       .runUniform            - Enable condition 1 (default true).
@@ -81,6 +88,21 @@ showLiveFigure = configField(options, 'showLiveFigure', true);
 sessionDir     = configField(options, 'sessionDir',     '');
 exposureUs     = configField(options, 'exposureUs',     5000);
 darkTimeUs     = configField(options, 'darkTimeUs',     0);
+illuminatedRegion = configField(options, 'illuminatedRegion', []);
+
+if ~isempty(illuminatedRegion)
+    if numel(illuminatedRegion) ~= 4 || ~all(isfinite(illuminatedRegion))
+        error('tfp:experiments:exp_ensemble_fill_factor_power:badRegion', ...
+            'illuminatedRegion must be a 4-element [c0 c1 r0 r1] vector or [].');
+    end
+    illuminatedRegion = double(illuminatedRegion(:)');
+    if illuminatedRegion(1) > illuminatedRegion(2) ...
+            || illuminatedRegion(3) > illuminatedRegion(4)
+        error('tfp:experiments:exp_ensemble_fill_factor_power:badRegion', ...
+            'illuminatedRegion must satisfy c0<=c1 and r0<=r1; got %s.', ...
+            mat2str(illuminatedRegion));
+    end
+end
 
 % --- Condition 1 options ---
 runUniform           = configField(options, 'runUniform',           true);
@@ -129,6 +151,24 @@ nROIs = size(roiCentroids_scan, 1);
 % --- Coordinate transform: scan-field -> DMD pixels ---
 dmdCentroids = scanFieldToDMD(roiCentroids_scan, calib);
 dmdCentroids = clampToDMD(dmdCentroids, dmd, roiCentroids_scan);
+
+% --- Soft check: ROI disks should fit inside the illuminated DMD region ---
+if ~isempty(illuminatedRegion)
+    c0 = illuminatedRegion(1); c1 = illuminatedRegion(2);
+    r0 = illuminatedRegion(3); r1 = illuminatedRegion(4);
+    outside = (dmdCentroids(:,1) - radiusPx) < c0 ...
+            | (dmdCentroids(:,1) + radiusPx) > c1 ...
+            | (dmdCentroids(:,2) - radiusPx) < r0 ...
+            | (dmdCentroids(:,2) + radiusPx) > r1;
+    if any(outside)
+        warning('tfp:experiments:exp_ensemble_fill_factor_power:roiOutsideIllumination', ...
+            ['%d of %d ROI disks (r=%g px) extend outside the illuminated DMD ' ...
+             'region [c=%g..%g, r=%g..%g]. Pixels outside this region will not ' ...
+             'receive laser light. ROIs: %s'], ...
+            sum(outside), size(dmdCentroids, 1), radiusPx, c0, c1, r0, r1, ...
+            mat2str(find(outside(:))'));
+    end
+end
 
 % Seed the master RNG once — every fillFactorEnsemble call below uses
 % rngSeed=[] so the same RNG stream is consumed in sequence (reproducible
@@ -263,7 +303,7 @@ dmd.armSequence();
 
 % --- Live figure ---
 if showLiveFigure
-    lh = initLiveFigure(dmd.nRows, dmd.nCols, dmdCentroids, radiusPx);
+    lh = initLiveFigure(dmd.nRows, dmd.nCols, dmdCentroids, radiusPx, illuminatedRegion);
 else
     lh = [];
 end
@@ -474,7 +514,7 @@ end
 % Live figure
 % =========================================================================
 
-function lh = initLiveFigure(nRows, nCols, dmdCentroids, radiusPx)
+function lh = initLiveFigure(nRows, nCols, dmdCentroids, radiusPx, illuminatedRegion)
 lh.fig = figure('Name', 'Fill-Factor Power Sweep — Live DMD Pattern', ...
     'NumberTitle', 'off', 'Color', 'k', ...
     'Position', [80 80 960 640]);
@@ -487,6 +527,14 @@ clim(lh.ax, [0 1]);
 axis(lh.ax, 'image');
 axis(lh.ax, 'off');
 hold(lh.ax, 'on');
+
+% Illuminated-region outline (yellow dashed) — drawn beneath ROI markers.
+if ~isempty(illuminatedRegion)
+    c0 = illuminatedRegion(1); c1 = illuminatedRegion(2);
+    r0 = illuminatedRegion(3); r1 = illuminatedRegion(4);
+    plot(lh.ax, [c0 c1 c1 c0 c0], [r0 r0 r1 r1 r0], ...
+        '--', 'Color', [1.0 0.85 0.2], 'LineWidth', 1.5);
+end
 
 lh.markersAll = plot(lh.ax, dmdCentroids(:,1), dmdCentroids(:,2), ...
     'o', 'Color', [0.4 0.4 0.4], 'MarkerSize', 18, ...
