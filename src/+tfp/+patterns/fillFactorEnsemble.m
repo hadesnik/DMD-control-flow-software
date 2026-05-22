@@ -33,7 +33,10 @@ function [pattern, info] = fillFactorEnsemble(dmd, centroids, radiusPx, fillFrac
 %                       the power sweep). If empty, fresh permutations are
 %                       drawn (default {}).
 %       .rngSeed      - Seed for fresh permutations (default 'shuffle'). Only
-%                       used when .permutations is empty.
+%                       used when .permutations is empty. Pass [] to leave
+%                       the global RNG state untouched — useful when the
+%                       caller seeds once at session start and wants every
+%                       independent call to advance the same RNG sequence.
 %
 %   Outputs:
 %     pattern - logical(nRows, nCols), the union of all per-neuron ON pixels.
@@ -101,7 +104,9 @@ end
 
 freshPerms = isempty(perms_);
 if freshPerms
-    rng(rngSeed);
+    if ~isempty(rngSeed)
+        rng(rngSeed);
+    end
     perms_ = cell(N, 1);
 end
 
