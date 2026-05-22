@@ -1226,6 +1226,65 @@ mock data (no USB). Hardware testing deferred until EVM arrives.
 
 ---
 
+## TASK-EXP-FF: Ensemble fill-factor power-modulation experiment [DONE 2026-05-22]
+
+**No dependencies.** Pure mock build; runs end-to-end against MockDMD/MockDAQ.
+**Files (NEW):**
+  src/+tfp/+patterns/fillFactorEnsemble.m
+  src/+tfp/+experiments/exp_ensemble_fill_factor_power.m
+  scripts/run_ensemble_fill_factor_power.m
+  tests/test_ensemble_fill_factor_mock.m
+
+**Context:**
+Hero-figure experiment for the BRAIN R01: hold the laser AO command at a
+fixed voltage and modulate effective power per neuron by varying the
+fraction of DMD pixels lit inside each per-neuron disk. Replaces analog
+power sweeps with a DMD-only sweep, which is the unique capability the
+DMD has over an SLM.
+
+**What got built today:**
+1. **Per-neuron disk subsampling** — `fillFactorEnsemble(dmd, centroids,
+   radiusPx, fractions)` builds a logical mask per ROI by drawing a
+   filled disk, then keeping a random `fractions(i)` subset of its pixels.
+   Same RNG stream consumed across calls for reproducibility.
+2. **Two conditions wired into the experiment**:
+   - **Uniform sweep:** all ROIs share the same fill fraction; sweep
+     10%–100% in 10% steps, 10 repeats per level (100 trials).
+   - **Differential per-cell:** each ROI gets its own fill fraction in
+     a single trial — used to drive distinct effective powers
+     simultaneously across the ensemble. 10 repeats.
+3. **10-repeat averaging** added to both conditions; trial structure
+   logs per-ROI fill fraction and the realized pixel count so post-hoc
+   analysis can recover the actual delivered "dose" per cell.
+4. **Illuminated-region awareness**:
+   - New `options.illuminatedRegion = [c0 c1 r0 r1]` argument bounds the
+     DMD region actually lit by the laser (π-Shaper flat-top footprint).
+   - Soft check emits `tfp:experiments:exp_ensemble_fill_factor_power:roiOutsideIllumination`
+     warning if any ROI disk extends outside the lit zone — pixels there
+     contribute zero power even though they're "on" in the mask.
+   - Live figure (and mock-test companion figure) draws a yellow dashed
+     outline of the region beneath the ROI markers.
+   - `scripts/run_ensemble_fill_factor_power.m` and the mock test default
+     to a 300×300 px region centered on the chip (~100 µm pilot FOV at
+     ~3 DMD px/µm).
+
+**Commits:**
+  8f1a995 — fill-factor ensemble power modulation via per-neuron disk subsampling
+  ec74efa — 10-repeat averaging + differential per-cell condition
+  1df6c48 — illuminated-region warning + outline
+
+**Verify:** `tests/test_ensemble_fill_factor_mock.m` runs the full
+sequencer end-to-end on the mock stack; existing test count unaffected.
+
+**Open follow-ups:**
+- [ ] Decide whether to promote `illuminatedRegion` from a per-experiment
+      option to a rig-level config field (likely yes — same number applies
+      to every fill-factor / multi-spot experiment on this beam path).
+- [ ] Confirm the 3 DMD px/µm scale on the real rig once the affine from
+      `alignDMDtoCamera` is measured; adjust the 300 px default if needed.
+
+---
+
 ## COMPLETED TASKS
 
 TASK-15-01 through TASK-15-05: Phase 1.5 all-optical simulator
@@ -1235,3 +1294,7 @@ TASK-P3-01: RealScanImageBridge (msocket) — structured VERIFY docs +
 TASK-PLM-2: PLM unit tests — tests/test_MockPLM.m, 13 tests covering
   computeDefocusPattern physics, pupil mask, 180° symmetry, MockPLM log,
   TIPLM_PLM stubs (committed 2026-05-20)
+TASK-EXP-FF: Ensemble fill-factor power-modulation experiment — per-neuron
+  disk subsampling, 2 conditions (uniform sweep + differential per-cell),
+  10-repeat averaging, illuminated-region awareness (commits 8f1a995,
+  ec74efa, 2026-05-22; one uncommitted illuminated-region patch)
