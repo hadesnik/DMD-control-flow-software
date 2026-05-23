@@ -168,8 +168,121 @@ if ~result.condition2.fallback
         maxR, result.condition2.maxCorrAccepted);
 end
 
-fprintf('\n[test_ensemble_fill_factor_mock] PASS — %d patterns advanced, %d AO events, %d sync TTLs.\n', ...
+% =========================================================================
+% T-SYNC-11: assert new sync behavior on the experiment's result struct.
+%   (2) Per-trial t_onset_daq_samples / t_offset_daq_samples are populated.
+%   (3) Trial sample indices increase monotonically across the run.
+%   (4) Out-pulse vs in-capture cross-check: one DO pulse per trial, and
+%       inter-trial gaps derived from sample indices agree with host-side
+%       toc gaps within a generous tolerance.
+% =========================================================================
+onsetSamplesRun  = double(result.timing.run.onsetDaqSamples);
+offsetSamplesRun = double(result.timing.run.offsetDaqSamples);
+
+assert(numel(onsetSamplesRun) == expected, ...
+    'result.timing.run.onsetDaqSamples must have %d entries, saw %d.', ...
+    expected, numel(onsetSamplesRun));
+assert(all(onsetSamplesRun  > 0), ...
+    't_onset_daq_samples must be populated (>0) for every trial.');
+assert(all(offsetSamplesRun > 0), ...
+    't_offset_daq_samples must be populated (>0) for every trial.');
+assert(all(diff(onsetSamplesRun)  > 0), ...
+    'Trial onset sample indices must be strictly increasing across the run.');
+assert(all(diff(offsetSamplesRun) > 0), ...
+    'Trial offset sample indices must be strictly increasing across the run.');
+assert(all(offsetSamplesRun > onsetSamplesRun), ...
+    'Every trial offset sample must follow its onset sample.');
+
+% Out-pulse vs in-capture cross-check: per-trial DO pulses are emitted
+% just before queueClockedAO on each trial, so their host-time deltas
+% must match the canonical sample-index deltas to within host jitter.
+nTrialPulses = sum(pulseEvents) - 1;   % subtract the session-start pulse
+assert(nTrialPulses == expected, ...
+    'Out-pulse count mismatch: expected %d per-trial pulses, saw %d.', ...
+    expected, nTrialPulses);
+
+gapsFromSamples = diff(onsetSamplesRun) / result.sampleRate;
+gapsFromHost    = diff(result.timing.run.onsetTSec);
+maxSkewS        = max(abs(gapsFromSamples - gapsFromHost));
+assert(maxSkewS < 0.050, ...
+    'Out-pulse host timing and in-capture sample timing disagree by %.3f ms (>50 ms tol).', ...
+    1000 * maxSkewS);
+
+% Captured continuous-session buffers must cover every trial: the last
+% offset sample cannot extend past the final captured sample count.
+sessionData = result.timing.daqSessionResult;
+assert(isstruct(sessionData) && isfield(sessionData, 'nSamplesTotal'), ...
+    'result.timing.daqSessionResult must carry the captured session buffers.');
+assert(offsetSamplesRun(end) <= double(sessionData.nSamplesTotal), ...
+    'Final trial offset sample (%d) exceeds session sample count (%d).', ...
+    offsetSamplesRun(end), double(sessionData.nSamplesTotal));
+
+fprintf('\n[test_ensemble_fill_factor_mock] legacy path PASS — %d patterns advanced, %d AO events, %d sync TTLs.\n', ...
     nAdvance, sum(aoEvents), sum(pulseEvents));
+fprintf('[T-SYNC-11] experiment sync PASS — %d trials, monotonic samples, max out/in skew %.3f ms.\n', ...
+    expected, 1000 * maxSkewS);
+
+% =========================================================================
+% T-SYNC-11 (cont.): frame-clock decode roundtrip
+%   (1) decodeFrameClock recovers synthesized rising-edge positions and
+%       inferred rate from a MockDAQ continuous session that exposes a
+%       frame-clock DI line. The fill-factor experiment itself does not
+%       configure a frame-clock line (sessionCfg.diLines = {}), so this
+%       roundtrip is exercised against a fresh, short session here.
+% =========================================================================
+runFrameClockDecodeRoundtrip();
+
+% =========================================================================
+% Local helper — frame-clock decode roundtrip on a fresh sync session.
+% =========================================================================
+function runFrameClockDecodeRoundtrip()
+syncSampleRate  = 100000;
+syncFrameRateHz = 30;
+syncDiLine      = 'port0/line2';
+
+syncDAQ = tfp.hardware.MockDAQ();
+syncDAQ.initialize(struct( ...
+    'sampleRate',         syncSampleRate, ...
+    'analogInChannels',   [], ...
+    'analogOutChannels',  [], ...
+    'digitalInChannels',  {{syncDiLine}}, ...
+    'digitalOutChannels', {{}}));
+
+syncCfg                      = struct();
+syncCfg.sampleRate           = syncSampleRate;
+syncCfg.aiChannels           = [];
+syncCfg.aoChannels           = [];
+syncCfg.diLines              = {syncDiLine};
+syncCfg.doLines              = {};
+syncCfg.frameClockLine       = syncDiLine;
+syncCfg.syntheticFrameRateHz = syncFrameRateHz;
+
+syncDAQ.startContinuousSession(syncCfg);
+pause(0.3);   % capture ~9 frames at 30 Hz
+sessionResult = syncDAQ.stopContinuousSession();
+
+diCol = find(strcmp(sessionResult.lineNames.diLines, ...
+    sessionResult.lineNames.frameClockLine), 1);
+assert(~isempty(diCol), 'frameClockLine column not present in diData.');
+diVec = sessionResult.diData(:, diCol);
+
+[edges, decodedRateHz] = tfp.io.decodeFrameClock(diVec, sessionResult.sampleRate);
+
+framePeriodSamples  = max(1, round(sessionResult.sampleRate / syncFrameRateHz));
+nS                  = double(sessionResult.nSamplesTotal);
+expectedEdgeSamples = uint64((1:framePeriodSamples:nS).');
+assert(isequal(edges, expectedEdgeSamples), ...
+    'Frame-clock decode roundtrip failed: %d decoded vs %d synthesized edges.', ...
+    numel(edges), numel(expectedEdgeSamples));
+assert(abs(decodedRateHz - syncFrameRateHz) < 0.5, ...
+    'Frame rate roundtrip failed: decoded %.3f Hz vs synthesized %.3f Hz.', ...
+    decodedRateHz, syncFrameRateHz);
+
+syncDAQ.cleanup();
+
+fprintf('[T-SYNC-11] frame-clock decode roundtrip PASS — %d edges, %.2f Hz.\n', ...
+    numel(edges), decodedRateHz);
+end
 
 % =========================================================================
 % Local helper

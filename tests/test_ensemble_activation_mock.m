@@ -138,7 +138,169 @@ assert(nPulsesOn == expectedOn, ...
 assert(all(diff(result.powerSeriesVoltages) > 0), ...
     'Power-series voltages should be monotonically increasing for linear curve');
 
+% =========================================================================
+% T-SYNC-11: assert new sync behavior on the experiment's result struct.
+%   (2) Per-trial t_onset_daq_samples / t_offset_daq_samples are populated.
+%   (3) Sample indices increase monotonically across the full run, with
+%       every offset > its onset.
+% =========================================================================
+allOnsetSamples = double([ ...
+    result.sequentialOnsetSamples(:); ...
+    result.ensembleOnsetSample; ...
+    result.powerSeriesOnsetSamples(:)]);
+allOffsetSamples = double([ ...
+    result.sequentialOffsetSamples(:); ...
+    result.ensembleOffsetSample; ...
+    result.powerSeriesOffsetSamples(:)]);
+
+nAllTrials = nROIs + 1 + nPowerLevels;
+assert(numel(allOnsetSamples)  == nAllTrials, ...
+    'Combined onset-sample vector length mismatch: expected %d, saw %d.', ...
+    nAllTrials, numel(allOnsetSamples));
+assert(numel(allOffsetSamples) == nAllTrials, ...
+    'Combined offset-sample vector length mismatch: expected %d, saw %d.', ...
+    nAllTrials, numel(allOffsetSamples));
+assert(all(allOnsetSamples  > 0), ...
+    't_onset_daq_samples must be populated (>0) for every trial.');
+assert(all(allOffsetSamples > 0), ...
+    't_offset_daq_samples must be populated (>0) for every trial.');
+assert(all(diff(allOnsetSamples)  > 0), ...
+    'Trial onset sample indices must be strictly increasing across the run.');
+assert(all(diff(allOffsetSamples) > 0), ...
+    'Trial offset sample indices must be strictly increasing across the run.');
+assert(all(allOffsetSamples > allOnsetSamples), ...
+    'Every trial offset sample must follow its onset sample.');
+
+% Trials must lie inside the captured continuous-session buffer.
+assert(isstruct(result.sessionData) && isfield(result.sessionData, 'nSamplesTotal'), ...
+    'result.sessionData must carry the captured continuous-session buffers.');
+assert(allOffsetSamples(end) <= double(result.sessionData.nSamplesTotal), ...
+    'Final trial offset sample (%d) exceeds session sample count (%d).', ...
+    allOffsetSamples(end), double(result.sessionData.nSamplesTotal));
+
 fprintf('\nAll assertions passed.\n');
+fprintf('[T-SYNC-11] experiment sync PASS — %d trials, sample indices monotonic.\n', ...
+    nAllTrials);
 
 dmd.cleanup();
 daq.cleanup();
+
+% =========================================================================
+% T-SYNC-11 (cont.): frame-clock decode roundtrip + out-pulse cross-check
+%
+% The activation experiment does not yet drive the out-pulse DO path
+% (T-OUT-2) nor configure a frame-clock DI line, so these two
+% guarantees are exercised against a fresh, short MockDAQ continuous
+% session here:
+%   (1) decodeFrameClock recovers synthesized rising-edge positions and
+%       inferred rate.
+%   (4) One DO pulse per trial; inter-trial host-time deltas agree with
+%       the sample-index deltas captured by currentSampleIndex within a
+%       generous tolerance.
+% =========================================================================
+runSyncPipelineCheck();
+
+% =========================================================================
+% Local helper — T-SYNC-11 sync-pipeline assertions.
+% =========================================================================
+function runSyncPipelineCheck()
+syncSampleRate  = 100000;
+syncFrameRateHz = 30;
+syncDoLine      = 'port0/line10';
+syncDiLine      = 'port0/line2';
+
+syncDAQ = tfp.hardware.MockDAQ();
+syncDAQ.initialize(struct( ...
+    'sampleRate',         syncSampleRate, ...
+    'analogInChannels',   [], ...
+    'analogOutChannels',  [], ...
+    'digitalInChannels',  {{syncDiLine}}, ...
+    'digitalOutChannels', {{syncDoLine}}));
+syncDAQ.configureDigitalOutput({syncDoLine});
+
+syncCfg                      = struct();
+syncCfg.sampleRate           = syncSampleRate;
+syncCfg.aiChannels           = [];
+syncCfg.aoChannels           = [];
+syncCfg.diLines              = {syncDiLine};
+syncCfg.doLines              = {syncDoLine};
+syncCfg.frameClockLine       = syncDiLine;
+syncCfg.syntheticFrameRateHz = syncFrameRateHz;
+
+syncDAQ.startContinuousSession(syncCfg);
+sessionStart  = datetime('now');
+sessionTic    = tic;
+
+nSyncTrials   = 5;
+stimDur_s     = 0.05;
+isi_s         = 0.05;
+syncTrials    = tfp.trial.Trial.empty;
+outPulseSecs  = nan(nSyncTrials, 1);
+
+for k = 1:nSyncTrials
+    tr            = tfp.trial.Trial();
+    tr.trialIdx   = k;
+    tr.duration_s = stimDur_s;
+    tr.preStim_s  = isi_s;
+
+    onsetIdx = syncDAQ.currentSampleIndex();
+    tr.markRunning(onsetIdx, syncSampleRate, sessionStart);
+    syncDAQ.sendDigitalPulse(syncDoLine, 0.002);
+    outPulseSecs(k) = toc(sessionTic);
+    pause(stimDur_s);
+
+    offsetIdx = syncDAQ.currentSampleIndex();
+    tr.markComplete(struct(), offsetIdx);
+
+    syncTrials(end+1) = tr; %#ok<AGROW>
+    pause(isi_s);
+end
+
+sessionResult = syncDAQ.stopContinuousSession();
+
+% (1) Frame-clock decode roundtrip — synthesized edges recovered exactly.
+diCol = find(strcmp(sessionResult.lineNames.diLines, ...
+    sessionResult.lineNames.frameClockLine), 1);
+assert(~isempty(diCol), 'frameClockLine column not present in diData.');
+diVec = sessionResult.diData(:, diCol);
+
+[edges, decodedRateHz] = tfp.io.decodeFrameClock(diVec, sessionResult.sampleRate);
+
+framePeriodSamples  = max(1, round(sessionResult.sampleRate / syncFrameRateHz));
+nS                  = double(sessionResult.nSamplesTotal);
+expectedEdgeSamples = uint64((1:framePeriodSamples:nS).');
+assert(isequal(edges, expectedEdgeSamples), ...
+    'Frame-clock decode roundtrip failed: %d decoded vs %d synthesized edges.', ...
+    numel(edges), numel(expectedEdgeSamples));
+assert(abs(decodedRateHz - syncFrameRateHz) < 0.5, ...
+    'Frame rate roundtrip failed: decoded %.3f Hz vs synthesized %.3f Hz.', ...
+    decodedRateHz, syncFrameRateHz);
+
+% (4) Out-pulse vs in-capture cross-check.
+syncLog   = syncDAQ.getLog();
+nDoPulses = sum(strcmp({syncLog.eventType}, 'sendDigitalPulse'));
+assert(nDoPulses == nSyncTrials, ...
+    'Expected %d sendDigitalPulse events (1 per trial), saw %d.', ...
+    nSyncTrials, nDoPulses);
+
+onsetSamples    = arrayfun(@(t) double(t.t_onset_daq_samples), syncTrials);
+gapsFromSamples = diff(onsetSamples) / sessionResult.sampleRate;
+gapsFromHost    = diff(outPulseSecs(:).');
+maxSkewS        = max(abs(gapsFromSamples - gapsFromHost));
+assert(maxSkewS < 0.020, ...
+    'Out-pulse host timing and in-capture sample timing disagree by %.3f ms (>20 ms tol).', ...
+    1000 * maxSkewS);
+
+% Bonus: alignTrialsToFrames runs cleanly against the decoded edges.
+[perTrial, perFrame] = tfp.io.alignTrialsToFrames(syncTrials, edges);
+assert(numel(perTrial) == nSyncTrials, ...
+    'alignTrialsToFrames perTrial length mismatch.');
+assert(height(perFrame) == numel(edges), ...
+    'alignTrialsToFrames perFrame row count mismatch.');
+
+syncDAQ.cleanup();
+
+fprintf(['[T-SYNC-11] sync pipeline PASS — %d trials, %d frame-clock edges ' ...
+         '(%.2f Hz), max out/in skew %.3f ms.\n'], ...
+    nSyncTrials, numel(edges), decodedRateHz, 1000 * maxSkewS);
+end
