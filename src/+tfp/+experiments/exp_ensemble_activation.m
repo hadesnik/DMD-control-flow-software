@@ -116,6 +116,7 @@ sessionDir     = configField(options, 'sessionDir',     '');
 saveTrials     = configField(options, 'saveTrials',     ~isempty(sessionDir));
 exposureUs     = configField(options, 'exposureUs',     5000);   % µs per pattern frame
 darkTimeUs     = configField(options, 'darkTimeUs',     0);
+frameClockLine = configField(options, 'frameClockLine', '');    % DI line carrying ScanImage frame TTL
 
 % --- Validate inputs ---
 if ~isnumeric(roiCentroids_scan) || ndims(roiCentroids_scan) ~= 2 ...
@@ -176,12 +177,23 @@ cleanupLaser   = onCleanup(@() safetyOff(daq, aoChannel));        %#ok<NASGU>
 % immediately before arming the clock; the mock arms its synthetic clock
 % inside startContinuousSession a few microseconds later.
 sessionStartDatetime = datetime('now');
+diLines = daq.digitalInChannels;
+if isempty(diLines)
+    diLines = {};
+else
+    diLines = cellstr(diLines);
+    diLines = diLines(:)';
+end
+if ~isempty(frameClockLine) && ~any(strcmp(char(frameClockLine), diLines))
+    diLines{end+1} = char(frameClockLine);
+end
 sessionCfg = struct( ...
-    'sampleRate', sampleRate, ...
-    'aiChannels', [], ...
-    'aoChannels', aoChannelIdx, ...
-    'diLines',    {{}}, ...
-    'doLines',    {{}});
+    'sampleRate',     sampleRate, ...
+    'aiChannels',     [], ...
+    'aoChannels',     aoChannelIdx, ...
+    'diLines',        {diLines}, ...
+    'doLines',        {{}}, ...
+    'frameClockLine', char(frameClockLine));
 daq.startContinuousSession(sessionCfg);
 cleanupSession = onCleanup(@() ensureSessionStopped(daq));        %#ok<NASGU>
 

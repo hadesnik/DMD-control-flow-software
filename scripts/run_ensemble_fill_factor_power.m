@@ -53,6 +53,11 @@ SYNC_DO_LINE          = 'port0/line10';   % matches configs/real.yaml
 SESSION_START_PULSE_S = 0.025;            % long, easy-to-spot reference edge
 TRIAL_ONSET_PULSE_S   = 0.002;            % short marker just before AO ramps on
 
+% Frame-clock DI line — ScanImage's per-frame TTL feeds this DI on the DAQ.
+% Captured continuously through the master-clock session so each frame's
+% rising edge gets a DAQ sample index for posthoc frame->condition lookup.
+FRAME_CLOCK_DI_LINE   = 'port0/line2';    % matches configs/real.yaml
+
 % DMD (ALP-4.1 DLi4130 until DLP650LNIR arrives)
 DMD_ROWS     = 768;
 DMD_COLS     = 1024;
@@ -100,7 +105,7 @@ daqCfg.sampleRate          = DAQ_RATE;
 daqCfg.analogOutChannels   = {AO_CHANNEL};
 daqCfg.analogInChannels    = {};
 daqCfg.digitalOutChannels  = {SYNC_DO_LINE};
-daqCfg.digitalInChannels   = {};
+daqCfg.digitalInChannels   = {FRAME_CLOCK_DI_LINE};
 daq = tfp.hardware.NI6323_DAQ(daqCfg);
 daq.initialize(daqCfg);
 
@@ -170,6 +175,7 @@ fprintf('Illuminated DMD region: cols [%g..%g], rows [%g..%g] (%dx%d px).\n', ..
 opts.syncDOLine         = SYNC_DO_LINE;
 opts.sessionStartPulseS = SESSION_START_PULSE_S;
 opts.trialOnsetPulseS   = TRIAL_ONSET_PULSE_S;
+opts.frameClockLine     = FRAME_CLOCK_DI_LINE;
 
 opts.runUniform           = true;
 opts.uniformFillFractions = UNIFORM_FRACTIONS;

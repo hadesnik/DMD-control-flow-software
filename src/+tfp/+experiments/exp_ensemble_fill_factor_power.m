@@ -117,6 +117,7 @@ illuminatedRegion = configField(options, 'illuminatedRegion', []);
 syncDOLine         = configField(options, 'syncDOLine',         'port0/line10');
 sessionStartPulseS = configField(options, 'sessionStartPulseS', 0.025);
 trialOnsetPulseS   = configField(options, 'trialOnsetPulseS',   0.002);
+frameClockLine     = configField(options, 'frameClockLine',     '');     % DI line carrying ScanImage frame TTL
 
 if ~isempty(illuminatedRegion)
     if numel(illuminatedRegion) ~= 4 || ~all(isfinite(illuminatedRegion))
@@ -373,11 +374,22 @@ if isempty(sessionSampleRate) || ~isfinite(sessionSampleRate) || sessionSampleRa
         'daq.sampleRate must be a positive scalar; got %s.', mat2str(sessionSampleRate));
 end
 
-sessionCfg              = struct();
-sessionCfg.sampleRate   = sessionSampleRate;
-sessionCfg.aiChannels   = daq.analogInChannels;
-sessionCfg.aoChannels   = daq.analogOutChannels;
-sessionCfg.diLines      = {};
+diLines = daq.digitalInChannels;
+if isempty(diLines)
+    diLines = {};
+else
+    diLines = cellstr(diLines);
+    diLines = diLines(:)';
+end
+if ~isempty(frameClockLine) && ~any(strcmp(char(frameClockLine), diLines))
+    diLines{end+1} = char(frameClockLine);
+end
+sessionCfg                = struct();
+sessionCfg.sampleRate     = sessionSampleRate;
+sessionCfg.aiChannels     = daq.analogInChannels;
+sessionCfg.aoChannels     = daq.analogOutChannels;
+sessionCfg.diLines        = diLines;
+sessionCfg.frameClockLine = char(frameClockLine);
 if syncEnabled
     sessionCfg.doLines  = {syncDOLine};
 else

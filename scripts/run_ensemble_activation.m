@@ -52,6 +52,11 @@ ROI_PORT        = 3045;
 MSOCKET_PATH    = '';     % e.g. 'C:\path\to\msocket'; leave '' if already on path
 ROI_TIMEOUT_S   = 120;   % seconds to wait for imaging PC to connect
 
+% Frame-clock DI line — ScanImage's per-frame TTL feeds this DI on the DAQ.
+% Captured continuously through the master-clock session so each frame's
+% rising edge gets a DAQ sample index for posthoc frame->condition lookup.
+FRAME_CLOCK_DI_LINE = 'port0/line2';   % matches configs/real.yaml
+
 % =========================================================================
 % Hardware init
 % =========================================================================
@@ -67,7 +72,7 @@ daqCfg.sampleRate          = DAQ_RATE;
 daqCfg.analogOutChannels   = {AO_CHANNEL};
 daqCfg.analogInChannels    = {};
 daqCfg.digitalOutChannels  = {};
-daqCfg.digitalInChannels   = {};
+daqCfg.digitalInChannels   = {FRAME_CLOCK_DI_LINE};
 daq = tfp.hardware.NI6323_DAQ(daqCfg);
 daq.initialize(daqCfg);
 
@@ -122,6 +127,7 @@ opts.aoChannel      = AO_CHANNEL;
 opts.powerV         = POWER_V;
 opts.showLiveFigure = true;
 opts.sessionDir     = SESSION_DIR;
+opts.frameClockLine = FRAME_CLOCK_DI_LINE;
 
 result = tfp.experiments.exp_ensemble_activation( ...
     dmd, daq, roiCentroids_scan, calib, opts);
