@@ -1,7 +1,8 @@
 %test_ensemble_fill_factor_mock  Mac-runnable demo of fill-factor power experiment.
 %
 %   Exercises both conditions of tfp.experiments.exp_ensemble_fill_factor_power
-%   against MockDMD + MockDAQ — no real hardware needed.
+%   against MockDMD + MockDAQ + MockScanImageBridge (episodic, T-EP-3b) — no
+%   real hardware needed.
 %
 %   Cond 1: 10 fill levels (10% .. 100%) x 3 repeats = 30 trials, shuffled.
 %   Cond 2: 3 decorrelated per-cell distributions x 3 repeats = 9 trials.
@@ -24,19 +25,37 @@
 
 addpath(fullfile(fileparts(mfilename('fullpath')), '..', 'src'));
 
+% Episodic-aligner one-shot warnings (overlap, lowConfidence) are persistent
+% across MATLAB sessions; reset so a previous test's state cannot mask a
+% warning we want to observe here.
+tfp.io.resetAlignTrialsEpisodicWarnings();
+
 % -------------------------------------------------------------------------
 % Mock hardware
 % -------------------------------------------------------------------------
 dmd = tfp.hardware.MockDMD();
 dmd.initialize(struct('nRows', 800, 'nCols', 1280));
 
+frameClockLine = 'port0/line2';
+
 daq = tfp.hardware.MockDAQ();
 daq.initialize(struct( ...
     'sampleRate',         10000, ...
     'analogInChannels',   [], ...
     'analogOutChannels',  1, ...
-    'digitalInChannels',  {{}}, ...
+    'digitalInChannels',  {{frameClockLine}}, ...
     'digitalOutChannels', {{'port0/line10'}}));
+
+% Episodic ScanImage bridge — writes one .mat sidecar per trial to a
+% test-private tempdir so the aligner has real files to read.
+mockTiffDir = fullfile(tempdir(), 'tfp_test_fill_factor_tiffs');
+if exist(mockTiffDir, 'dir')
+    rmdir(mockTiffDir, 's');
+end
+siBridge = tfp.hardware.MockScanImageBridge({}, struct( ...
+    'frameRateHz',     30, ...
+    'simulateLatency', false, ...
+    'mockTiffDir',     mockTiffDir));
 
 % Identity calibration: scan-field coords == DMD pixel coords for the mock.
 calib.dmdToScan_affine    = eye(3);
@@ -104,10 +123,15 @@ options.differentialNRepeats     = 3;
 options.differentialFillSet      = [0.2 0.4 0.6 0.8 1.0];
 options.differentialMaxCorr      = 0.15;
 
-% Sync TTL — exercise the per-trial onset pulse path in the mock.
+% Sync TTL + episodic ScanImage bridge — exercises the per-trial start-acq
+% pulse path and the post-session frame-clock cross-check.
 options.syncDOLine         = 'port0/line10';
 options.sessionStartPulseS = 0.025;
-options.trialOnsetPulseS   = 0.002;
+options.startAcqPulseS     = 0.002;
+options.frameClockLine     = frameClockLine;
+options.frameRateHz        = 30;
+options.frameBufferFrames  = 2;
+options.siBridge           = siBridge;
 
 % -------------------------------------------------------------------------
 % Run
@@ -125,16 +149,16 @@ assert(nAdvance == expected, ...
     'Expected %d advanceToPattern events, saw %d.', expected, nAdvance);
 
 aoLog = daq.getLog();
-% Round-3 refactor: stim AO is queued via queueClockedAO against a single
-% continuous DAQ session. The remaining outputSingleAnalog calls are the
-% pre-session safety-off and the onCleanup safety-off (2 total).
+% Episodic refactor (T-EP-3b): stim AO is queued via queueClockedAO against
+% a single continuous DAQ session. The remaining outputSingleAnalog calls
+% are the pre-session safety-off and the onCleanup safety-off (2 total).
 clockedAoEvents = strcmp({aoLog.eventType}, 'queueClockedAO');
 assert(sum(clockedAoEvents) == expected, ...
     'Expected %d queueClockedAO events (1 per trial), saw %d.', ...
     expected, sum(clockedAoEvents));
 aoEvents = strcmp({aoLog.eventType}, 'outputSingleAnalog');
 
-% Sync TTL log: 1 session-start pulse + 1 per-trial onset pulse.
+% DO pulse log: 1 session-start pulse + 1 per-trial start-acq pulse.
 pulseEvents = strcmp({aoLog.eventType}, 'sendDigitalPulse');
 assert(sum(pulseEvents) == expected + 1, ...
     'Expected %d sendDigitalPulse events (1 session-start + %d trials), saw %d.', ...
@@ -173,12 +197,8 @@ if ~result.condition2.fallback
 end
 
 % =========================================================================
-% T-SYNC-11: assert new sync behavior on the experiment's result struct.
-%   (2) Per-trial t_onset_daq_samples / t_offset_daq_samples are populated.
-%   (3) Trial sample indices increase monotonically across the run.
-%   (4) Out-pulse vs in-capture cross-check: one DO pulse per trial, and
-%       inter-trial gaps derived from sample indices agree with host-side
-%       toc gaps within a generous tolerance.
+% T-SYNC-11 carryover: per-trial DAQ-sample anchors are populated and
+% monotonic; captured session buffers fully cover the experiment window.
 % =========================================================================
 onsetSamplesRun  = double(result.timing.run.onsetDaqSamples);
 offsetSamplesRun = double(result.timing.run.offsetDaqSamples);
@@ -197,19 +217,19 @@ assert(all(diff(offsetSamplesRun) > 0), ...
 assert(all(offsetSamplesRun > onsetSamplesRun), ...
     'Every trial offset sample must follow its onset sample.');
 
-% Out-pulse vs in-capture cross-check: per-trial DO pulses are emitted
-% just before queueClockedAO on each trial, so their host-time deltas
-% must match the canonical sample-index deltas to within host jitter.
+% Out-pulse vs in-capture cross-check: per-trial start-acq pulses fire
+% just before queueClockedAO on each trial, so their host-time deltas must
+% match the canonical sample-index deltas to within host jitter.
 nTrialPulses = sum(pulseEvents) - 1;   % subtract the session-start pulse
 assert(nTrialPulses == expected, ...
-    'Out-pulse count mismatch: expected %d per-trial pulses, saw %d.', ...
+    'Start-acq pulse count mismatch: expected %d per-trial pulses, saw %d.', ...
     expected, nTrialPulses);
 
 gapsFromSamples = diff(onsetSamplesRun) / result.sampleRate;
 gapsFromHost    = diff(result.timing.run.onsetTSec);
 maxSkewS        = max(abs(gapsFromSamples - gapsFromHost));
 assert(maxSkewS < 0.050, ...
-    'Out-pulse host timing and in-capture sample timing disagree by %.3f ms (>50 ms tol).', ...
+    'Start-acq host timing and in-capture sample timing disagree by %.3f ms (>50 ms tol).', ...
     1000 * maxSkewS);
 
 % Captured continuous-session buffers must cover every trial: the last
@@ -227,14 +247,94 @@ fprintf('[T-SYNC-11] experiment sync PASS — %d trials, monotonic samples, max 
     expected, 1000 * maxSkewS);
 
 % =========================================================================
+% T-EP-3b: assert episodic-bridge behaviour
+%   (1) beginSession was called exactly once before the trial loop.
+%   (2) armForExternalTrigger was called once per trial.
+%   (3) getLastTiffPath was called once per trial; each returned path is
+%       a non-empty .mat sidecar that exists on disk.
+%   (4) Every trial.siTiffPath is populated.
+%   (5) result.alignReport.fatal == false for the clean mock session.
+%   (6) result.perFrame is a table with the documented columns.
+% =========================================================================
+bridgeLog        = siBridge.getLog();
+beginSessionEvts = strcmp({bridgeLog.eventType}, 'beginSession');
+armEvts          = strcmp({bridgeLog.eventType}, 'armForExternalTrigger');
+tiffPathEvts     = strcmp({bridgeLog.eventType}, 'getLastTiffPath');
+assert(sum(beginSessionEvts) == 1, ...
+    'beginSession must be called exactly once; saw %d.', sum(beginSessionEvts));
+% The beginSession event must precede every arm event.
+firstBeginIdx = find(beginSessionEvts, 1, 'first');
+firstArmIdx   = find(armEvts,          1, 'first');
+assert(~isempty(firstArmIdx) && firstBeginIdx < firstArmIdx, ...
+    'beginSession must precede the trial loop''s first armForExternalTrigger.');
+assert(sum(armEvts) == expected, ...
+    'Expected %d armForExternalTrigger calls (1 per trial), saw %d.', ...
+    expected, sum(armEvts));
+assert(sum(tiffPathEvts) == expected, ...
+    'Expected %d getLastTiffPath calls (1 per trial), saw %d.', ...
+    expected, sum(tiffPathEvts));
+
+% Every per-trial TIFF path is a non-empty .mat sidecar that exists on disk.
+runTiffPaths = result.timing.run.tiffPaths;
+assert(numel(runTiffPaths) == expected, ...
+    'result.timing.run.tiffPaths must hold %d entries; saw %d.', ...
+    expected, numel(runTiffPaths));
+for k = 1:expected
+    p = runTiffPaths{k};
+    assert(~isempty(p), 'Trial %d has empty siTiffPath.', k);
+    assert(endsWith(p, '.mat'), ...
+        'Trial %d TIFF path %s does not end in .mat.', k, p);
+    assert(exist(p, 'file') == 2, ...
+        'Trial %d sidecar %s does not exist on disk.', k, p);
+end
+
+% Trial-object copies inside result.trials also carry the siTiffPath.
+assert(isfield(result, 'trials') && numel(result.trials) == expected, ...
+    'result.trials must contain %d Trial objects.', expected);
+for k = 1:expected
+    assert(~isempty(result.trials(k).siTiffPath), ...
+        'result.trials(%d).siTiffPath is empty.', k);
+    assert(strcmp(result.trials(k).siTiffPath, runTiffPaths{k}), ...
+        'Trial(%d).siTiffPath disagrees with timing.run.tiffPaths.', k);
+end
+
+% Align report exists and is non-fatal for the clean mock run.
+assert(isfield(result, 'alignReport') && isstruct(result.alignReport), ...
+    'result.alignReport must be a struct.');
+assert(islogical(result.alignReport.fatal) && ~result.alignReport.fatal, ...
+    'result.alignReport.fatal must be false for a clean mock session (reason="%s").', ...
+    char(result.alignReport.fatalReason));
+
+% perFrame is a table with the documented column set.
+assert(isfield(result, 'perFrame') && istable(result.perFrame), ...
+    'result.perFrame must be a table.');
+expectedVars = {'frameIdx', 'frameStartSample', 'trialIdx', 'phase'};
+actualVars   = result.perFrame.Properties.VariableNames;
+for v = 1:numel(expectedVars)
+    assert(any(strcmp(actualVars, expectedVars{v})), ...
+        'result.perFrame missing column "%s" (have: %s).', ...
+        expectedVars{v}, strjoin(actualVars, ', '));
+end
+assert(height(result.perFrame) == numel(result.frameStartSamples), ...
+    'result.perFrame row count (%d) must match numel(frameStartSamples) (%d).', ...
+    height(result.perFrame), numel(result.frameStartSamples));
+
+fprintf('[T-EP-3b] episodic bridge PASS — beginSession=1, arm=%d, getLastTiffPath=%d, alignReport.fatal=false, perFrame=%dx%d.\n', ...
+    sum(armEvts), sum(tiffPathEvts), height(result.perFrame), width(result.perFrame));
+
+% =========================================================================
 % T-SYNC-11 (cont.): frame-clock decode roundtrip
 %   (1) decodeFrameClock recovers synthesized rising-edge positions and
 %       inferred rate from a MockDAQ continuous session that exposes a
-%       frame-clock DI line. The fill-factor experiment itself does not
-%       configure a frame-clock line (sessionCfg.diLines = {}), so this
-%       roundtrip is exercised against a fresh, short session here.
+%       frame-clock DI line. Exercised on a fresh, short session here so
+%       the assertions are independent of the experiment's pacing.
 % =========================================================================
 runFrameClockDecodeRoundtrip();
+
+% Best-effort cleanup of the test's mock-TIFF sidecar directory.
+if exist(mockTiffDir, 'dir')
+    rmdir(mockTiffDir, 's');
+end
 
 % =========================================================================
 % Local helper — frame-clock decode roundtrip on a fresh sync session.

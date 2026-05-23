@@ -51,20 +51,39 @@ function result = exp_ensemble_fill_factor_power(dmd, daq, roiCentroids_scan, ca
 %                                outside, and draws a yellow dashed outline on
 %                                the live figure so the operator can see the
 %                                active zone. Pass [] (default) to disable.
-%       .syncDOLine            - DO line name to pulse as the ScanImage sync
-%                                marker (default 'port0/line10'). One long
-%                                pulse at session start, one short pulse at
-%                                each trial onset. Set to '' (empty) to
-%                                disable TTL output entirely. If the line is
-%                                not in daq.digitalOutChannels, sync is
-%                                skipped with a warning (mock-friendly).
+%       .syncDOLine            - DO line carrying the operator-visible
+%                                session-start TTL marker plus the per-trial
+%                                start-acq TTL into ScanImage (default
+%                                'port0/line10'). Set to '' to disable both.
+%                                Episodic mode (T-EP-3b): the per-trial pulse
+%                                on this line is the start-acq trigger for
+%                                ScanImage, replacing the legacy onset-marker
+%                                pulse role.
 %       .sessionStartPulseS    - Width of the session-start pulse (default
 %                                0.025 s). Long pulse so the operator can see
 %                                a single distinct edge before the run.
-%       .trialOnsetPulseS      - Width of the per-trial onset pulse (default
-%                                0.002 s). Each trial's stim-on TTL edge marks
-%                                t_onset for that trial in ScanImage's recorded
-%                                aux trace.
+%       .startAcqPulseS        - Width of the per-trial start-acq TTL into
+%                                ScanImage (default 2e-4 s, 200 us). Clean
+%                                rising edge is the only requirement.
+%       .frameClockLine        - DI line capturing the ScanImage frame clock
+%                                (default ''). When set, the line is added to
+%                                the continuous-session DI list and decoded
+%                                post-session for the alignTrialsEpisodic
+%                                cross-check.
+%       .frameRateHz           - ScanImage frame rate, Hz (default 30). Used
+%                                to size each trial's per-trial acquisition
+%                                (nFrames = ceil(trialWindowS * frameRateHz)
+%                                + frameBufferFrames).
+%       .frameBufferFrames     - Extra frames added to the per-trial nFrames
+%                                so the acquisition fully spans the stim
+%                                window (default 2).
+%       .armTimeoutS           - Bridge arm timeout, s (default 5.0).
+%       .trialTimeoutMult      - waitForCompletion timeout is
+%                                trialTimeoutMult * trialWindowS, with a
+%                                floor of 1 s (default 1.5).
+%       .siBridge              - Pre-built episodic ScanImage bridge. If
+%                                empty / omitted a fresh MockScanImageBridge
+%                                is constructed for the mock pipeline.
 %
 %     Condition 1 (uniform sweep):
 %       .runUniform            - Enable condition 1 (default true).
@@ -90,14 +109,17 @@ function result = exp_ensemble_fill_factor_power(dmd, daq, roiCentroids_scan, ca
 %
 %   Stim AO is driven via `daq.queueClockedAO`, not `outputSingleAnalog +
 %   pause`, so onset/offset are anchored to hardware sample indices (see
-%   docs/SYNC_FRAME.md §4). The per-trial DO out-pulse is kept as a
-%   redundant ScanImage-side marker.
+%   docs/SYNC_FRAME.md §4). The per-trial DO out-pulse is the ScanImage
+%   start-acq trigger; one TIFF is written per trial (docs/SYNC_EPISODIC.md
+%   §3). After the trial loop, the captured frame-clock DI is decoded and
+%   passed with the per-trial TIFF paths to `tfp.io.alignTrialsEpisodic`
+%   for the cross-check.
 %
 %   When `options.sessionDir` is a folder, each completed trial is also
 %   persisted via `tfp.io.saveTrial`, with the new sample anchors carried
 %   into the meta file (docs/SYNC_FRAME.md §6.1).
 %
-%   See also tfp.patterns.fillFactorEnsemble.
+%   See also tfp.patterns.fillFactorEnsemble, tfp.io.alignTrialsEpisodic.
 
 if nargin < 5 || isempty(options)
     options = struct();
@@ -117,8 +139,13 @@ darkTimeUs     = configField(options, 'darkTimeUs',     0);
 illuminatedRegion = configField(options, 'illuminatedRegion', []);
 syncDOLine         = configField(options, 'syncDOLine',         'port0/line10');
 sessionStartPulseS = configField(options, 'sessionStartPulseS', 0.025);
-trialOnsetPulseS   = configField(options, 'trialOnsetPulseS',   0.002);
+startAcqPulseS     = configField(options, 'startAcqPulseS',     2e-4);
 frameClockLine     = configField(options, 'frameClockLine',     '');     % DI line carrying ScanImage frame TTL
+frameRateHz        = configField(options, 'frameRateHz',        30);
+frameBufferFrames  = configField(options, 'frameBufferFrames',  2);
+armTimeoutS        = configField(options, 'armTimeoutS',        5.0);
+trialTimeoutMult   = configField(options, 'trialTimeoutMult',   1.5);
+siBridge           = configField(options, 'siBridge',           []);
 
 if ~isempty(illuminatedRegion)
     if numel(illuminatedRegion) ~= 4 || ~all(isfinite(illuminatedRegion))
@@ -175,6 +202,19 @@ if runDifferential
             'differentialFillSet must be a non-empty vector of values in [0, 1].');
     end
 end
+
+if ~(isnumeric(frameRateHz) && isscalar(frameRateHz) && isfinite(frameRateHz) && frameRateHz > 0)
+    error('tfp:experiments:exp_ensemble_fill_factor_power:badFrameRate', ...
+        'frameRateHz must be a positive finite scalar.');
+end
+frameRateHz = double(frameRateHz);
+
+if ~(isnumeric(frameBufferFrames) && isscalar(frameBufferFrames) ...
+        && isfinite(frameBufferFrames) && frameBufferFrames >= 0)
+    error('tfp:experiments:exp_ensemble_fill_factor_power:badFrameBuffer', ...
+        'frameBufferFrames must be a non-negative finite scalar.');
+end
+frameBufferFrames = double(frameBufferFrames);
 
 nROIs = size(roiCentroids_scan, 1);
 
@@ -343,21 +383,35 @@ daq.outputSingleAnalog(aoChannel, 0);
 cleanupLaser = onCleanup(@() safetyOff(daq, aoChannel));  %#ok<NASGU>
 
 % =========================================================================
-% Sync line setup — TTL marker into ScanImage for posthoc trial alignment
+% Sync line setup — operator-visible session-start TTL plus per-trial
+% start-acq TTL into ScanImage (docs/SYNC_EPISODIC.md §3).
 % =========================================================================
-syncEnabled = ~isempty(syncDOLine) && trialOnsetPulseS > 0;
+syncEnabled = ~isempty(syncDOLine) && startAcqPulseS > 0;
 if syncEnabled
     availLines = cellstr(daq.digitalOutChannels);
     if isempty(availLines) || ~any(strcmp(syncDOLine, availLines))
         warning('tfp:experiments:exp_ensemble_fill_factor_power:syncLineUnavailable', ...
             ['syncDOLine ''%s'' is not in daq.digitalOutChannels = [%s]. ' ...
-             'Sync TTLs disabled — only software timestamps will be logged.'], ...
+             'Start-acq TTLs disabled — ScanImage will not be triggered.'], ...
             syncDOLine, strjoin(availLines, ', '));
         syncEnabled = false;
     else
         daq.configureDigitalOutput({syncDOLine});
     end
 end
+
+% =========================================================================
+% Episodic ScanImage bridge — one TIFF per trial (docs/SYNC_EPISODIC.md §3).
+% If no bridge is supplied, construct a mock so the experiment is runnable
+% end-to-end on the dev machine.
+% =========================================================================
+ownsBridge = false;
+if isempty(siBridge)
+    siBridge   = tfp.hardware.MockScanImageBridge({}, struct( ...
+        'frameRateHz', frameRateHz, 'simulateLatency', false));
+    ownsBridge = true;
+end
+cleanupBridge = onCleanup(@() disconnectBridgeSafely(siBridge, ownsBridge));  %#ok<NASGU>
 
 % =========================================================================
 % Start the continuous DAQ master-clock session for the whole experiment.
@@ -406,7 +460,9 @@ timing = struct();
 timing.syncDOLine         = syncDOLine;
 timing.syncEnabled        = syncEnabled;
 timing.sessionStartPulseS = sessionStartPulseS;
-timing.trialOnsetPulseS   = trialOnsetPulseS;
+timing.startAcqPulseS     = startAcqPulseS;
+timing.frameRateHz        = frameRateHz;
+timing.frameBufferFrames  = frameBufferFrames;
 
 if c1.nTrials > 0
     c1.onsetDatetime    = NaT(c1.nTrials, 1);
@@ -415,6 +471,7 @@ if c1.nTrials > 0
     c1.offsetTSec       = nan(c1.nTrials, 1);
     c1.onsetDaqSamples  = zeros(c1.nTrials, 1, 'uint64');
     c1.offsetDaqSamples = zeros(c1.nTrials, 1, 'uint64');
+    c1.tiffPaths        = repmat({''}, c1.nTrials, 1);
 end
 if c2.nTrials > 0
     c2.onsetDatetime    = NaT(c2.nTrials, 1);
@@ -423,14 +480,23 @@ if c2.nTrials > 0
     c2.offsetTSec       = nan(c2.nTrials, 1);
     c2.onsetDaqSamples  = zeros(c2.nTrials, 1, 'uint64');
     c2.offsetDaqSamples = zeros(c2.nTrials, 1, 'uint64');
+    c2.tiffPaths        = repmat({''}, c2.nTrials, 1);
 end
 
+% =========================================================================
+% Begin the episodic ScanImage session (snapshots logFileCounter etc.).
+% See docs/SYNC_EPISODIC.md §9.2. Persist sessionInfo into result.timing so
+% the per-trial TIFF paths can be reconstructed from disk post-hoc.
+% =========================================================================
+sessionInfo = siBridge.beginSession(struct());
+timing.sessionInfo = sessionInfo;
+
 % Session start: long TTL marker + master tic. The session-start TTL is the
-% reference edge against which all per-trial onsets are measured in
-% ScanImage's recorded aux trace. The DAQ master clock is already running
-% from startContinuousSession above; sessionStartDatetime here is the
-% host-side anchor used for Trial.session_start_datetime.
-timing.sessionStartDatetime = datetime('now');
+% operator-visible reference edge against which all per-trial onsets are
+% measured in ScanImage's recorded aux trace. The DAQ master clock is
+% already running from startContinuousSession above; sessionStartDatetime
+% here is the host-side anchor used for Trial.session_start_datetime.
+timing.sessionStartDatetime = sessionInfo.sessionStartDatetime;
 timing.daqSampleRateHz      = sessionSampleRate;
 if syncEnabled && sessionStartPulseS > 0
     daq.sendDigitalPulse(syncDOLine, sessionStartPulseS);
@@ -445,6 +511,16 @@ timing.sessionStartTSec = 0;
 nOnSamples   = max(1, round(stimDurationS * sessionSampleRate));
 nAoChans     = numel(daq.analogOutChannels);
 stimWaveform = [powerV * ones(nOnSamples, nAoChans); zeros(1, nAoChans)];
+
+% Per-trial acquisition sizing. Each trial's TIFF must fully span the stim
+% window; we add frameBufferFrames so partial-frame edges don't truncate.
+trialWindowS  = stimDurationS;
+nFramesPerTrial = uint32(max(1, ceil(trialWindowS * frameRateHz) + frameBufferFrames));
+trialTimeoutS   = max(1.0, trialTimeoutMult * (double(nFramesPerTrial) / frameRateHz));
+
+% Collected trial objects (one per stim, ordered cond1 then cond2 in
+% execution order). Used after the loop to drive alignTrialsEpisodic.
+trials = repmat(tfp.trial.Trial(), 1, 0);
 
 % =========================================================================
 % Run condition 1
@@ -467,18 +543,28 @@ if runUniform
                 k, c1.nTrials, fill*100, rep, c1.nRepeats, lvl, c1.nLevels), ...
             false);    % no per-cell labels in cond 1 (all cells same)
 
-        % Sync TTL rising edge + onset timestamps (before AO ramps on so
-        % the recorded edge precedes the laser by exactly trialOnsetPulseS).
+        % Arm ScanImage for this trial's TIFF (blocking; bounded by
+        % armTimeoutS internally). Must complete before the start-acq TTL.
+        siBridge.armForExternalTrigger(nFramesPerTrial);
+
         c1.onsetDatetime(k) = datetime('now');
         c1.onsetTSec(k)     = toc(t0);
+
+        % Per-trial start-acq pulse fires the new ScanImage acquisition.
         if syncEnabled
-            daq.sendDigitalPulse(syncDOLine, trialOnsetPulseS);
+            daq.sendDigitalPulse(syncDOLine, startAcqPulseS);
         end
 
+        % Queue the stim AO immediately on the next clock tick; returned
+        % sample index is the canonical t_onset anchor for this trial.
         startSampleIdx = daq.queueClockedAO(stimWaveform, sessionSampleRate, 'immediate');
         c1.onsetDaqSamples(k)  = startSampleIdx;
         c1.offsetDaqSamples(k) = startSampleIdx + uint64(nOnSamples - 1);
-        pause(stimDurationS);
+
+        % Block until ScanImage has written this trial's TIFF.
+        siBridge.waitForCompletion(trialTimeoutS);
+        c1.tiffPaths{k} = siBridge.getLastTiffPath();
+
         c1.offsetDatetime(k) = datetime('now');
         c1.offsetTSec(k)     = toc(t0);
 
@@ -487,15 +573,23 @@ if runUniform
             sprintf('Cond 1  trial %d/%d  —  %.0f%% fill  —  off', ...
                 k, c1.nTrials, fill*100), false);
 
+        trial = buildTrialObject(k, 1, t, sIdx, ...
+            c1.fillPerCell(:, t), dmdCentroids, ...
+            stimDurationS, interStimS, powerV, ...
+            c1.onsetDaqSamples(k), c1.offsetDaqSamples(k), ...
+            sessionSampleRate, timing.sessionStartDatetime, ...
+            c1.onsetDatetime(k), c1.tiffPaths{k}, ...
+            struct('fillFraction', fill, 'levelIdx', lvl, ...
+                   'repeatIdx', rep, 'nOnPixels', c1.nOnPixels(:, t)));
+        trials(end+1) = trial; %#ok<AGROW>
+
         if ~isempty(sessionDir) && isfolder(sessionDir)
-            persistTrial(sessionDir, k, 1, t, sIdx, ...
-                c1.fillPerCell(:, t), dmdCentroids, ...
-                stimDurationS, interStimS, powerV, ...
-                c1.onsetDaqSamples(k), c1.offsetDaqSamples(k), ...
-                sessionSampleRate, timing.sessionStartDatetime, ...
-                c1.onsetDatetime(k), ...
-                struct('fillFraction', fill, 'levelIdx', lvl, ...
-                       'repeatIdx', rep, 'nOnPixels', c1.nOnPixels(:, t)));
+            try
+                tfp.io.saveTrial(trial, sessionDir, struct('saveRawData', false));
+            catch ME
+                warning('tfp:experiments:exp_ensemble_fill_factor_power:saveTrialFailed', ...
+                    'saveTrial failed for trial %d: %s', k, ME.message);
+            end
         end
 
         pause(interStimS);
@@ -530,16 +624,22 @@ if runDifferential
                 k, c2.nTrials, d, c2.nDistributions, rep, c2.nRepeats), ...
             true);    % show per-cell fill labels
 
+        siBridge.armForExternalTrigger(nFramesPerTrial);
+
         c2.onsetDatetime(k) = datetime('now');
         c2.onsetTSec(k)     = toc(t0);
+
         if syncEnabled
-            daq.sendDigitalPulse(syncDOLine, trialOnsetPulseS);
+            daq.sendDigitalPulse(syncDOLine, startAcqPulseS);
         end
 
         startSampleIdx = daq.queueClockedAO(stimWaveform, sessionSampleRate, 'immediate');
         c2.onsetDaqSamples(k)  = startSampleIdx;
         c2.offsetDaqSamples(k) = startSampleIdx + uint64(nOnSamples - 1);
-        pause(stimDurationS);
+
+        siBridge.waitForCompletion(trialTimeoutS);
+        c2.tiffPaths{k} = siBridge.getLastTiffPath();
+
         c2.offsetDatetime(k) = datetime('now');
         c2.offsetTSec(k)     = toc(t0);
 
@@ -549,16 +649,24 @@ if runDifferential
                 k, c2.nTrials, d, c2.nDistributions, rep, c2.nRepeats), ...
             true);
 
+        globalIdx = c1.nTrials + k;
+        trial = buildTrialObject(globalIdx, 2, t, sIdx, ...
+            c2.fillPerCell(:, t), dmdCentroids, ...
+            stimDurationS, interStimS, powerV, ...
+            c2.onsetDaqSamples(k), c2.offsetDaqSamples(k), ...
+            sessionSampleRate, timing.sessionStartDatetime, ...
+            c2.onsetDatetime(k), c2.tiffPaths{k}, ...
+            struct('distIdx', d, 'repeatIdx', rep, ...
+                   'nOnPixels', c2.nOnPixels(:, t)));
+        trials(end+1) = trial; %#ok<AGROW>
+
         if ~isempty(sessionDir) && isfolder(sessionDir)
-            globalIdx = c1.nTrials + k;
-            persistTrial(sessionDir, globalIdx, 2, t, sIdx, ...
-                c2.fillPerCell(:, t), dmdCentroids, ...
-                stimDurationS, interStimS, powerV, ...
-                c2.onsetDaqSamples(k), c2.offsetDaqSamples(k), ...
-                sessionSampleRate, timing.sessionStartDatetime, ...
-                c2.onsetDatetime(k), ...
-                struct('distIdx', d, 'repeatIdx', rep, ...
-                       'nOnPixels', c2.nOnPixels(:, t)));
+            try
+                tfp.io.saveTrial(trial, sessionDir, struct('saveRawData', false));
+            catch ME
+                warning('tfp:experiments:exp_ensemble_fill_factor_power:saveTrialFailed', ...
+                    'saveTrial failed for trial %d: %s', globalIdx, ME.message);
+            end
         end
 
         pause(interStimS);
@@ -577,6 +685,52 @@ end
 sessionData = daq.stopContinuousSession();
 
 % =========================================================================
+% Frame-clock decode + per-trial episodic alignment cross-check.
+% docs/SYNC_EPISODIC.md §7 / §8.
+% =========================================================================
+frameStartSamples    = uint64.empty(0, 1);
+frameRateInferredHz  = NaN;
+alignReport          = [];
+perFrame             = table();
+
+if ~isempty(frameClockLine) && ~isempty(sessionData.lineNames.diLines)
+    frameColMask = strcmp(sessionData.lineNames.diLines, sessionCfg.frameClockLine);
+    if any(frameColMask)
+        diVec = sessionData.diData(:, frameColMask);
+        [frameStartSamples, frameRateInferredHz] = ...
+            tfp.io.decodeFrameClock(diVec, sessionData.sampleRate);
+    end
+end
+
+tiffPaths = collectTiffPaths(trials);
+
+if numel(trials) > 0
+    [perTrial, perFrame, alignReport] = tfp.io.alignTrialsEpisodic( ...
+        trials, tiffPaths, frameStartSamples, sessionData.sampleRate);
+
+    for i = 1:numel(trials)
+        tier = perTrial(i).alignmentConfidence;
+        if strcmp(trials(i).status, 'complete') && ...
+                (tier == "high" || tier == "low")
+            trials(i).attachEpisodicAlignment( ...
+                perTrial(i).frame_indices_during_stim, ...
+                perTrial(i).frame_indices_baseline, ...
+                perTrial(i).alignmentDiscrepancy, ...
+                perTrial(i).alignmentConfidence);
+        end
+    end
+
+    if isstruct(alignReport) && isfield(alignReport, 'fatal') && alignReport.fatal
+        warning('tfp:experiments:exp_ensemble_fill_factor_power:alignFatal', ...
+            'alignTrialsEpisodic reported fatal: %s', char(alignReport.fatalReason));
+        if ~isempty(sessionDir) && isfolder(sessionDir)
+            tfp.io.sessionLog(sessionDir, 'fill-factor-power-align-fatal', struct( ...
+                'fatalReason', char(alignReport.fatalReason)));
+        end
+    end
+end
+
+% =========================================================================
 % Build unified time-ordered run table (cond1 then cond2 — matches the
 % temporal sequence of TTL edges recorded by ScanImage)
 % =========================================================================
@@ -591,6 +745,7 @@ timing.run.onsetTSec        = nan(nRun, 1);
 timing.run.offsetTSec       = nan(nRun, 1);
 timing.run.onsetDaqSamples  = zeros(nRun, 1, 'uint64');
 timing.run.offsetDaqSamples = zeros(nRun, 1, 'uint64');
+timing.run.tiffPaths        = repmat({''}, nRun, 1);
 
 j = 0;
 for k = 1:c1.nTrials
@@ -604,6 +759,7 @@ for k = 1:c1.nTrials
     timing.run.offsetTSec(j)       = c1.offsetTSec(k);
     timing.run.onsetDaqSamples(j)  = c1.onsetDaqSamples(k);
     timing.run.offsetDaqSamples(j) = c1.offsetDaqSamples(k);
+    timing.run.tiffPaths{j}        = c1.tiffPaths{k};
 end
 for k = 1:c2.nTrials
     j = j + 1;
@@ -616,6 +772,7 @@ for k = 1:c2.nTrials
     timing.run.offsetTSec(j)       = c2.offsetTSec(k);
     timing.run.onsetDaqSamples(j)  = c2.onsetDaqSamples(k);
     timing.run.offsetDaqSamples(j) = c2.offsetDaqSamples(k);
+    timing.run.tiffPaths{j}        = c2.tiffPaths{k};
 end
 
 % =========================================================================
@@ -633,20 +790,25 @@ if ~isempty(sessionDir) && isfolder(sessionDir)
         'sessionStartDatetime', char(timing.sessionStartDatetime)));
 end
 
-result.nROIs          = nROIs;
-result.radiusPx       = radiusPx;
-result.dmdCentroids   = dmdCentroids;
-result.nPatchPixels   = nPatchPixels;
-result.powerV         = powerV;
-result.stimDurationS  = stimDurationS;
-result.interStimS     = interStimS;
-result.rngSeed        = rngSeed;
-result.sampleRate     = sessionSampleRate;
-result.condition1     = c1;
-result.condition2     = c2;
-result.timing         = timing;
-result.sessionData    = sessionData;
-result.completedAt    = datetime('now');
+result.nROIs               = nROIs;
+result.radiusPx            = radiusPx;
+result.dmdCentroids        = dmdCentroids;
+result.nPatchPixels        = nPatchPixels;
+result.powerV              = powerV;
+result.stimDurationS       = stimDurationS;
+result.interStimS          = interStimS;
+result.rngSeed             = rngSeed;
+result.sampleRate          = sessionSampleRate;
+result.condition1          = c1;
+result.condition2          = c2;
+result.timing              = timing;
+result.sessionData         = sessionData;
+result.trials              = trials;
+result.alignReport         = alignReport;
+result.perFrame            = perFrame;
+result.frameStartSamples   = frameStartSamples;
+result.frameRateInferredHz = frameRateInferredHz;
+result.completedAt         = datetime('now');
 
 fprintf('\n[fill_factor_power] Complete: cond1=%d trials, cond2=%d trials.\n', ...
     c1.nTrials, c2.nTrials);
@@ -830,13 +992,38 @@ catch
 end
 end
 
-function persistTrial(sessionDir, trialIdx, conditionId, trialInCond, ...
+function disconnectBridgeSafely(siBridge, ownsBridge)
+% Disconnect a locally-constructed mock bridge so the next run of the
+% experiment starts from a clean state. External bridges are left alone.
+if ~ownsBridge || isempty(siBridge)
+    return
+end
+try
+    siBridge.disconnect();
+catch
+end
+end
+
+function paths = collectTiffPaths(trials)
+%collectTiffPaths Extract the trial.siTiffPath fields as a cellstr.
+paths = cell(1, numel(trials));
+for i = 1:numel(trials)
+    p = trials(i).siTiffPath;
+    if isempty(p)
+        paths{i} = '';
+    else
+        paths{i} = char(p);
+    end
+end
+end
+
+function trial = buildTrialObject(trialIdx, conditionId, trialInCond, ...
         stackIdx, fillPerCell, dmdCentroids, ...
         stimDurationS, interStimS, powerV, ...
         onsetSample, offsetSample, sampleRate, sessionStartDatetime, ...
-        onsetDatetime, extraMetadata)
-% Build a tfp.trial.Trial with the new sample-anchor schema and write it
-% to <sessionDir>/trials/ via tfp.io.saveTrial.
+        onsetDatetime, tiffPath, extraMetadata)
+% Build a tfp.trial.Trial in the episodic-mode schema (siTiffPath set via
+% markComplete's 4-arg form, per docs/SYNC_EPISODIC.md §5).
 trial = tfp.trial.Trial();
 trial.trialIdx   = trialIdx;
 trial.timestamp  = onsetDatetime;
@@ -860,14 +1047,7 @@ trial.metadata = extraMetadata;
 trial.metadata.powerV = powerV;
 
 trial.markRunning(onsetSample, sampleRate, sessionStartDatetime);
-trial.markComplete(struct(), offsetSample);
-
-try
-    tfp.io.saveTrial(trial, sessionDir, struct('saveRawData', false));
-catch ME
-    warning('tfp:experiments:exp_ensemble_fill_factor_power:saveTrialFailed', ...
-        'saveTrial failed for trial %d: %s', trialIdx, ME.message);
-end
+trial.markComplete(struct(), offsetSample, tiffPath);
 end
 
 function value = configField(s, name, default)
