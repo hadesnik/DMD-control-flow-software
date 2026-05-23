@@ -23,7 +23,10 @@ function [perTrial, perFrame, report] = alignTrialsEpisodic(trials, tiffPaths, f
 %   For every input trial the aligner reads the trial's TIFF metadata
 %   (via tfp.io.readScanImageTiff — `.mat` mock sidecars are
 %   transparently supported), counts the frame-clock rising edges that
-%   fall inside the trial's stim window, and emits a confidence tier:
+%   fall inside the trial's full ACQUISITION window
+%   [t_onset - preStim_s*sr, t_offset + postStim_s*sr] — i.e. the same
+%   span over which ScanImage actually acquired frames into the per-trial
+%   TIFF — and emits a confidence tier:
 %
 %     |discrepancy| <= 1            -> "high"
 %     1 < |discrepancy| <= 5        -> "low"
@@ -60,7 +63,11 @@ function [perTrial, perFrame, report] = alignTrialsEpisodic(trials, tiffPaths, f
 %                .trialIdx                  scalar
 %                .siTiffPath                char (echo of input)
 %                .numFramesTiff             uint32
-%                .numFramesDI               uint32
+%                .numFramesDI               uint32 (count of DI rising
+%                                            edges in the acquisition
+%                                            window [baselineStart, acqEnd]
+%                                            — this is what cross-checks
+%                                            against numFramesTiff)
 %                .frame_indices_during_stim 1xK uint64 (DI indices)
 %                .frame_indices_baseline    1xK uint64 (DI indices)
 %                .alignmentDiscrepancy      double (NaN when either path
@@ -267,6 +274,7 @@ for i = 1:nTrials
     pt        = perTrial(i);
     diIndices = uint64.empty(1, 0);
     baseIndices = uint64.empty(1, 0);
+    acqCount  = uint32(0);
 
     % 1) Non-complete trials.
     if ~strcmp(tr.status, 'complete')
@@ -292,7 +300,12 @@ for i = 1:nTrials
     if isempty(preS) || ~isnumeric(preS) || isnan(preS)
         preS = 0;
     end
-    baselineStart = onset - double(preS) * sampleRate;
+    postS  = tr.postStim_s;
+    if isempty(postS) || ~isnumeric(postS) || isnan(postS)
+        postS = 0;
+    end
+    baselineStart = onset  - double(preS)  * sampleRate;
+    acqEnd        = offset + double(postS) * sampleRate;
 
     windows(i) = struct( ...
         'onset',    onset, ...
@@ -300,7 +313,16 @@ for i = 1:nTrials
         'baseline', baselineStart, ...
         'valid',    true);
 
-    % Compute DI-derived frame indices (path B).
+    % Compute DI-derived frame indices (path B). frame_indices_during_stim
+    % and frame_indices_baseline are masks within the stim and baseline
+    % windows respectively (used by downstream analysis to bin frames by
+    % phase). numFramesDI is the count of frames in the full per-trial
+    % ACQUISITION window [baselineStart, acqEnd] — that is the count the
+    % per-trial TIFF should match, since ScanImage acquired one frame per
+    % rising edge across the whole arm-to-completion window. Using the
+    % stim window alone for the cross-check would produce a guaranteed
+    % large discrepancy whenever preStim_s + postStim_s exceed the stim
+    % duration.
     if nFrames > 0
         inStim = fssDouble >= onset & fssDouble <= offset;
         diIndices = uint64(reshape(find(inStim), 1, []));
@@ -309,9 +331,12 @@ for i = 1:nTrials
             inBaseline = fssDouble >= baselineStart & fssDouble < onset;
             baseIndices = uint64(reshape(find(inBaseline), 1, []));
         end
+
+        inAcq = fssDouble >= baselineStart & fssDouble <= acqEnd;
+        acqCount = uint32(nnz(inAcq));
     end
 
-    pt.numFramesDI               = uint32(numel(diIndices));
+    pt.numFramesDI               = acqCount;
     pt.frame_indices_during_stim = diIndices;
     pt.frame_indices_baseline    = baseIndices;
 
@@ -349,8 +374,10 @@ for i = 1:nTrials
     numFramesTiff       = uint32(meta.numFrames);
     pt.numFramesTiff    = numFramesTiff;
 
-    % Discrepancy and confidence tier.
-    if numFramesTiff == 0 || isempty(diIndices)
+    % Discrepancy and confidence tier. Cross-check is against the full
+    % per-trial acquisition window (numFramesDI == acqCount), NOT the
+    % stim-only window — see comment above where acqEnd is computed.
+    if numFramesTiff == 0 || acqCount == 0
         pt.alignmentDiscrepancy = NaN;
         pt.alignmentConfidence  = "quarantine";
         if numFramesTiff == 0
@@ -363,7 +390,7 @@ for i = 1:nTrials
         continue
     end
 
-    d = double(numFramesTiff) - double(numel(diIndices));
+    d = double(numFramesTiff) - double(acqCount);
     pt.alignmentDiscrepancy = d;
     absD = abs(d);
     if absD <= 1

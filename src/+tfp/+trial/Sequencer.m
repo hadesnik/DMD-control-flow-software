@@ -321,7 +321,13 @@ classdef Sequencer < handle
                 if isfield(alignReport, 'fatal') && ~alignReport.fatal ...
                         && k <= numel(perTrialAlignment)
                     conf = perTrialAlignment(k).alignmentConfidence;
-                    if conf == "high" || conf == "low"
+                    % Attach for any confidence tier other than "none".
+                    % Quarantine status means "treat with skepticism" not
+                    % "discard"; downstream analysis reads
+                    % trial.alignmentConfidence to decide. "none" means the
+                    % aligner couldn't even attempt alignment (trial not
+                    % complete, missing DAQ anchor) — no data to attach.
+                    if conf ~= "none"
                         try
                             trial.attachEpisodicAlignment( ...
                                 perTrialAlignment(k).frame_indices_during_stim, ...

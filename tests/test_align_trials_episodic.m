@@ -382,8 +382,14 @@ classdef test_align_trials_episodic < matlab.unittest.TestCase
             stim     = testCase.uniformEdges(onset, offset, testCase.EDGES_PER_STIM);
             fss      = sort([baseline; stim]);
 
+            % The aligner cross-checks numFramesTiff against the count of
+            % DI edges in the full acquisition window [baselineStart, acqEnd]
+            % (NOT the stim-only window). The sidecar's frame count must
+            % therefore reflect baseline + stim frames combined for a
+            % clean "high" tier — that's the semantics ScanImage actually
+            % delivers (one TIFF per trial spanning the full acquisition).
             sidecar = fullfile(testCase.TmpDir, 'baseline.mat');
-            testCase.writeMatSidecar(sidecar, numel(stim));
+            testCase.writeMatSidecar(sidecar, numel(baseline) + numel(stim));
 
             tr.markComplete(struct(), offset, sidecar);
 
