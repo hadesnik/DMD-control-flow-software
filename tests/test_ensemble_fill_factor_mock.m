@@ -44,11 +44,11 @@ calib.scan_fast_axis_sign = 1;
 calib.scan_slow_axis_sign = 1;
 
 % -------------------------------------------------------------------------
-% Illuminated DMD region — 300x300 px centered on the chip.
-% At ~3 DMD px / µm at the sample, 300 px == 100 µm pilot FOV at the brain.
+% Illuminated DMD region — 420x420 px centered on the chip (pilot FOV).
+% Each "cell" is modeled as a 28x28 px disk (~10 µm diameter at the sample).
 % -------------------------------------------------------------------------
-diskRadiusPx   = 15;
-regionSizePx   = 300;
+diskRadiusPx   = 14;
+regionSizePx   = 420;
 cCenter        = floor(dmd.nCols / 2);
 rCenter        = floor(dmd.nRows / 2);
 half           = regionSizePx / 2;
@@ -67,8 +67,8 @@ roiCentroids_scan = [ ...
     randi([illuminatedRegion(3) + m, illuminatedRegion(4) - m], nROIs, 1)];
 roiCentroids_scan = double(roiCentroids_scan);
 
-fprintf('\nIlluminated DMD region: cols [%g..%g], rows [%g..%g] (300x300 px).\n', ...
-    illuminatedRegion);
+fprintf('\nIlluminated DMD region: cols [%g..%g], rows [%g..%g] (%dx%d px).\n', ...
+    illuminatedRegion, regionSizePx, regionSizePx);
 fprintf('Mock ROI centroids (DMD pixel coords, inside illuminated region):\n');
 for k = 1:nROIs
     fprintf('  ROI %2d: col=%4d  row=%3d\n', k, ...
@@ -84,7 +84,7 @@ initCompanionFigure(dmd, roiCentroids_scan, diskRadiusPx, illuminatedRegion);
 % -------------------------------------------------------------------------
 % Experiment options (compressed timing for the mock)
 % -------------------------------------------------------------------------
-options.radiusPx          = diskRadiusPx;          % ~709 px/neuron at r=15
+options.radiusPx          = diskRadiusPx;          % ~615 px/neuron at r=14
 options.illuminatedRegion = illuminatedRegion;     % yellow outline + range check
 options.stimDurationS  = 0.15;        % short for snappy mock; 0.5 on scope
 options.interStimS     = 0.15;        % short for mock; 3.0 on scope (GCaMP recovery)
@@ -124,11 +124,15 @@ expected = result.condition1.nTrials + result.condition2.nTrials;
 assert(nAdvance == expected, ...
     'Expected %d advanceToPattern events, saw %d.', expected, nAdvance);
 
-aoLog  = daq.getLog();
+aoLog = daq.getLog();
+% Round-3 refactor: stim AO is queued via queueClockedAO against a single
+% continuous DAQ session. The remaining outputSingleAnalog calls are the
+% pre-session safety-off and the onCleanup safety-off (2 total).
+clockedAoEvents = strcmp({aoLog.eventType}, 'queueClockedAO');
+assert(sum(clockedAoEvents) == expected, ...
+    'Expected %d queueClockedAO events (1 per trial), saw %d.', ...
+    expected, sum(clockedAoEvents));
 aoEvents = strcmp({aoLog.eventType}, 'outputSingleAnalog');
-% 2 events per trial (ON + OFF) + 1 init-zero + 1 cleanup-zero
-assert(sum(aoEvents) == 2 * expected + 2, ...
-    'Expected %d AO events, saw %d.', 2 * expected + 2, sum(aoEvents));
 
 % Sync TTL log: 1 session-start pulse + 1 per-trial onset pulse.
 pulseEvents = strcmp({aoLog.eventType}, 'sendDigitalPulse');
@@ -210,9 +214,9 @@ assert(maxSkewS < 0.050, ...
 
 % Captured continuous-session buffers must cover every trial: the last
 % offset sample cannot extend past the final captured sample count.
-sessionData = result.timing.daqSessionResult;
+sessionData = result.sessionData;
 assert(isstruct(sessionData) && isfield(sessionData, 'nSamplesTotal'), ...
-    'result.timing.daqSessionResult must carry the captured session buffers.');
+    'result.sessionData must carry the captured session buffers.');
 assert(offsetSamplesRun(end) <= double(sessionData.nSamplesTotal), ...
     'Final trial offset sample (%d) exceeds session sample count (%d).', ...
     offsetSamplesRun(end), double(sessionData.nSamplesTotal));

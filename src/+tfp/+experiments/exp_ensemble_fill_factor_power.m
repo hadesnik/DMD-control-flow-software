@@ -573,8 +573,7 @@ end
 % whole experiment. The clocked AO is already done at this point (final
 % trial's pause(interStimS) has elapsed).
 % =========================================================================
-sessionResult = daq.stopContinuousSession();
-timing.daqSessionResult = sessionResult;
+sessionData = daq.stopContinuousSession();
 
 % =========================================================================
 % Build unified time-ordered run table (cond1 then cond2 — matches the
@@ -645,6 +644,7 @@ result.sampleRate     = sessionSampleRate;
 result.condition1     = c1;
 result.condition2     = c2;
 result.timing         = timing;
+result.sessionData    = sessionData;
 result.completedAt    = datetime('now');
 
 fprintf('\n[fill_factor_power] Complete: cond1=%d trials, cond2=%d trials.\n', ...

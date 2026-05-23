@@ -63,16 +63,16 @@ DMD_ROWS     = 768;
 DMD_COLS     = 1024;
 
 % Stimulus parameters
-DISK_RADIUS_PX = 15;      % diameter ~30 px; raise to 17 for ~900 px / neuron
+DISK_RADIUS_PX = 14;      % ~10 µm cell diameter at sample (28 px); ~615 px/neuron
 STIM_DURATION_S = 0.5;    % laser ON per trial
 INTER_STIM_S    = 3.0;    % ISI; long enough for GCaMP recovery
 POWER_V         = 5.0;    % AO voltage (HELD CONSTANT across trials)
 RNG_SEED        = 0;      % reproducibility
 
 % Illuminated DMD region (the pi-Shaper flat-top footprint on the chip).
-% Default: 300x300 px centered on the chip — at ~3 DMD px / µm at sample,
-% that's the 100 µm pilot FOV. Pass [] to disable the warning + outline.
-ILLUMINATED_REGION_SIZE_PX = 300;
+% Default: 420x420 px centered on the chip — the pilot FOV at the brain.
+% Pass [] to disable the warning + outline.
+ILLUMINATED_REGION_SIZE_PX = 420;
 
 % Cond 1 — uniform sweep
 UNIFORM_FRACTIONS  = 0.1:0.1:1.0;   % 10% .. 100% in 10% steps
@@ -194,11 +194,11 @@ result = tfp.experiments.exp_ensemble_fill_factor_power( ...
 % =========================================================================
 % Persist the continuous-session DI/AI capture (T-SYNC-12).
 % The experiment opens and closes the master-clock session itself
-% (T-SYNC-8) and returns the captured buffers in
-% result.timing.daqSessionResult. Split that out into its own -v7.3 file
-% so the lightweight result struct stays small and easy to share.
+% (T-SYNC-8) and returns the captured buffers in result.sessionData.
+% Split that out into its own -v7.3 file so the lightweight result struct
+% stays small and easy to share.
 % =========================================================================
-daqCapture = result.timing.daqSessionResult;
+daqCapture = result.sessionData;
 fprintf('Continuous session: %u samples (%.1f s); AI %dx%d, DI %dx%d, AO %u samples.\n', ...
     daqCapture.nSamplesTotal, ...
     double(daqCapture.nSamplesTotal) / daqCapture.sampleRate, ...
