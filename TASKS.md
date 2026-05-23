@@ -1414,12 +1414,33 @@ Depends on T-SYNC-2 (mock path) and T-SYNC-6 (trial schema persistence).
 - [ ] T-SYNC-9  Same refactor for `exp_ensemble_activation.m`.
                 Files: `src/+tfp/+experiments/exp_ensemble_activation.m`
 
-- [ ] T-SYNC-10 Same refactor for the remaining experiments
-                (optional for R01 prelim; can defer).
+- [DEFERRED] T-SYNC-10 Same refactor for the remaining experiments
+                (optional for R01 prelim).
                 Files: `src/+tfp/+experiments/{exp_ppsf_lateral,exp_power_curve,exp_pseudo_axial,exp_axial_ppsf,exp_rapid_sequential,exp_ppsf_2d}.m`
                 Note: `exp_axial_ppsf.m` already has PLM Sequencer
                 integration; this refactor is more invasive there —
                 handle separately.
+                **Deferred 2026-05-22** — investigation found the listed
+                experiments all delegate per-trial AO/timing to
+                `tfp.trial.Sequencer` (`exp_ppsf_lateral`,
+                `exp_power_curve`, `exp_rapid_sequential`,
+                `exp_ppsf_2d`, `exp_axial_ppsf`); `exp_pseudo_axial.m`
+                does not exist in-repo. The continuous-session +
+                `queueClockedAO` + `markRunning(onsetSample,…)` +
+                `saveTrial` pattern from T-SYNC-8/9 lives inside that
+                per-trial loop, so applying it requires modifying
+                `src/+tfp/+trial/Sequencer.m` (which calls
+                `daq.start()` / `daq.stop()` per trial — incompatible
+                with a continuous session held open across trials).
+                A wrapper around `sequencer.run()` from the
+                experiment files alone cannot work: the legacy
+                `start/stop` calls toggle `isRunning` and would
+                desynchronize the continuous-session state machine.
+                **Prerequisite for resuming:** add a new Sequencer
+                refactor sub-task that switches the per-trial loop to
+                continuous-session APIs and the extended
+                `markRunning` / `markComplete` signatures, then
+                propagate to the listed experiments.
 
 **Round 4 — Tests + runners + integration [3 parallel agents]**
 
