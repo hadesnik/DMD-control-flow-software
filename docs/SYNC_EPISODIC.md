@@ -516,7 +516,9 @@ Each bridge instance carries a private state variable `state_` with
 values:
 
 ```
-'idle'      — initial; no acquisition pending or in flight.
+'idle'      — initial; no acquisition pending or in flight. Also the
+              state before beginSession() is called (session-level
+              fields unset).
 'armed'     — armForExternalTrigger has returned successfully; ready
               for the start-acq TTL.
 'acquiring' — start-acq TTL has been observed (mock: simulated
@@ -526,36 +528,100 @@ values:
 'completed' — waitForCompletion returned; getLastTiffPath is callable.
 ```
 
+A separate boolean `sessionActive_` (initialised to `false`) gates
+`armForExternalTrigger`; see §9.2. The state machine is per-trial,
+`sessionActive_` is per-session. Both are reset by `disconnect()`.
+
 State transitions (only legal moves):
 ```
-idle      -> armed       (armForExternalTrigger ok)
+idle      -> armed       (armForExternalTrigger ok; requires
+                          sessionActive_ == true)
 armed     -> acquiring   (Sequencer fires the TTL; for mock, a notify
                           hook; for real, polled)
 acquiring -> completed   (waitForCompletion ok)
 completed -> idle        (getLastTiffPath ok)
-*         -> idle        (disconnect / reset)
+*         -> idle        (disconnect / reset; also clears
+                          sessionActive_ and session snapshot fields)
 ```
 
-### 9.2 `armForExternalTrigger(nFrames)`
+### 9.2 `beginSession(opts)`
+
+```matlab
+sessionInfo = beginSession(obj, opts)
+```
+
+Called once per experiment, immediately after the operator has
+configured ScanImage (selected save directory, set logFileStem,
+configured external-trigger mode) and immediately before the Sequencer
+starts running trials. Snapshots the ScanImage acquisition counter and
+file-naming context so each subsequent trial's TIFF path is
+deterministically derivable.
+
+- **Pre.** `state_ == 'idle'`. `sessionActive_ == false`.
+- **Post.** `state_ == 'idle'`. `sessionActive_ == true`. The following
+  private fields are populated and MUST NOT be mutated for the duration
+  of the session:
+  - `startAcqNum_` (uint32) — value of ScanImage's acquisition counter
+    (`hSI.hScan2D.logFileCounter`) at the moment of the call. Trial *i*
+    (1-based) will land at acquisition number `startAcqNum_ + i - 1`.
+  - `logFileStem_` (char) — value of `hSI.hScan2D.logFileStem`.
+  - `logFileSaveDir_` (char) — value of `hSI.hScan2D.logFilePath` (or
+    equivalent; `%VERIFY` on rig).
+  - `acqNumWidth_` (uint8) — zero-pad width of the acquisition-number
+    field in the filename. Default `5` (locked here pending T-EP-5c
+    rig confirmation that ScanImage uses `_%05d.tif`). MUST NOT be
+    changed mid-session.
+  - `trialCounter_ = 0` (uint32).
+- **Inputs.** `opts` struct, all optional:
+  - `opts.startAcqNumOverride` (uint32) — for tests; bypass ScanImage
+    query and force the snapshot value. Mock bridge ignores ScanImage
+    and uses this if present, else `1`.
+  - `opts.logFileStemOverride`, `opts.logFileSaveDirOverride` (char) —
+    same role for the other two fields.
+- **Returns.** `sessionInfo` — struct echoing the four snapshot fields
+  (`startAcqNum`, `logFileStem`, `logFileSaveDir`, `acqNumWidth`) plus
+  `sessionStartDatetime` (datetime, captured at the call). The
+  Sequencer SHOULD persist this into its session-metadata YAML so the
+  per-trial TIFF paths can be reconstructed from disk after a crash.
+- **Blocking.** Yes, briefly, for the ScanImage property reads. Bounded
+  by `obj.armTimeoutS_`.
+- **Why this is non-destructive.** The bridge MUST NOT write to
+  `hSI.hScan2D.logFileCounter`. Resetting the counter would mutate
+  operator-visible state and could collide with prior sessions if the
+  same save directory were reused; instead we record the baseline and
+  derive paths relative to it. The operator's existing workflow
+  (selecting a fresh save directory per session) provides isolation
+  from any prior session on the imaging PC.
+- **Errors.**
+  - `tfp:hardware:ScanImageBridge:badState` — `state_ ~= 'idle'` or
+    `sessionActive_ == true`.
+  - `tfp:hardware:ScanImageBridge:siQueryFailed` — could not read one
+    of the three ScanImage properties (timeout or msocket error).
+
+### 9.3 `armForExternalTrigger(nFrames)`
 
 ```matlab
 armForExternalTrigger(obj, nFrames)
 ```
 
-- **Pre.** `state_ == 'idle'`. `nFrames` is a positive finite scalar.
-- **Post.** `state_ == 'armed'`. `nFrames_` stored. For
-  `ScanImageBridge` in `msocket` mode this also completes the A/B
-  handshake (per SYNC_FRAME.md §3 — unchanged).
+- **Pre.** `state_ == 'idle'`. `sessionActive_ == true` (i.e.
+  `beginSession()` has been called for this session). `nFrames` is a
+  positive finite scalar.
+- **Post.** `state_ == 'armed'`. `nFrames_` stored.
+  `trialCounter_` incremented by 1. For `ScanImageBridge` in
+  `msocket` mode this also completes the A/B handshake (per
+  SYNC_FRAME.md §3 — unchanged).
 - **Blocking.** Yes. May block up to `armTimeoutS_` (config field,
   default 5 s) while waiting for the metadata handshake.
 - **Returns.** Nothing.
 - **Errors.**
-  - `tfp:hardware:ScanImageBridge:badState` — `state_ ~= 'idle'`.
+  - `tfp:hardware:ScanImageBridge:badState` — `state_ ~= 'idle'` or
+    `sessionActive_ == false`.
   - `tfp:hardware:ScanImageBridge:badNFrames` — `nFrames` invalid.
   - `tfp:hardware:ScanImageBridge:armTimeout` — handshake did not
     complete within `armTimeoutS_`.
 
-### 9.3 `waitForCompletion(timeoutS)`
+### 9.4 `waitForCompletion(timeoutS)`
 
 ```matlab
 waitForCompletion(obj, timeoutS)
@@ -577,23 +643,53 @@ waitForCompletion(obj, timeoutS)
     (the trial is dead; no partial recovery attempted) before
     throwing.
 
-### 9.4 `getLastTiffPath()`
+### 9.5 `getLastTiffPath()`
 
 ```matlab
 tiffPath = getLastTiffPath(obj)
 ```
 
-- **Pre.** `state_ == 'completed'`.
+- **Pre.** `state_ == 'completed'`. `sessionActive_ == true`.
 - **Post.** `state_ == 'idle'`. The bridge is ready to arm again.
-- **Returns.** `tiffPath` — char row vector, absolute path. Empty
-  string `''` is permitted ONLY for the mock's `ttl_only`-like
-  scenarios; in real-bridge `msocket`/`tcp` modes returning `''`
-  indicates the TIFF path could not be retrieved from ScanImage and
-  the bridge MUST log a warning `tfp:hardware:ScanImageBridge:noTiffPath`.
-- **Errors.**
-  - `tfp:hardware:ScanImageBridge:badState` — `state_ ~= 'completed'`.
+  `trialCounter_` is **not** decremented; it remains equal to the
+  trial index just completed and forms the basis for the deterministic
+  path derivation below.
+- **Path derivation (LOCKED).** The real bridge MUST construct the
+  path as
 
-### 9.5 `verifyEpisodicProtocol()`
+  ```matlab
+  acqNum   = obj.startAcqNum_ + uint32(obj.trialCounter_) - uint32(1);
+  fmt      = sprintf('%%s_%%0%dd.tif', double(obj.acqNumWidth_));
+  fileName = sprintf(fmt, obj.logFileStem_, acqNum);
+  tiffPath = fullfile(obj.logFileSaveDir_, fileName);
+  ```
+
+  (At default `acqNumWidth_ == 5`, this evaluates to
+  `<logFileSaveDir_>/<logFileStem_>_00042.tif` for the 42nd
+  acquisition.) The bridge SHOULD verify the file exists on disk
+  before returning; if it does not, the bridge MUST still return the
+  expected path and log a `tfp:hardware:ScanImageBridge:tiffNotFound`
+  warning. The aligner downstream is responsible for handling missing
+  files (it treats a missing TIFF as a fatal session-level mismatch
+  per §7).
+
+  Path translation between PCs is the caller's responsibility — if the
+  imaging PC writes to `D:\...` and the DAQ PC mounts that as
+  `Z:\...`, the experiment script swaps the prefix before passing
+  paths to `tfp.io.alignTrialsEpisodic`.
+- **Returns.** `tiffPath` — char row vector, absolute path on the
+  ScanImage PC's filesystem (subject to the path-translation caveat
+  above). Empty string `''` is permitted ONLY for the mock's
+  `ttl_only`-like scenarios; in real-bridge `msocket`/`tcp` modes
+  returning `''` indicates the bridge could not derive a path (e.g.
+  one of the session-snapshot fields became unset mid-session) and the
+  bridge MUST log a warning
+  `tfp:hardware:ScanImageBridge:noTiffPath`.
+- **Errors.**
+  - `tfp:hardware:ScanImageBridge:badState` — `state_ ~= 'completed'`
+    or `sessionActive_ == false`.
+
+### 9.6 `verifyEpisodicProtocol()`
 
 ```matlab
 verifyEpisodicProtocol(obj)
@@ -612,7 +708,7 @@ verifyEpisodicProtocol(obj)
 - **Errors.** None — failures are reported as printed diagnostics, not
   thrown.
 
-### 9.6 Mock fake-TIFF placeholder scheme (LOCKED)
+### 9.7 Mock fake-TIFF placeholder scheme (LOCKED)
 
 `MockScanImageBridge.getLastTiffPath()` returns a path to a real
 file that the aligner can `readScanImageTiff` on without ScanImage
@@ -636,8 +732,17 @@ being present. The locked scheme is:
 - **mockTiffDir_** is set from `config.mockTiffDir` (default
   `tempdir()/tfp_mock_tiffs/`). The bridge creates the directory on
   first use; tests clean up by deleting it in `tearDown`.
-- **Counter.** `trialCounter_` increments on each
-  `armForExternalTrigger` success. Resets only on `disconnect()`.
+- **Counter.** `trialCounter_` is initialised to `0` by
+  `beginSession()` and incremented on each `armForExternalTrigger`
+  success (see §9.3). It is reset by `beginSession()` (start of a new
+  session) and by `disconnect()`. The mock's
+  `getLastTiffPath` returns
+  `fullfile(mockTiffDir_, sprintf('mock_trial_%04d.mat', trialCounter_))`
+  — note this uses `trialCounter_` directly (mock-local 1-based trial
+  index), NOT `startAcqNum_ + trialCounter_ - 1` (real-bridge path
+  derivation per §9.5). The `.mat` extension is the only contract the
+  aligner cares about; the filename body is for human readability of
+  mock test artifacts.
 
 **Why `.mat`, not a fake TIFF.** Writing a synthetic ScanImage-format
 TIFF requires re-implementing ScanImage's header schema (which is
@@ -652,7 +757,7 @@ load the file with `load(tiffPath, 'meta')`, and return that struct
 unchanged. Any other branch (`.tif`, `.tiff`) uses the real parser
 described in §6.
 
-### 9.7 Other ScanImageBridge methods
+### 9.8 Other ScanImageBridge methods
 
 Methods listed in `ScanImageBridge.m` that are NOT in the episodic
 contract (`setPendingPower`, `setActivePattern`, `clearLiveTraces`,
@@ -713,21 +818,31 @@ Sequencer is started:
    for newer versions; `%VERIFY` on the rig) MUST be set to
    `cfg.framesPerTrial`. The Sequencer DOES NOT remotely change this
    value — the operator sets it manually before the session.
-3. **Log-file naming.** `hSI.hScan2D.logFileStem` should be a
-   per-session prefix such as `<sessionId>_trial`; ScanImage will
-   then auto-append a 4-digit trial index. The aligner does not
-   parse the stem; it reads the TIFF path returned by
-   `bridge.getLastTiffPath()` directly. `%VERIFY` that ScanImage's
-   per-acquisition file naming actually produces a fresh file per
-   external trigger (and not one growing TIFF).
-4. **Save format.** TIFF only (not BigTIFF unless trials are very
+3. **Save directory per session.** Operator selects a fresh save
+   directory in ScanImage at the start of every session (existing lab
+   workflow). The bridge MUST NOT mutate ScanImage's
+   `logFileCounter` — instead `beginSession()` snapshots its current
+   value (§9.2) and derives subsequent per-trial paths relative to that
+   baseline. This makes the bridge safe to re-run within an already-
+   open ScanImage session, and means a crash and restart in the same
+   save directory just produces a fresh baseline rather than
+   overwriting prior trials.
+4. **Log-file naming convention.** ScanImage will write one TIFF per
+   external trigger named `<logFileStem>_<NNNNN>.tif`, where `NNNNN`
+   is the zero-padded acquisition counter (default width 5 — `%VERIFY`
+   on rig at T-EP-5c bring-up). The aligner does not parse filenames;
+   it consumes whatever `bridge.getLastTiffPath()` returns. `%VERIFY`
+   that ScanImage's per-acquisition file naming actually produces a
+   fresh file per external trigger (and not one growing TIFF).
+5. **Save format.** TIFF only (not BigTIFF unless trials are very
    large; `tfp.io.readScanImageTiff` handles both via `imfinfo`).
-5. **No Save-Last-Frame mode.** Each acquisition MUST write a
+6. **No Save-Last-Frame mode.** Each acquisition MUST write a
    complete TIFF before the next trigger arrives.
 
-Items 1, 2, and 3 are the load-bearing operator-side switches; each is
-marked `%VERIFY` here so that the rig-bring-up checklist captures
-them.
+Items 1, 2, 3, and 4 are the load-bearing operator-side switches;
+items 1, 2, and 4 are marked `%VERIFY` here so that the rig-bring-up
+checklist captures them. Item 3 (save directory selection) is operator
+workflow, not a software-detectable misconfiguration.
 
 ---
 
