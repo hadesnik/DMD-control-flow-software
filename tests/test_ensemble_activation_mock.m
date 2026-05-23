@@ -40,17 +40,33 @@ calib.scan_fast_axis_sign = 1;
 calib.scan_slow_axis_sign = 1;
 
 % -------------------------------------------------------------------------
-% 20 random ROI centroids (in scan-field = DMD pixel coords for this mock)
+% Illuminated DMD region — 420x420 px centered on the chip (pilot FOV).
+% Each "cell" is modeled as a 28x28 px disk (~10 µm diameter at the sample),
+% so the spot radius is 14 px.
+% -------------------------------------------------------------------------
+spotRadiusPx     = 14;
+regionSizePx     = 420;
+cCenter          = floor(dmd.nCols / 2);
+rCenter          = floor(dmd.nRows / 2);
+half             = regionSizePx / 2;
+illuminatedRegion = [cCenter - half, cCenter + half, ...
+                     rCenter - half, rCenter + half];   % [c0 c1 r0 r1]
+
+% -------------------------------------------------------------------------
+% 20 random ROI centroids placed inside the illuminated region, with a
+% one-radius margin so every spot fits fully within the lit zone.
 % -------------------------------------------------------------------------
 rng(42);
-nROIs  = 20;
-margin = 40;    % keep spots away from DMD edges so no clamping warnings
-
-roiCentroids_scan = [randi([margin, dmd.nCols - margin], nROIs, 1), ...
-                     randi([margin, dmd.nRows - margin], nROIs, 1)];
+nROIs = 20;
+m     = spotRadiusPx;
+roiCentroids_scan = [ ...
+    randi([illuminatedRegion(1) + m, illuminatedRegion(2) - m], nROIs, 1), ...
+    randi([illuminatedRegion(3) + m, illuminatedRegion(4) - m], nROIs, 1)];
 roiCentroids_scan = double(roiCentroids_scan);
 
-fprintf('Mock ROI centroids (DMD pixel coords):\n');
+fprintf('\nIlluminated DMD region: cols [%g..%g], rows [%g..%g] (%dx%d px).\n', ...
+    illuminatedRegion, regionSizePx, regionSizePx);
+fprintf('Mock ROI centroids (DMD pixel coords, inside illuminated region):\n');
 for k = 1:nROIs
     fprintf('  ROI %2d: col=%4d  row=%3d\n', k, ...
         roiCentroids_scan(k,1), roiCentroids_scan(k,2));
@@ -66,7 +82,8 @@ mockPowerCurve.powerMw  = linspace(0, 100, 25);
 % -------------------------------------------------------------------------
 % Experiment options
 % -------------------------------------------------------------------------
-options.spotRadiusPx   = 8;              % ~16 µm diameter at ~2 µm/px (DLi4130)
+options.spotRadiusPx      = spotRadiusPx;        % ~28 px ~ 10 µm cell at sample
+options.illuminatedRegion = illuminatedRegion;   % range-check spots fit in lit zone
 options.stimDurationS  = 0.5;           % 500 ms laser ON
 options.interStimS     = 0.5;           % 500 ms gap between sequential pulses
 options.aoChannel      = 'ao1';         % FS-50 power modulation channel
@@ -86,33 +103,32 @@ result = tfp.experiments.exp_ensemble_activation( ...
 
 % -------------------------------------------------------------------------
 % Verify via DAQ log
+%
+% Round-3 refactor: stim AO is now driven via `queueClockedAO` against a
+% single continuous DAQ session, not via per-trial `outputSingleAnalog +
+% pause`. The only `outputSingleAnalog` calls left are the pre-session
+% safety-off and the onCleanup safety-off — counted, but not used to
+% verify per-trial activity.
 % -------------------------------------------------------------------------
-daqLog = daq.getLog();
-aoEvents = daqLog(strcmp({daqLog.eventType}, 'outputSingleAnalog'));
-
-onVoltages  = arrayfun(@(e) e.payload.voltageV, aoEvents);
-% ON = any non-zero pulse. The power-series condition emits at fractions
-% of powerV (only the 100% level equals powerV exactly), so counting
-% `onVoltages == powerV` would undercount the sub-max pulses.
-nPulsesOn   = sum(onVoltages > 0);
-nPulsesOff  = sum(onVoltages == 0);
-
 nPowerLevels   = numel(options.powerFractions);
-% Expected ON pulses: nROIs (sequential) + 1 (ensemble) + nPowerLevels (series)
-expectedOn  = nROIs + 1 + nPowerLevels;
-% Expected OFF pulses: same count + 1 initial safety-off
-expectedOff = expectedOn + 1;
+% Expected clocked-AO stims: nROIs (sequential) + 1 (ensemble) + nPowerLevels (series)
+expectedStims = nROIs + 1 + nPowerLevels;
 % Expected advanceToPattern: nROIs (sequential) + 1 (ensemble) + nPowerLevels (series)
-expectedAdv = nROIs + 1 + nPowerLevels;
+expectedAdv   = nROIs + 1 + nPowerLevels;
+
+daqLog       = daq.getLog();
+clockedAo    = daqLog(strcmp({daqLog.eventType}, 'queueClockedAO'));
+safetyEvents = daqLog(strcmp({daqLog.eventType}, 'outputSingleAnalog'));
 
 fprintf('\n--- Mock verification ---\n');
-fprintf('  DAQ outputSingleAnalog events: %d total\n', numel(aoEvents));
-fprintf('  ON  pulses: %d  (expected %d)\n', nPulsesOn,  expectedOn);
-fprintf('  OFF pulses: %d  (expected %d)\n', nPulsesOff, expectedOff);
+fprintf('  DAQ queueClockedAO events:     %d  (expected %d)\n', ...
+    numel(clockedAo), expectedStims);
+fprintf('  DAQ outputSingleAnalog events: %d  (safety-off only)\n', ...
+    numel(safetyEvents));
 
 dmdLog = dmd.getLog();
 advEvents = dmdLog(strcmp({dmdLog.eventType}, 'advanceToPattern'));
-fprintf('  DMD advanceToPattern calls: %d  (expected %d)\n', ...
+fprintf('  DMD advanceToPattern calls:    %d  (expected %d)\n', ...
     numel(advEvents), expectedAdv);
 
 fprintf('\nPower-series voltages:\n');
@@ -132,8 +148,10 @@ assert(result.nROIs == nROIs, 'result.nROIs mismatch');
 assert(result.nSequentialTrials == nROIs, 'nSequentialTrials mismatch');
 assert(result.nEnsembleTrials == 1, 'nEnsembleTrials mismatch');
 assert(result.nPowerSeriesTrials == nPowerLevels, 'nPowerSeriesTrials mismatch');
-assert(nPulsesOn == expectedOn, ...
-    'Expected %d ON pulses, got %d', expectedOn, nPulsesOn);
+assert(numel(clockedAo) == expectedStims, ...
+    'Expected %d queueClockedAO events, got %d', expectedStims, numel(clockedAo));
+assert(numel(advEvents) == expectedAdv, ...
+    'Expected %d advanceToPattern events, got %d', expectedAdv, numel(advEvents));
 % Verify voltages are monotonically increasing (linear mock curve)
 assert(all(diff(result.powerSeriesVoltages) > 0), ...
     'Power-series voltages should be monotonically increasing for linear curve');

@@ -42,10 +42,15 @@ DMD_ROWS     = 768;
 DMD_COLS     = 1024;
 
 % Stimulus parameters
-SPOT_RADIUS_PX  = 8;     % DMD pixels (~16 µm for DLi4130 at ~2 µm/px)
+SPOT_RADIUS_PX  = 14;    % ~28 px ~ 10 µm cell diameter at the sample
 STIM_DURATION_S = 0.5;   % 500 ms laser ON per pulse
 INTER_STIM_S    = 0.5;   % 500 ms gap between sequential pulses
 POWER_V         = 5.0;   % AO voltage for full laser power
+
+% Illuminated DMD region (the pi-Shaper flat-top footprint on the chip).
+% Default: 420x420 px centered on the chip — the pilot FOV at the brain.
+% Pass [] to disable the warning.
+ILLUMINATED_REGION_SIZE_PX = 420;
 
 % msocket ROI receiver (imaging PC connects here)
 ROI_PORT        = 3045;
@@ -128,6 +133,17 @@ opts.powerV         = POWER_V;
 opts.showLiveFigure = true;
 opts.sessionDir     = SESSION_DIR;
 opts.frameClockLine = FRAME_CLOCK_DI_LINE;
+
+% Centered illuminated region computed from DMD geometry.
+if ~isempty(ILLUMINATED_REGION_SIZE_PX)
+    half = ILLUMINATED_REGION_SIZE_PX / 2;
+    cCenter = floor(dmd.nCols / 2);
+    rCenter = floor(dmd.nRows / 2);
+    opts.illuminatedRegion = [cCenter - half, cCenter + half, ...
+                              rCenter - half, rCenter + half];
+    fprintf('Illuminated DMD region: cols [%g..%g], rows [%g..%g] (%dx%d px).\n', ...
+        opts.illuminatedRegion, ILLUMINATED_REGION_SIZE_PX, ILLUMINATED_REGION_SIZE_PX);
+end
 
 result = tfp.experiments.exp_ensemble_activation( ...
     dmd, daq, roiCentroids_scan, calib, opts);

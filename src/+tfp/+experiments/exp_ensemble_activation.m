@@ -39,7 +39,12 @@ function result = exp_ensemble_activation(dmd, daq, roiCentroids_scan, calib, op
 %                          Produced by tfp.calibration.composeCalibration.
 %                          For mock/identity mapping pass eye(3) as the affine.
 %     options            - Struct (all fields optional):
-%       .spotRadiusPx    - DMD spot radius in pixels (default 8).
+%       .spotRadiusPx    - DMD spot radius in pixels (default 14, i.e. ~28 px
+%                          diameter ~ 10 µm cell at the sample).
+%       .illuminatedRegion - [c0 c1 r0 r1] bounding box (DMD px) of the
+%                          flat-top illuminated region. If set, a warning is
+%                          emitted when any ROI disk (centroid +/- spotRadiusPx)
+%                          extends outside this region. Default [] (no check).
 %       .stimDurationS   - Stim pulse duration in seconds (default 0.5).
 %       .interStimS      - Gap between sequential pulses in seconds (default 0.5).
 %       .aoChannel       - AO channel for laser modulation (default 'ao1').
@@ -101,7 +106,8 @@ if nargin < 5 || isempty(options)
     options = struct();
 end
 
-spotRadiusPx   = configField(options, 'spotRadiusPx',   8);
+spotRadiusPx   = configField(options, 'spotRadiusPx',   14);
+illuminatedRegion = configField(options, 'illuminatedRegion', []);
 stimDurationS  = configField(options, 'stimDurationS',  0.5);
 interStimS     = configField(options, 'interStimS',     0.5);
 aoChannel      = configField(options, 'aoChannel',      'ao1');
@@ -129,6 +135,20 @@ if ~isstruct(calib) || ~isfield(calib, 'dmdToScan_affine')
         'calib must be a struct with field .dmdToScan_affine (3x3).');
 end
 
+if ~isempty(illuminatedRegion)
+    if numel(illuminatedRegion) ~= 4 || ~all(isfinite(illuminatedRegion))
+        error('tfp:experiments:exp_ensemble_activation:badRegion', ...
+            'illuminatedRegion must be a 4-element [c0 c1 r0 r1] vector or [].');
+    end
+    illuminatedRegion = double(illuminatedRegion(:)');
+    if illuminatedRegion(1) > illuminatedRegion(2) ...
+            || illuminatedRegion(3) > illuminatedRegion(4)
+        error('tfp:experiments:exp_ensemble_activation:badRegion', ...
+            'illuminatedRegion must satisfy c0<=c1 and r0<=r1; got %s.', ...
+            mat2str(illuminatedRegion));
+    end
+end
+
 nROIs = size(roiCentroids_scan, 1);
 
 % --- Convert scan-field coords -> DMD pixel coords ---
@@ -136,6 +156,24 @@ dmdCentroids = scanFieldToDMD(roiCentroids_scan, calib);
 
 % Clamp to DMD bounds (warn if any ROI is outside)
 dmdCentroids = clampToDMD(dmdCentroids, dmd, roiCentroids_scan);
+
+% --- Soft check: ROI spots should fit inside the illuminated DMD region ---
+if ~isempty(illuminatedRegion)
+    c0 = illuminatedRegion(1); c1 = illuminatedRegion(2);
+    r0 = illuminatedRegion(3); r1 = illuminatedRegion(4);
+    outside = (dmdCentroids(:,1) - spotRadiusPx) < c0 ...
+            | (dmdCentroids(:,1) + spotRadiusPx) > c1 ...
+            | (dmdCentroids(:,2) - spotRadiusPx) < r0 ...
+            | (dmdCentroids(:,2) + spotRadiusPx) > r1;
+    if any(outside)
+        warning('tfp:experiments:exp_ensemble_activation:roiOutsideIllumination', ...
+            ['%d of %d ROI spots (r=%g px) extend outside the illuminated DMD ' ...
+             'region [c=%g..%g, r=%g..%g]. Pixels outside this region will not ' ...
+             'receive laser light. ROIs: %s'], ...
+            sum(outside), size(dmdCentroids, 1), spotRadiusPx, c0, c1, r0, r1, ...
+            mat2str(find(outside(:))'));
+    end
+end
 
 % --- Build patterns ---
 fprintf('[ensemble_activation] Generating %d spot patterns + 1 ensemble...\n', nROIs);
