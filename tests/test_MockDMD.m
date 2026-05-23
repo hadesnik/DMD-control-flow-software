@@ -15,7 +15,7 @@ classdef test_MockDMD < matlab.unittest.TestCase
         function p = makePatterns(~, dmd, n)
             p = false(dmd.nRows, dmd.nCols, n);
             for k = 1:n
-                p(:, :, k) = tfp.patterns.singleSpot(dmd, [640 + k*10, 400], 5);
+                p(:, :, k) = tfp.patterns.singleSpot(dmd, [640 + k*10, 400], 14);
             end
         end
 

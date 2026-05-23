@@ -100,7 +100,7 @@ classdef test_calibration_mock < matlab.unittest.TestCase
 
             opts.nGridPoints = 3;       % 3x3 = 9 points, fast
             opts.gridSpacing = 50;
-            opts.spotRadius  = 8;
+            opts.spotRadius  = 14;
             opts.exposureS   = 0;       % no real pause needed in mock
             opts.showFigure  = false;
 

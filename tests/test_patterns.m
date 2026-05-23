@@ -26,7 +26,7 @@ classdef test_patterns < matlab.unittest.TestCase
             dmd = testCase.makeMockDmd();
             cal = testCase.identityCalibration();
             center = [640, 400];   % [col row], middle of frame
-            r = 10;
+            r = 14;
             mask = tfp.patterns.singleSpot(dmd, center, r);
 
             testCase.verifyEqual(size(mask), [dmd.nRows, dmd.nCols], ...
@@ -52,8 +52,9 @@ classdef test_patterns < matlab.unittest.TestCase
         function multiSpot_union_equals_sum_when_disjoint(testCase)
             dmd = testCase.makeMockDmd();
             cal = testCase.identityCalibration();
-            r = 5;
-            % Three well-separated targets so spots don't overlap.
+            r = 14;
+            % Three well-separated targets so spots don't overlap
+            % (>>2r=28 px apart).
             targets = [200, 200; 800, 400; 1100, 700];
             mask = tfp.patterns.multiSpot(dmd, targets, r);
 
@@ -84,8 +85,8 @@ classdef test_patterns < matlab.unittest.TestCase
             dmd = testCase.makeMockDmd();
             cal = testCase.identityCalibration();   % pixelsPerUm = 1
             center = [640, 400];
-            offsetsUm = [0, 0; 20, 0; -10, 5];
-            r = 3;
+            offsetsUm = [0, 0; 30, 0; -20, 10];
+            r = 14;
             patterns = tfp.patterns.ppsfPattern(dmd, center, offsetsUm, r, cal);
 
             testCase.verifyEqual(size(patterns), ...

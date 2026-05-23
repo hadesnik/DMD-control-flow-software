@@ -32,6 +32,8 @@ calibration = loadCalibrationOrIdentity(config);
 
 % Target cells and 2D offset grid (overridable via config.ppsf2d for tests).
 targets = resolveTargets(config, calibration);
+target  = tfp.util.validatePPSFTarget(targets, dmd, 'exp_ppsf_2d');
+targets = target;     % single-target sequence
 g = struct('maxUm', 40, 'nPointsPerHalfAxis', 4, 'sigmaPsfUm', 8, 'nReps', 2);
 if isfield(config, 'ppsf2d')
     ov = config.ppsf2d;
@@ -43,7 +45,7 @@ end
 offsetsUm = tfp.trial.TrialSequence.gaussianGrid2D(g.maxUm, g.nPointsPerHalfAxis, g.sigmaPsfUm);
 nReps     = g.nReps;
 powerMw   = 5;
-radiusPx  = 5;
+radiusPx  = 14;
 
 sequence = tfp.trial.TrialSequence.generatePPSF( ...
     targets, offsetsUm, nReps, powerMw);

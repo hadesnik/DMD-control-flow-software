@@ -1,7 +1,9 @@
 classdef test_exp_ppsf_lateral_mock < matlab.unittest.TestCase
     %test_exp_ppsf_lateral_mock Phase 1 milestone -- full PPSF experiment
-    %against mocks. Verifies the end-to-end pipeline produces 54 completed
-    %trials with a well-shaped summary across 9 distance bins.
+    %against mocks. PPSF runs against a single central target cell
+    %(within 80 px of the DMD geometric center) and verifies the end-to-end
+    %pipeline produces 18 completed trials (1 target * 9 distances * 2 reps)
+    %with a well-shaped summary across 9 distance bins.
 
     methods (TestMethodSetup)
         function armSafety(~)
@@ -33,40 +35,41 @@ classdef test_exp_ppsf_lateral_mock < matlab.unittest.TestCase
             config.imaging.frameRate = 30;
             config.imaging.simulateLatency = false;
 
-            % Fake cells placed at the three target positions used by the
-            % experiment ([400,400], [500,400], [600,400]) so each trial
-            % produces synthetic imaging data via MockScanImageBridge.
+            % Single central target at the DMD geometric center (640,400).
+            % PPSF requires exactly one target within 80 px of center; the
+            % fake cell is co-located with the target so d=0 trials hit it.
+            config.mockTargets = [640, 400];
             config.fakeCells = struct( ...
-                'tag',       {'cell_01',  'cell_02',  'cell_03'}, ...
-                'dmdCol',    {400,        500,        600}, ...
-                'dmdRow',    {400,        400,        400}, ...
-                'radiusDmd', {8,          8,          8}, ...
-                'amplitude', {1.5,        1.2,        1.8}, ...
-                'sigma',     {10,         10,         10}, ...
-                'aiChannel', {0,          1,          2});
+                'tag',       {'cell_01'}, ...
+                'dmdCol',    {640}, ...
+                'dmdRow',    {400}, ...
+                'radiusDmd', {14}, ...
+                'amplitude', {1.5}, ...
+                'sigma',     {10}, ...
+                'aiChannel', {0});
 
             result = tfp.experiments.exp_ppsf_lateral(config, 'test-session');
 
-            % 3 targets * 9 distances * 2 reps = 54 trials.
-            testCase.verifyEqual(result.nTrialsCompleted, 54);
+            % 1 target * 9 distances * 2 reps = 18 trials.
+            testCase.verifyEqual(result.nTrialsCompleted, 18);
             testCase.verifyEqual(result.nTrialsFailed, 0);
 
-            % 54 _meta.mat files on disk, each loadable, status complete.
+            % 18 _meta.mat files on disk, each loadable, status complete.
             files = dir(fullfile(result.sessionDir, 'trials', 'trial_*_meta.mat'));
-            testCase.verifyEqual(numel(files), 54);
+            testCase.verifyEqual(numel(files), 18);
             for k = 1:numel(files)
                 loaded = load(fullfile(files(k).folder, files(k).name));
                 testCase.verifyEqual(loaded.meta.status, 'complete');
             end
 
             % Summary shape: 9 rows (one per distance), expected fields,
-            % 6 trials per distance (3 targets x 2 reps).
+            % 2 trials per distance (1 target x 2 reps).
             testCase.verifyEqual(numel(result.summary), 9);
             testCase.verifyTrue(isfield(result.summary, 'distanceUm'));
             testCase.verifyTrue(isfield(result.summary, 'meanResponse'));
             testCase.verifyTrue(isfield(result.summary, 'nTrials'));
             for d = 1:9
-                testCase.verifyEqual(result.summary(d).nTrials, 6);
+                testCase.verifyEqual(result.summary(d).nTrials, 2);
             end
 
             % meanResponse at d=0 should be positive (cells directly under spot).
@@ -99,14 +102,16 @@ classdef test_exp_ppsf_lateral_mock < matlab.unittest.TestCase
             config.scanimage.enabled = false;
             config.imaging.frameRate = 30;
             config.imaging.simulateLatency = false;
+            % Single central target + co-located fake cell for the 2D PPSF.
+            config.mockTargets = [640, 400];
             config.fakeCells = struct( ...
-                'tag',       {'cell_01',  'cell_02',  'cell_03'}, ...
-                'dmdCol',    {400,        500,        600}, ...
-                'dmdRow',    {400,        400,        400}, ...
-                'radiusDmd', {8,          8,          8}, ...
-                'amplitude', {1.5,        1.2,        1.8}, ...
-                'sigma',     {10,         10,         10}, ...
-                'aiChannel', {0,          1,          2});
+                'tag',       {'cell_01'}, ...
+                'dmdCol',    {640}, ...
+                'dmdRow',    {400}, ...
+                'radiusDmd', {14}, ...
+                'amplitude', {1.5}, ...
+                'sigma',     {10}, ...
+                'aiChannel', {0});
 
             config.ppsf2d.maxUm              = 10;
             config.ppsf2d.nPointsPerHalfAxis = 1;

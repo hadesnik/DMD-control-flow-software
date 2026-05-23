@@ -24,7 +24,7 @@ classdef test_fakeCellCoupling < matlab.unittest.TestCase
 
         function cell1 = makeCell(~, col, row, varargin)
             %makeCell Convenience wrapper for CellResponseModel.
-            cell1 = tfp.sim.CellResponseModel([col, row], 8, varargin{:});
+            cell1 = tfp.sim.CellResponseModel([col, row], 14, varargin{:});
         end
 
         function t = frameTimestamps(~)
@@ -43,14 +43,14 @@ classdef test_fakeCellCoupling < matlab.unittest.TestCase
         % ------------------------------------------------------------------
         function cellResponse_onTarget(testCase)
         %cellResponse_onTarget Cell directly under the DMD spot should respond.
-        %   Spot centred on cell (col=640, row=400), same radius (8 px).
+        %   Spot centred on cell (col=640, row=400), same radius (14 px).
         %   Overlap ≈ 1 → scaled amplitude ≈ 1.5 dF/F.
         %   The mean ΔF/F over the post-stim response window should clearly
         %   exceed 1.0 (where noise mean ≈ 0, signal ≈ 0.4–0.7).
 
             c    = testCase.makeCell(640, 400, 'amplitude', 1.5);
             dmd  = testCase.fakeDmd();
-            mask = tfp.patterns.singleSpot(dmd, [640, 400], 8);
+            mask = tfp.patterns.singleSpot(dmd, [640, 400], 14);
             t    = testCase.frameTimestamps();
 
             trace   = c.computeTrace(mask, t, 0.5, 0.1);
@@ -63,13 +63,14 @@ classdef test_fakeCellCoupling < matlab.unittest.TestCase
         % ------------------------------------------------------------------
         function cellResponse_offTarget(testCase)
         %cellResponse_offTarget Cell 50 px from spot should show only noise.
-        %   Cell at col=640, spot at col=690 → distance=50, radii=8 → zero overlap.
+        %   Cell at col=640, spot at col=690 → distance=50, radii=14 → still
+        %   zero overlap (sum of radii = 28; gap = 50-28 = 22 px clear).
         %   Mean ΔF/F over response window is pure Gaussian noise;
         %   averaging ~30 frames reduces std to ≈0.018, so |mean| << 0.1.
 
             c    = testCase.makeCell(640, 400, 'amplitude', 1.5);
             dmd  = testCase.fakeDmd();
-            mask = tfp.patterns.singleSpot(dmd, [690, 400], 8);  % 50 px away
+            mask = tfp.patterns.singleSpot(dmd, [690, 400], 14);  % 50 px away
             t    = testCase.frameTimestamps();
 
             trace   = c.computeTrace(mask, t, 0.5, 0.1);
@@ -82,14 +83,15 @@ classdef test_fakeCellCoupling < matlab.unittest.TestCase
         % ------------------------------------------------------------------
         function ppsfShape_gaussianFalloff(testCase)
         %ppsfShape_gaussianFalloff PPSF response falls off with stim offset.
-        %   Cell at [640, 400], stim radius 8 px.
-        %   Offsets [0, 5, 10, 20, 40] px along col axis.
+        %   Cell at [640, 400], stim radius 14 px (cell radius also 14).
+        %   Offsets [0, 5, 10, 20, 40] px along col axis. Sum of radii=28,
+        %   so zero overlap kicks in at offset > 28 px.
         %   Overlap geometry:
         %     d=0:  full overlap (1.0)
-        %     d=5:  partial overlap (≈0.6)
-        %     d=10: partial overlap (≈0.25)
-        %     d=20: zero overlap (>16 px separation for r=8)
-        %     d=40: zero overlap
+        %     d=5:  near-full overlap
+        %     d=10: deep partial overlap
+        %     d=20: shallow partial overlap (8 px clear of each radius edge)
+        %     d=40: zero overlap (>28 px separation)
         %
         %   Test verifies:
         %     1. Mean response strictly decreases from d=0 to d=10.
@@ -104,7 +106,7 @@ classdef test_fakeCellCoupling < matlab.unittest.TestCase
             meanResp = zeros(1, numel(offsets));
             for k = 1:numel(offsets)
                 mask           = tfp.patterns.singleSpot(dmd, ...
-                                     [640 + offsets(k), 400], 8);
+                                     [640 + offsets(k), 400], 14);
                 trace          = c.computeTrace(mask, t, 0.5, 0.1);
                 meanResp(k)    = mean(trace(respIdx));
             end
@@ -129,7 +131,7 @@ classdef test_fakeCellCoupling < matlab.unittest.TestCase
             cells = [testCase.makeCell(640, 400, 'amplitude', 1.5, 'responseTag', 'c1'), ...
                      testCase.makeCell(400, 300, 'amplitude', 1.2, 'responseTag', 'c2'), ...
                      testCase.makeCell(900, 500, 'amplitude', 1.8, 'responseTag', 'c3')];
-            mask  = tfp.patterns.singleSpot(dmd, [640, 400], 8);
+            mask  = tfp.patterns.singleSpot(dmd, [640, 400], 14);
             t     = testCase.frameTimestamps();
 
             result = tfp.sim.SyntheticImaging(cells, mask, t, 0.5, 0.1);
@@ -162,7 +164,7 @@ classdef test_fakeCellCoupling < matlab.unittest.TestCase
             bridge = tfp.hardware.MockScanImageBridge(c, cfg);
 
             dmd  = testCase.fakeDmd();
-            mask = tfp.patterns.singleSpot(dmd, [640, 400], 8);
+            mask = tfp.patterns.singleSpot(dmd, [640, 400], 14);
 
             bridge.armForExternalTrigger(60);
             bridge.setActivePattern(mask, 0.5, 0.1);

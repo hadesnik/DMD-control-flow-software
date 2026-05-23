@@ -33,7 +33,8 @@ function result = exp_ensemble_fill_factor_power(dmd, daq, roiCentroids_scan, ca
 %
 %   options (all optional):
 %     Shared:
-%       .radiusPx              - Disk radius per neuron in DMD px (default 15).
+%       .radiusPx              - Disk radius per neuron in DMD px (default 14,
+%                                ~28 px diameter ~ 10 µm cell at the sample).
 %       .stimDurationS         - Laser ON per trial (default 0.5 s).
 %       .interStimS            - ISI between trials (default 3.0 s).
 %       .aoChannel             - AO channel for laser (default 'ao1').
@@ -103,7 +104,7 @@ if nargin < 5 || isempty(options)
 end
 
 % --- Shared options ---
-radiusPx       = configField(options, 'radiusPx',       15);
+radiusPx       = configField(options, 'radiusPx',       14);
 stimDurationS  = configField(options, 'stimDurationS',  0.5);
 interStimS     = configField(options, 'interStimS',     3.0);
 aoChannel      = configField(options, 'aoChannel',      'ao1');

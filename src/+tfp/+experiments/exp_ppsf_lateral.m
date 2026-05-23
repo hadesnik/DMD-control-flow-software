@@ -28,10 +28,12 @@ daq.configureDigitalOutput(config.daq.digitalOutChannels);
 calibration = loadCalibrationOrIdentity(config);
 
 targets     = resolveTargets(config, calibration);
+target      = tfp.util.validatePPSFTarget(targets, dmd, 'exp_ppsf_lateral');
+targets     = target;     % single-target sequence
 distancesUm = [0, 3, 6, 9, 12, 15, 20, 30, 40];
 nReps       = 2;
 powerMw     = 5;
-radiusPx    = 5;
+radiusPx    = 14;
 
 sequence = tfp.trial.TrialSequence.generatePPSF( ...
     targets, distancesUm, nReps, powerMw);

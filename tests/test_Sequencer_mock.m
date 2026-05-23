@@ -30,12 +30,15 @@ classdef test_Sequencer_mock < matlab.unittest.TestCase
             daq.configureDigitalOutput({'port0/line0'});
 
             % 3-trial rapid-sequential sequence at 50 ms ISI -> 500 samples.
-            targets  = [400, 400; 600, 400; 500, 500];
+            % Targets sit inside the 420x420 central illuminated region
+            % (DMD center (640,400); region cols [430,850], rows [190,610])
+            % with a one-radius (14 px) margin. Spot radius = 14 px.
+            targets  = [550, 400; 700, 400; 640, 500];
             sequence = tfp.trial.TrialSequence.generateRapidSequential( ...
                 targets, 0.05, 1);
             for k = 1:numel(sequence.trials)
                 pat = tfp.patterns.singleSpot(dmd, ...
-                    sequence.trials(k).targetSpec.dmdCoords, 5);
+                    sequence.trials(k).targetSpec.dmdCoords, 14);
                 sequence.trials(k).targetSpec.patternRef = pat;
             end
 

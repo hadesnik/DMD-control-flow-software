@@ -38,11 +38,13 @@ daq.configureDigitalOutput(config.daq.digitalOutChannels);
 calibration = loadCalibrationOrIdentity(config);
 
 targets  = resolveTargets(config, calibration);
+target   = tfp.util.validatePPSFTarget(targets, dmd, 'exp_axial_ppsf');
+targets  = target;     % single-target sequence
 
 dzUm     = [0, 5, 10, 20, 30, 50, -5, -10, -20, -30, -50];
 nReps    = 2;
 powerMw  = 5;
-radiusPx = 5;
+radiusPx = 14;
 if isfield(config, 'axialPpsf')
     ap = config.axialPpsf;
     if isfield(ap, 'dzUm'),    dzUm    = ap.dzUm;    end
