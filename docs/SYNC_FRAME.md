@@ -1,5 +1,22 @@
 # Frame-precise stim → ScanImage frame association
 
+> **SUPERSEDED 2026-05-23.** This document describes the *continuous*
+> ScanImage alignment design, which has been replaced by episodic
+> per-trial ScanImage acquisition. See
+> **[SYNC_EPISODIC.md](SYNC_EPISODIC.md)** for the current design.
+> The continuous design is preserved at git tag
+> `archive/continuous-alignment-2026-05-23` (see
+> [ARCHIVE_CONTINUOUS_ALIGNMENT.md](ARCHIVE_CONTINUOUS_ALIGNMENT.md)).
+> Sections still load-bearing under the new design: §2 (DAQ master-clock
+> model), §4 (continuous-session API contracts). Sections superseded:
+> §1 (two-path design — out-pulse is now operator-only), §3 (per-trial
+> out-pulse alignment role), §5 (frame-clock-as-primary), §6.2
+> (frame-index lists are now anchored per-TIFF, not via Nth-edge rule).
+
+---
+
+## (Original content below — kept verbatim for archival reference.)
+
 **Status:** Round-1 spec (TASK-SYNC-ALIGN, T-SYNC-1). Locks the API surface and
 the trial schema so Rounds 2–4 can fan out as independent implementations.
 No implementation in this round; only signatures, schema, and documented
