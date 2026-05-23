@@ -3,15 +3,13 @@ classdef test_align_trials_episodic < matlab.unittest.TestCase
     %   Covers the LOCKED aligner contract documented in SYNC_EPISODIC.md §7
     %   and the per-trial / session-fatal failure-mode table in §11.
     %
-    %   ORDER NOTE: tfp.io.alignTrialsEpisodic uses a function-local
-    %   `persistent warnedLow` to make the lowConfidence warning one-shot
-    %   per MATLAB session. MATLAB does not reset persistents between test
-    %   methods. This test class therefore calls `clear functions` in
-    %   TestMethodSetup so each method starts with a fresh persistent
-    %   state; without that, only the first method that trips the warning
-    %   would observe it. The cost is that any other persistent state
-    %   relied on by tfp.io.* across calls is reset between methods, which
-    %   is acceptable for these tests.
+    %   ORDER NOTE: tfp.io.alignTrialsEpisodic uses function-local
+    %   `persistent` flags to make its lowConfidence and overlap warnings
+    %   one-shot per MATLAB session. MATLAB does not reset persistents
+    %   between test methods. This test class therefore calls
+    %   `tfp.io.resetAlignTrialsEpisodicWarnings()` in TestMethodSetup so
+    %   each method starts with a fresh persistent state; without that,
+    %   only the first method that trips a warning would observe it.
 
     properties (Constant)
         SR              = 100000          % 100 kHz master clock
@@ -31,7 +29,7 @@ classdef test_align_trials_episodic < matlab.unittest.TestCase
             mkdir(testCase.TmpDir);
             % Reset persistent one-shot warning flags inside the aligner
             % (see ORDER NOTE on classdef docstring).
-            clear functions %#ok<CLFUNC>
+            tfp.io.resetAlignTrialsEpisodicWarnings();
         end
     end
 
@@ -268,23 +266,24 @@ classdef test_align_trials_episodic < matlab.unittest.TestCase
         end
 
         function tiffCountMismatch_sessionFatal(testCase)
-            % CONTRACT GAP (SYNC_EPISODIC.md §7.3 vs implementation):
-            % the contract requires that numel(tiffPaths) ~= numel(trials)
-            % produce report.fatal == true with correctly-shaped (all
-            % "none") perTrial and an empty-table perFrame. The current
-            % alignTrialsEpisodic implementation indexes tiffPaths{i}
-            % during per-trial pre-population (around line 159) BEFORE
-            % the numel mismatch check (around line 180), so a shorter
-            % tiffPaths vector throws MATLAB:badsubscript instead of
-            % returning a fatal report. This test pins the *current*
-            % behaviour (verifyError) so the suite stays green; flip it
-            % to the contract assertion once the aligner is fixed.
+            % Per SYNC_EPISODIC.md §7.3, numel(tiffPaths) ~= numel(trials)
+            % is a session-fatal precondition: the aligner must return
+            % report.fatal == true with correctly-shaped outputs rather
+            % than throwing.
             [trials, tiffPaths, fss] = testCase.buildSession(5);
             tiffPaths(end) = [];   % length 4, but 5 trials
 
-            testCase.verifyError( ...
-                @() tfp.io.alignTrialsEpisodic(trials, tiffPaths, fss, testCase.SR), ...
-                'MATLAB:badsubscript');
+            [perTrial, perFrame, report] = ...
+                tfp.io.alignTrialsEpisodic(trials, tiffPaths, fss, testCase.SR);
+
+            testCase.verifyTrue(report.fatal);
+            testCase.verifyTrue(contains(report.fatalReason, "tiffPaths"));
+            % perTrial is shape-preserved (one entry per input trial) but
+            % carries no alignment work because we bailed out early.
+            testCase.verifyEqual(numel(perTrial), 5);
+            % perFrame is the documented empty-but-correctly-shaped table.
+            testCase.verifyEqual(perFrame.Properties.VariableNames, ...
+                {'frameIdx', 'frameStartSample', 'trialIdx', 'phase'});
         end
 
         function sampleRateMismatch_sessionFatal(testCase)

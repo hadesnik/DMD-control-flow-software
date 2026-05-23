@@ -1,6 +1,16 @@
 function [perTrial, perFrame, report] = alignTrialsEpisodic(trials, tiffPaths, frameStartSamples, sampleRate)
 %alignTrialsEpisodic Per-trial cross-check aligner for episodic ScanImage acquisition.
 %
+%   TEST-ONLY RESET HOOK
+%   --------------------
+%   Pass the sentinel char/string '__resetWarnings__' as the only argument
+%   to clear the persistent one-shot warning flags
+%   (tfp:io:alignTrialsEpisodic:lowConfidence and
+%    tfp:io:alignTrialsEpisodic:overlap). Intended for test setup only.
+%   Production callers should use
+%   tfp.io.resetAlignTrialsEpisodicWarnings(), the thin public wrapper for
+%   this sentinel.
+%
 %   [perTrial, perFrame, report] = tfp.io.alignTrialsEpisodic( ...
 %       trials, tiffPaths, frameStartSamples, sampleRate)
 %
@@ -115,6 +125,30 @@ function [perTrial, perFrame, report] = alignTrialsEpisodic(trials, tiffPaths, f
 %   tfp.io.readScanImageTiff, tfp.io.decodeFrameClock,
 %   tfp.trial.Trial.attachEpisodicAlignment.
 
+% -------- Test-only reset hook (sentinel first argument).
+% Callers should use tfp.io.resetAlignTrialsEpisodicWarnings() rather than
+% poking this sentinel directly; documented here so the gate is one place.
+if nargin == 1 && (ischar(trials) || (isstring(trials) && isscalar(trials))) ...
+        && strcmp(string(trials), "__resetWarnings__")
+    resetOneShotWarnings();
+    if nargout > 0
+        perTrial = makeEmptyPerTrial(0);
+        perFrame = buildPerFrame(uint64.empty(0, 1), ...
+            nan(0, 1), strings(0, 1));
+        report = struct( ...
+            'fatal', false, 'fatalReason', "", ...
+            'numTrialsInput', 0, ...
+            'numTrialsAligned', uint32(0), ...
+            'numTrialsSkipped', uint32(0), ...
+            'skippedTrials', emptySkipStruct(), ...
+            'confidenceCounts', struct('high', 0, 'low', 0, 'quarantine', 0, 'none', 0), ...
+            'sampleRate', NaN, ...
+            'meanFrameRateInferred', NaN, ...
+            'totalFramesInDI', uint32(0));
+    end
+    return
+end
+
 % -------- Input validation (throw-side; session-fatal cases handled below).
 
 if ~isempty(trials) && ~isa(trials, 'tfp.trial.Trial')
@@ -152,12 +186,12 @@ fssDouble  = double(fss);
 nFrames    = numel(fss);
 
 % -------- Pre-allocate outputs (empty / shaped correctly even on fatal).
+% IMPORTANT: per the §7.3 contract, session-fatal checks must run BEFORE
+% any per-trial pre-population so that a precondition violation (e.g.
+% tiffPaths length mismatch) returns a properly-shaped fatal report rather
+% than tripping MATLAB:badsubscript.
 
 perTrial = makeEmptyPerTrial(nTrials);
-for i = 1:nTrials
-    perTrial(i).trialIdx   = trials(i).trialIdx;
-    perTrial(i).siTiffPath = tiffPaths{i};
-end
 
 trialIdxCol = nan(nFrames, 1);
 phaseCol    = strings(nFrames, 1);
@@ -175,7 +209,10 @@ report = struct( ...
     'meanFrameRateInferred', inferMeanFrameRate(fss, sampleRate), ...
     'totalFramesInDI',      uint32(nFrames));
 
-% -------- Session-fatal checks (per SYNC_EPISODIC.md §11).
+% -------- Session-fatal checks (per SYNC_EPISODIC.md §7.3 / §11).
+% These run BEFORE any per-trial loop so that on a fatal precondition the
+% function returns the documented empty-but-shaped outputs instead of
+% throwing.
 
 if numel(tiffPaths) ~= nTrials
     report = markFatal(report, ...
@@ -209,6 +246,12 @@ for i = 1:nTrials
             return
         end
     end
+end
+
+% -------- Per-trial pre-population (only reached after fatal checks pass).
+for i = 1:nTrials
+    perTrial(i).trialIdx   = trials(i).trialIdx;
+    perTrial(i).siTiffPath = tiffPaths{i};
 end
 
 % -------- Per-trial alignment.
@@ -367,7 +410,6 @@ end
 % -------- perFrame assembly.
 
 % First pass: baseline.
-overlapWarned = false; %#ok<NASGU>  % updated in stim pass below
 for i = 1:nTrials
     w = windows(i);
     if ~w.valid || nFrames == 0
@@ -384,18 +426,14 @@ end
 
 % Second pass: stim assignment (overrides baseline; earliest in input order
 % wins among overlapping stim windows, matching alignTrialsToFrames).
-overlapWarned = false;
 for i = 1:nTrials
     w = windows(i);
     if ~w.valid || nFrames == 0
         continue
     end
     inStim = fssDouble >= w.onset & fssDouble <= w.offset;
-    if ~overlapWarned && any(inStim & phaseCol == "stim")
-        warning('tfp:io:alignTrialsEpisodic:overlap', ...
-            ['Overlapping stim windows detected; earliest trial in input ' ...
-             'order wins.']);
-        overlapWarned = true;
+    if any(inStim & phaseCol == "stim")
+        oneShotOverlapWarning();
     end
     sel = inStim & phaseCol ~= "stim";
     trialIdxCol(sel) = double(trials(i).trialIdx);
@@ -488,12 +526,37 @@ perFrame = table(frameIdx, frameStartSample, trialIdxCol, phaseCol, ...
     'VariableNames', {'frameIdx', 'frameStartSample', 'trialIdx', 'phase'});
 end
 
-function oneShotLowConfidenceWarning()
+function oneShotLowConfidenceWarning(reset)
 persistent warnedLow
+if nargin >= 1 && reset
+    warnedLow = false;
+    return
+end
 if isempty(warnedLow) || ~warnedLow
     warning('tfp:io:alignTrialsEpisodic:lowConfidence', ...
         ['At least one trial landed in the "low" confidence tier ' ...
          '(1 < |discrepancy| <= 5). Inspect report.perTrial for details.']);
     warnedLow = true;
 end
+end
+
+function oneShotOverlapWarning(reset)
+persistent warnedOverlap
+if nargin >= 1 && reset
+    warnedOverlap = false;
+    return
+end
+if isempty(warnedOverlap) || ~warnedOverlap
+    warning('tfp:io:alignTrialsEpisodic:overlap', ...
+        ['Overlapping stim windows detected; earliest trial in input ' ...
+         'order wins.']);
+    warnedOverlap = true;
+end
+end
+
+function resetOneShotWarnings()
+%resetOneShotWarnings Clear both persistent one-shot warning flags.
+%   Invoked via the '__resetWarnings__' sentinel; intended for test setup.
+oneShotLowConfidenceWarning(true);
+oneShotOverlapWarning(true);
 end
