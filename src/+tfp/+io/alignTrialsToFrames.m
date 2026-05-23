@@ -1,6 +1,15 @@
 function [perTrial, perFrame] = alignTrialsToFrames(trials, frameStartSamples)
 %alignTrialsToFrames Post-hoc map between trials and ScanImage frames.
 %
+%   DEPRECATED — this function is the continuous-acquisition aligner and
+%   has been SUPERSEDED by tfp.io.alignTrialsEpisodic. See
+%   docs/SYNC_EPISODIC.md §7 for the new contract and
+%   docs/ARCHIVE_CONTINUOUS_ALIGNMENT.md (git tag
+%   archive/continuous-alignment-2026-05-23) for the prior design.
+%   New callers MUST use tfp.io.alignTrialsEpisodic; this function is
+%   retained for back-compat and emits a one-shot per-session
+%   tfp:io:alignTrialsToFrames:deprecated warning on first call.
+%
 %   Builds two complementary views of the stim/frame relationship:
 %
 %     perTrial - 1xN struct array (one entry per input trial) with the
@@ -41,6 +50,14 @@ function [perTrial, perFrame] = alignTrialsToFrames(trials, frameStartSamples)
 %     frameStartSamples - numeric vector of frame rising-edge DAQ
 %                         sample indices (output of decodeFrameClock).
 %                         Cast to uint64 internally.
+
+persistent warnedDeprecated
+if isempty(warnedDeprecated)
+    warning('tfp:io:alignTrialsToFrames:deprecated', ...
+        ['tfp.io.alignTrialsToFrames is superseded by ' ...
+         'tfp.io.alignTrialsEpisodic (see docs/SYNC_EPISODIC.md §7).']);
+    warnedDeprecated = true;
+end
 
 if ~isempty(trials) && ~isa(trials, 'tfp.trial.Trial')
     error('tfp:io:alignTrialsToFrames:badTrials', ...
