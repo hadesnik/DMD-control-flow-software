@@ -82,8 +82,19 @@ function result = exp_ensemble_fill_factor_power(dmd, daq, roiCentroids_scan, ca
 %                                falling back to best-found (default 20000).
 %
 %   Output result struct includes per-condition trial logs, the realised
-%   distributions (with achieved pairwise correlations), the run order, and
-%   per-trial achieved ON-pixel counts.
+%   distributions (with achieved pairwise correlations), the run order,
+%   per-trial achieved ON-pixel counts, and per-trial DAQ-sample anchors
+%   (`onsetDaqSamples` / `offsetDaqSamples`) recorded from the continuous
+%   master-clock session that runs for the whole experiment.
+%
+%   Stim AO is driven via `daq.queueClockedAO`, not `outputSingleAnalog +
+%   pause`, so onset/offset are anchored to hardware sample indices (see
+%   docs/SYNC_FRAME.md §4). The per-trial DO out-pulse is kept as a
+%   redundant ScanImage-side marker.
+%
+%   When `options.sessionDir` is a folder, each completed trial is also
+%   persisted via `tfp.io.saveTrial`, with the new sample anchors carried
+%   into the meta file (docs/SYNC_FRAME.md §6.1).
 %
 %   See also tfp.patterns.fillFactorEnsemble.
 
@@ -346,6 +357,35 @@ if syncEnabled
     end
 end
 
+% =========================================================================
+% Start the continuous DAQ master-clock session for the whole experiment.
+% All per-trial onset/offset sample anchors are referenced to this clock;
+% stim AO is queued via queueClockedAO instead of outputSingleAnalog+pause.
+% See docs/SYNC_FRAME.md §2, §4.
+% =========================================================================
+if isempty(daq.analogOutChannels)
+    error('tfp:experiments:exp_ensemble_fill_factor_power:noAO', ...
+        'daq.analogOutChannels is empty; cannot drive clocked AO.');
+end
+sessionSampleRate = daq.sampleRate;
+if isempty(sessionSampleRate) || ~isfinite(sessionSampleRate) || sessionSampleRate <= 0
+    error('tfp:experiments:exp_ensemble_fill_factor_power:badSampleRate', ...
+        'daq.sampleRate must be a positive scalar; got %s.', mat2str(sessionSampleRate));
+end
+
+sessionCfg              = struct();
+sessionCfg.sampleRate   = sessionSampleRate;
+sessionCfg.aiChannels   = daq.analogInChannels;
+sessionCfg.aoChannels   = daq.analogOutChannels;
+sessionCfg.diLines      = {};
+if syncEnabled
+    sessionCfg.doLines  = {syncDOLine};
+else
+    sessionCfg.doLines  = {};
+end
+daq.startContinuousSession(sessionCfg);
+cleanupSession = onCleanup(@() stopSessionSafely(daq));  %#ok<NASGU>
+
 % Pre-allocate per-trial timing buffers — indexed by execution order k.
 % A unified "run" table (cond1 then cond2 in temporal order) is also built
 % at the end for easy posthoc alignment with the ScanImage TTL trace.
@@ -356,27 +396,42 @@ timing.sessionStartPulseS = sessionStartPulseS;
 timing.trialOnsetPulseS   = trialOnsetPulseS;
 
 if c1.nTrials > 0
-    c1.onsetDatetime  = NaT(c1.nTrials, 1);
-    c1.offsetDatetime = NaT(c1.nTrials, 1);
-    c1.onsetTSec      = nan(c1.nTrials, 1);
-    c1.offsetTSec     = nan(c1.nTrials, 1);
+    c1.onsetDatetime    = NaT(c1.nTrials, 1);
+    c1.offsetDatetime   = NaT(c1.nTrials, 1);
+    c1.onsetTSec        = nan(c1.nTrials, 1);
+    c1.offsetTSec       = nan(c1.nTrials, 1);
+    c1.onsetDaqSamples  = zeros(c1.nTrials, 1, 'uint64');
+    c1.offsetDaqSamples = zeros(c1.nTrials, 1, 'uint64');
 end
 if c2.nTrials > 0
-    c2.onsetDatetime  = NaT(c2.nTrials, 1);
-    c2.offsetDatetime = NaT(c2.nTrials, 1);
-    c2.onsetTSec      = nan(c2.nTrials, 1);
-    c2.offsetTSec     = nan(c2.nTrials, 1);
+    c2.onsetDatetime    = NaT(c2.nTrials, 1);
+    c2.offsetDatetime   = NaT(c2.nTrials, 1);
+    c2.onsetTSec        = nan(c2.nTrials, 1);
+    c2.offsetTSec       = nan(c2.nTrials, 1);
+    c2.onsetDaqSamples  = zeros(c2.nTrials, 1, 'uint64');
+    c2.offsetDaqSamples = zeros(c2.nTrials, 1, 'uint64');
 end
 
 % Session start: long TTL marker + master tic. The session-start TTL is the
 % reference edge against which all per-trial onsets are measured in
-% ScanImage's recorded aux trace.
+% ScanImage's recorded aux trace. The DAQ master clock is already running
+% from startContinuousSession above; sessionStartDatetime here is the
+% host-side anchor used for Trial.session_start_datetime.
 timing.sessionStartDatetime = datetime('now');
+timing.daqSampleRateHz      = sessionSampleRate;
 if syncEnabled && sessionStartPulseS > 0
     daq.sendDigitalPulse(syncDOLine, sessionStartPulseS);
 end
 t0 = tic;   % monotonic reference for all per-trial onsetTSec / offsetTSec
 timing.sessionStartTSec = 0;
+
+% Pre-build the stim AO waveform shared by every trial. powerV is held
+% constant during the stim window; per-cell power modulation is DMD-side
+% (fill fraction). Trailing zero sample drives the line back to 0 V on
+% the next clock tick after the stim ends. Shape: nSamples x nAoChans.
+nOnSamples   = max(1, round(stimDurationS * sessionSampleRate));
+nAoChans     = numel(daq.analogOutChannels);
+stimWaveform = [powerV * ones(nOnSamples, nAoChans); zeros(1, nAoChans)];
 
 % =========================================================================
 % Run condition 1
@@ -407,9 +462,10 @@ if runUniform
             daq.sendDigitalPulse(syncDOLine, trialOnsetPulseS);
         end
 
-        daq.outputSingleAnalog(aoChannel, powerV);
+        startSampleIdx = daq.queueClockedAO(stimWaveform, sessionSampleRate, 'immediate');
+        c1.onsetDaqSamples(k)  = startSampleIdx;
+        c1.offsetDaqSamples(k) = startSampleIdx + uint64(nOnSamples - 1);
         pause(stimDurationS);
-        daq.outputSingleAnalog(aoChannel, 0);
         c1.offsetDatetime(k) = datetime('now');
         c1.offsetTSec(k)     = toc(t0);
 
@@ -417,6 +473,17 @@ if runUniform
             c1.fillPerCell(:, t), ...
             sprintf('Cond 1  trial %d/%d  —  %.0f%% fill  —  off', ...
                 k, c1.nTrials, fill*100), false);
+
+        if ~isempty(sessionDir) && isfolder(sessionDir)
+            persistTrial(sessionDir, k, 1, t, sIdx, ...
+                c1.fillPerCell(:, t), dmdCentroids, ...
+                stimDurationS, interStimS, powerV, ...
+                c1.onsetDaqSamples(k), c1.offsetDaqSamples(k), ...
+                sessionSampleRate, timing.sessionStartDatetime, ...
+                c1.onsetDatetime(k), ...
+                struct('fillFraction', fill, 'levelIdx', lvl, ...
+                       'repeatIdx', rep, 'nOnPixels', c1.nOnPixels(:, t)));
+        end
 
         pause(interStimS);
 
@@ -456,9 +523,10 @@ if runDifferential
             daq.sendDigitalPulse(syncDOLine, trialOnsetPulseS);
         end
 
-        daq.outputSingleAnalog(aoChannel, powerV);
+        startSampleIdx = daq.queueClockedAO(stimWaveform, sessionSampleRate, 'immediate');
+        c2.onsetDaqSamples(k)  = startSampleIdx;
+        c2.offsetDaqSamples(k) = startSampleIdx + uint64(nOnSamples - 1);
         pause(stimDurationS);
-        daq.outputSingleAnalog(aoChannel, 0);
         c2.offsetDatetime(k) = datetime('now');
         c2.offsetTSec(k)     = toc(t0);
 
@@ -468,6 +536,18 @@ if runDifferential
                 k, c2.nTrials, d, c2.nDistributions, rep, c2.nRepeats), ...
             true);
 
+        if ~isempty(sessionDir) && isfolder(sessionDir)
+            globalIdx = c1.nTrials + k;
+            persistTrial(sessionDir, globalIdx, 2, t, sIdx, ...
+                c2.fillPerCell(:, t), dmdCentroids, ...
+                stimDurationS, interStimS, powerV, ...
+                c2.onsetDaqSamples(k), c2.offsetDaqSamples(k), ...
+                sessionSampleRate, timing.sessionStartDatetime, ...
+                c2.onsetDatetime(k), ...
+                struct('distIdx', d, 'repeatIdx', rep, ...
+                       'nOnPixels', c2.nOnPixels(:, t)));
+        end
+
         pause(interStimS);
 
         if mod(k, 5) == 0 || k == c2.nTrials
@@ -475,6 +555,14 @@ if runDifferential
         end
     end
 end
+
+% =========================================================================
+% Stop the continuous DAQ session and capture the AI/DI buffers for the
+% whole experiment. The clocked AO is already done at this point (final
+% trial's pause(interStimS) has elapsed).
+% =========================================================================
+sessionResult = daq.stopContinuousSession();
+timing.daqSessionResult = sessionResult;
 
 % =========================================================================
 % Build unified time-ordered run table (cond1 then cond2 — matches the
@@ -489,6 +577,8 @@ timing.run.onsetDatetime    = NaT(nRun, 1);
 timing.run.offsetDatetime   = NaT(nRun, 1);
 timing.run.onsetTSec        = nan(nRun, 1);
 timing.run.offsetTSec       = nan(nRun, 1);
+timing.run.onsetDaqSamples  = zeros(nRun, 1, 'uint64');
+timing.run.offsetDaqSamples = zeros(nRun, 1, 'uint64');
 
 j = 0;
 for k = 1:c1.nTrials
@@ -500,6 +590,8 @@ for k = 1:c1.nTrials
     timing.run.offsetDatetime(j)   = c1.offsetDatetime(k);
     timing.run.onsetTSec(j)        = c1.onsetTSec(k);
     timing.run.offsetTSec(j)       = c1.offsetTSec(k);
+    timing.run.onsetDaqSamples(j)  = c1.onsetDaqSamples(k);
+    timing.run.offsetDaqSamples(j) = c1.offsetDaqSamples(k);
 end
 for k = 1:c2.nTrials
     j = j + 1;
@@ -510,6 +602,8 @@ for k = 1:c2.nTrials
     timing.run.offsetDatetime(j)   = c2.offsetDatetime(k);
     timing.run.onsetTSec(j)        = c2.onsetTSec(k);
     timing.run.offsetTSec(j)       = c2.offsetTSec(k);
+    timing.run.onsetDaqSamples(j)  = c2.onsetDaqSamples(k);
+    timing.run.offsetDaqSamples(j) = c2.offsetDaqSamples(k);
 end
 
 % =========================================================================
@@ -535,6 +629,7 @@ result.powerV         = powerV;
 result.stimDurationS  = stimDurationS;
 result.interStimS     = interStimS;
 result.rngSeed        = rngSeed;
+result.sampleRate     = sessionSampleRate;
 result.condition1     = c1;
 result.condition2     = c2;
 result.timing         = timing;
@@ -708,6 +803,57 @@ function safetyOff(daq, aoChannel)
 try
     daq.outputSingleAnalog(aoChannel, 0);
 catch
+end
+end
+
+function stopSessionSafely(daq)
+% Stop the continuous DAQ session if it's still running (e.g. on error
+% mid-experiment). Idempotent.
+try
+    if daq.isRunning
+        daq.stopContinuousSession();
+    end
+catch
+end
+end
+
+function persistTrial(sessionDir, trialIdx, conditionId, trialInCond, ...
+        stackIdx, fillPerCell, dmdCentroids, ...
+        stimDurationS, interStimS, powerV, ...
+        onsetSample, offsetSample, sampleRate, sessionStartDatetime, ...
+        onsetDatetime, extraMetadata)
+% Build a tfp.trial.Trial with the new sample-anchor schema and write it
+% to <sessionDir>/trials/ via tfp.io.saveTrial.
+trial = tfp.trial.Trial();
+trial.trialIdx   = trialIdx;
+trial.timestamp  = onsetDatetime;
+trial.targetSpec = struct( ...
+    'cellIds',     (1:size(dmdCentroids, 1))', ...
+    'dmdCoords',   dmdCentroids, ...
+    'fillPerCell', fillPerCell(:), ...
+    'condition',   conditionId, ...
+    'trialInCondition', trialInCond, ...
+    'stackIdx',    stackIdx);
+trial.powerMw    = NaN;   % fill-factor experiment: AO voltage held at powerV,
+                          % per-cell power is set DMD-side (pixel fraction)
+trial.duration_s = stimDurationS;
+trial.preStim_s  = 0;
+trial.postStim_s = interStimS;
+trial.pulseTrain = struct( ...
+    'nPulses',      1, ...
+    'interPulse_s', 0, ...
+    'pulseWidth_s', stimDurationS);
+trial.metadata = extraMetadata;
+trial.metadata.powerV = powerV;
+
+trial.markRunning(onsetSample, sampleRate, sessionStartDatetime);
+trial.markComplete(struct(), offsetSample);
+
+try
+    tfp.io.saveTrial(trial, sessionDir, struct('saveRawData', false));
+catch ME
+    warning('tfp:experiments:exp_ensemble_fill_factor_power:saveTrialFailed', ...
+        'saveTrial failed for trial %d: %s', trialIdx, ME.message);
 end
 end
 
