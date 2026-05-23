@@ -52,16 +52,6 @@ ROI_PORT        = 3045;
 MSOCKET_PATH    = '';     % e.g. 'C:\path\to\msocket'; leave '' if already on path
 ROI_TIMEOUT_S   = 120;   % seconds to wait for imaging PC to connect
 
-% Continuous session capture (T-SYNC-12 / docs/SYNC_FRAME.md §4).
-% A single hardware-clocked session runs for the entire experiment and
-% records the ScanImage frame clock on a DI line plus any extra AI signals.
-% AO/DO stay owned by the experiment's per-trial calls (Round 3 will move
-% AO to clocked output inside this session); the cont session reserves
-% only AI + DI to avoid resource collisions.
-FRAME_CLOCK_DI_LINE   = 'port0/line2';    % ScanImage frame TTL (configs/real.yaml)
-CONTINUOUS_AI_CHANS   = [];               % numeric AI channel indices; [] = none
-CONTINUOUS_AI_RANGE_V = [];               % e.g. [-10 10]; [] keeps board default
-
 % =========================================================================
 % Hardware init
 % =========================================================================
@@ -82,22 +72,6 @@ daq = tfp.hardware.NI6323_DAQ(daqCfg);
 daq.initialize(daqCfg);
 
 cleanupHw = onCleanup(@() teardown(dmd, daq, AO_CHANNEL));
-
-% =========================================================================
-% Continuous DAQ session — captures frame clock DI + any AI for the full
-% experiment duration. See docs/SYNC_FRAME.md §4.
-% =========================================================================
-contCfg = struct();
-contCfg.sampleRate     = DAQ_RATE;
-contCfg.aiChannels     = CONTINUOUS_AI_CHANS;
-contCfg.aiRangeV       = CONTINUOUS_AI_RANGE_V;
-contCfg.aoChannels     = [];                       % AO owned by experiment (pre-Round-3)
-contCfg.diLines        = {FRAME_CLOCK_DI_LINE};
-contCfg.doLines        = {};
-contCfg.frameClockLine = FRAME_CLOCK_DI_LINE;
-daq.startContinuousSession(contCfg);
-fprintf('Continuous session armed @ %g Hz; frame clock on %s.\n', ...
-    DAQ_RATE, FRAME_CLOCK_DI_LINE);
 
 % =========================================================================
 % Load calibration
@@ -153,15 +127,19 @@ result = tfp.experiments.exp_ensemble_activation( ...
     dmd, daq, roiCentroids_scan, calib, opts);
 
 % =========================================================================
-% Stop continuous session and persist full DI/AI buffers
+% Persist the continuous-session DI/AI capture (T-SYNC-12).
+% The experiment opens and closes the master-clock session itself
+% (T-SYNC-9) and returns the captured buffers in result.sessionData.
+% Split it out into its own -v7.3 file so the lightweight result struct
+% stays small and easy to share.
 % =========================================================================
-daqCapture = daq.stopContinuousSession();
-fprintf('Continuous session stopped: %u samples (%.1f s); AI %dx%d, DI %dx%d.\n', ...
+daqCapture = result.sessionData;
+fprintf('Continuous session: %u samples (%.1f s); AI %dx%d, DI %dx%d, AO %u samples.\n', ...
     daqCapture.nSamplesTotal, ...
     double(daqCapture.nSamplesTotal) / daqCapture.sampleRate, ...
     size(daqCapture.aiData, 1), size(daqCapture.aiData, 2), ...
-    size(daqCapture.diData, 1), size(daqCapture.diData, 2));
-
+    size(daqCapture.diData, 1), size(daqCapture.diData, 2), ...
+    daqCapture.aoSamplesWritten);
 save(fullfile(SESSION_DIR, 'session_capture.mat'), '-v7.3', 'daqCapture');
 
 % =========================================================================
@@ -180,7 +158,6 @@ fprintf('\nSession saved to: %s\n', SESSION_DIR);
 % Local helpers
 % =========================================================================
 function teardown(dmd, daq, aoChannel)
-try, daq.stopContinuousSession();          catch, end
 try, daq.outputSingleAnalog(aoChannel, 0); catch, end
 try, dmd.cleanup();                        catch, end
 try, daq.cleanup();                        catch, end
