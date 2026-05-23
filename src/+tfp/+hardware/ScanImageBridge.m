@@ -103,6 +103,19 @@ classdef ScanImageBridge < handle
         liveF_           % nCells × maxFrames double accumulator (NaN = not yet received)
         liveFTimes_      % 1 × maxFrames double epoch-s (NaN = not yet received)
         streamSocket_    % msocket handle for F streaming (port 3044; separate from siSocket_)
+
+        % Episodic API (per docs/SYNC_EPISODIC.md §9) -----------------------
+        state_              % char: 'idle' | 'armed' | 'completed'
+        sessionActive_      % logical; true between beginSession and disconnect
+        startAcqNum_        % uint32; snapshot of hSI.hScan2D.logFileCounter at beginSession
+        logFileStem_        % char; snapshot of hSI.hScan2D.logFileStem at beginSession
+        logFileSaveDir_     % char; snapshot of hSI.hScan2D.logFilePath at beginSession
+        acqNumWidth_        % uint8; zero-padding width (default 5)
+        trialCounter_       % uint32; 0 before first arm, increments before each arm
+        nFramesExpected_    % uint32; frames per acq for the most recently armed trial
+        lastTiffPath_       % char; result of last getLastTiffPath (cached)
+        armTimeoutS_        % double; budget for individual hSI calls during arm (s)
+        pollIntervalS_      % double; waitForCompletion poll period (s)
     end
 
     methods
@@ -140,6 +153,19 @@ classdef ScanImageBridge < handle
             obj.liveFTimes_     = [];
             obj.streamSocket_   = [];
 
+            % Episodic API state (see docs/SYNC_EPISODIC.md §9.1)
+            obj.state_           = 'idle';
+            obj.sessionActive_   = false;
+            obj.startAcqNum_     = uint32(0);
+            obj.logFileStem_     = '';
+            obj.logFileSaveDir_  = '';
+            obj.acqNumWidth_     = uint8(5);  %VERIFY default zero-pad width; confirm against ScanImage filename pattern at the rig
+            obj.trialCounter_    = uint32(0);
+            obj.nFramesExpected_ = uint32(0);
+            obj.lastTiffPath_    = '';
+            obj.armTimeoutS_     = configField(config, 'armTimeoutS',    5.0);
+            obj.pollIntervalS_   = configField(config, 'pollIntervalS',  0.020);
+
             if strcmp(obj.mode_, 'tcp')
                 obj.tcpConnect();
             end
@@ -152,6 +178,94 @@ classdef ScanImageBridge < handle
             %   Call before setActivePattern so the correct power is sent to
             %   ScanImage.  The Sequencer should call this with trial.powerMw.
             obj.pendingPowerMw_ = double(powerMw);
+        end
+
+        function sessionInfo = beginSession(obj, opts)
+            %beginSession Snapshot ScanImage logging state for this session.
+            %
+            %   Per docs/SYNC_EPISODIC.md §9.2.  Captures the three properties
+            %   needed to derive TIFF paths deterministically:
+            %     hSI.hScan2D.logFileCounter  -> startAcqNum_
+            %     hSI.hScan2D.logFileStem     -> logFileStem_
+            %     hSI.hScan2D.logFilePath     -> logFileSaveDir_
+            %
+            %   Must be called ONCE at the start of a session, before any
+            %   armForExternalTrigger call uses the episodic protocol.
+            %
+            %   opts (struct, optional) override fields for dry-runs / tests:
+            %     .startAcqNumOverride     - uint32 to use instead of hSI value
+            %     .logFileStemOverride     - char  to use instead of hSI value
+            %     .logFileSaveDirOverride  - char  to use instead of hSI value
+            %     .acqNumWidthOverride     - uint8 zero-pad width (default 5)
+            %
+            %   Returns a sessionInfo struct mirroring the snapshot.
+            if nargin < 2 || isempty(opts)
+                opts = struct();
+            end
+            if obj.sessionActive_
+                error('tfp:hardware:ScanImageBridge:badState', ...
+                    'beginSession called twice without disconnect (state=%s).', obj.state_);
+            end
+
+            % Allow override of the zero-pad width (default 5).
+            if isfield(opts, 'acqNumWidthOverride') && ~isempty(opts.acqNumWidthOverride)
+                obj.acqNumWidth_ = uint8(opts.acqNumWidthOverride);
+            else
+                obj.acqNumWidth_ = uint8(5);  %VERIFY ScanImage default file-counter zero-pad width
+            end
+
+            % Snapshot logFileCounter
+            if isfield(opts, 'startAcqNumOverride') && ~isempty(opts.startAcqNumOverride)
+                obj.startAcqNum_ = uint32(opts.startAcqNumOverride);
+            else
+                try
+                    obj.startAcqNum_ = uint32(obj.readSiLogFileCounter_());
+                catch ME
+                    error('tfp:hardware:ScanImageBridge:siQueryFailed', ...
+                        'Failed to read hSI.hScan2D.logFileCounter: %s', ME.message);
+                end
+            end
+
+            % Snapshot logFileStem
+            if isfield(opts, 'logFileStemOverride') && ~isempty(opts.logFileStemOverride)
+                obj.logFileStem_ = char(opts.logFileStemOverride);
+            else
+                try
+                    obj.logFileStem_ = char(obj.readSiLogFileStem_());
+                catch ME
+                    error('tfp:hardware:ScanImageBridge:siQueryFailed', ...
+                        'Failed to read hSI.hScan2D.logFileStem: %s', ME.message);
+                end
+            end
+
+            % Snapshot logFilePath
+            if isfield(opts, 'logFileSaveDirOverride') && ~isempty(opts.logFileSaveDirOverride)
+                obj.logFileSaveDir_ = char(opts.logFileSaveDirOverride);
+            else
+                try
+                    obj.logFileSaveDir_ = char(obj.readSiLogFilePath_());
+                catch ME
+                    error('tfp:hardware:ScanImageBridge:siQueryFailed', ...
+                        'Failed to read hSI.hScan2D.logFilePath: %s', ME.message);
+                end
+            end
+
+            % State transitions
+            obj.trialCounter_   = uint32(0);
+            obj.state_          = 'idle';
+            obj.sessionActive_  = true;
+            obj.lastTiffPath_   = '';
+
+            sessionStartDatetime = datetime('now');
+
+            sessionInfo = struct( ...
+                'startAcqNum',          obj.startAcqNum_, ...
+                'logFileStem',          obj.logFileStem_, ...
+                'logFileSaveDir',       obj.logFileSaveDir_, ...
+                'acqNumWidth',          obj.acqNumWidth_, ...
+                'sessionStartDatetime', sessionStartDatetime);
+
+            obj.logEvent('beginSession', sessionInfo);
         end
 
         function armForExternalTrigger(obj, nFrames)
@@ -171,6 +285,44 @@ classdef ScanImageBridge < handle
             end
             obj.nFrames_ = round(nFrames);
 
+            % Episodic-mode preconditions and trial-counter increment.
+            % Per docs/SYNC_EPISODIC.md §9.3: increment BEFORE the hSI calls
+            % so getLastTiffPath can still derive the right index if a call
+            % fails mid-arm.
+            if obj.sessionActive_
+                if ~strcmp(obj.state_, 'idle')
+                    error('tfp:hardware:ScanImageBridge:badState', ...
+                        ['armForExternalTrigger requires state=idle, got %s. ' ...
+                         'Did you forget to call getLastTiffPath after the previous trial?'], ...
+                        obj.state_);
+                end
+                obj.trialCounter_    = obj.trialCounter_ + uint32(1);
+                obj.nFramesExpected_ = uint32(obj.nFrames_);
+
+                % Configure ScanImage for this trial's frame count, external
+                % trigger mode, and start an externally-triggered grab.  Each
+                % call is wrapped so a failure is reported with a precise ID
+                % and the bridge stays in a recoverable state.
+                try
+                    obj.setSiFramesPerAcq_(obj.nFrames_);
+                catch ME
+                    error('tfp:hardware:ScanImageBridge:armFailed', ...
+                        'Failed to set framesPerAcq: %s', ME.message);
+                end
+                try
+                    obj.enableSiExternalTrigger_();
+                catch ME
+                    error('tfp:hardware:ScanImageBridge:armFailed', ...
+                        'Failed to enable external trigger: %s', ME.message);
+                end
+                try
+                    obj.startSiGrab_();
+                catch ME
+                    error('tfp:hardware:ScanImageBridge:armTimeout', ...
+                        'startGrab failed (arm timeout): %s', ME.message);
+                end
+            end
+
             switch obj.mode_
                 case 'msocket'
                     obj.msocketHandshake();
@@ -185,7 +337,14 @@ classdef ScanImageBridge < handle
                 % ttl_only: nothing to do
             end
 
-            obj.logEvent('armForExternalTrigger', struct('nFrames', obj.nFrames_));
+            if obj.sessionActive_
+                obj.state_ = 'armed';
+            end
+
+            obj.logEvent('armForExternalTrigger', ...
+                struct('nFrames', obj.nFrames_, ...
+                       'trialIndex', obj.trialCounter_, ...
+                       'sessionActive', obj.sessionActive_));
         end
 
         function setActivePattern(obj, ~, stimOnsetSec, stimDurationSec)
@@ -227,6 +386,45 @@ classdef ScanImageBridge < handle
             %     TEST:   Run verifyProtocol() — step 6 listens for any post-acquisition message.
             %     CHANGE: Replace pause(min(waitS, timeoutS)) with msrecv(obj.siSocket_) in a
             %             try/catch with timeoutS — msocket branch only.
+            if obj.sessionActive_
+                % Episodic-mode precondition (per docs/SYNC_EPISODIC.md §9.4):
+                % must be armed.
+                if ~strcmp(obj.state_, 'armed')
+                    error('tfp:hardware:ScanImageBridge:badState', ...
+                        'waitForCompletion requires state=armed, got %s.', obj.state_);
+                end
+                tStart = tic;
+                acqIdle = false;
+                while toc(tStart) < timeoutS
+                    try
+                        acqState = obj.readSiAcqState_();
+                    catch ME
+                        % If we cannot read the state at all, treat as a fatal
+                        % timeout — the trial is dead per the contract.
+                        obj.state_ = 'idle';
+                        error('tfp:hardware:ScanImageBridge:siQueryFailed', ...
+                            'Failed to read hSI.acqState during waitForCompletion: %s', ...
+                            ME.message);
+                    end
+                    if obj.isAcqIdle_(acqState)
+                        acqIdle = true;
+                        break;
+                    end
+                    pause(obj.pollIntervalS_);
+                end
+                if ~acqIdle
+                    obj.state_ = 'idle';  % per contract — trial is dead
+                    error('tfp:hardware:ScanImageBridge:acquisitionTimeout', ...
+                        'ScanImage did not return to idle within %.3f s', timeoutS);
+                end
+                obj.state_ = 'completed';
+                obj.logEvent('waitForCompletion', ...
+                    struct('timeoutS', timeoutS, ...
+                           'elapsedS', toc(tStart), ...
+                           'sessionActive', true));
+                return;
+            end
+
             switch obj.mode_
                 case 'tcp'
                     obj.pollUntilIdle(timeoutS);
@@ -273,6 +471,50 @@ classdef ScanImageBridge < handle
             obj.lastFilePath_ = framesPath;
             obj.logEvent('getLastAcquisition', ...
                 struct('framesPath', framesPath, 'nFrames', obj.nFrames_));
+        end
+
+        function tiffPath = getLastTiffPath(obj)
+            %getLastTiffPath Derive the TIFF path for the most recent trial.
+            %
+            %   Implements the LOCKED path-derivation formula from
+            %   docs/SYNC_EPISODIC.md §9.5:
+            %
+            %     acqNum   = startAcqNum_ + trialCounter_ - 1
+            %     fmt      = sprintf('%%s_%%0%dd.tif', acqNumWidth_)
+            %     fileName = sprintf(fmt, logFileStem_, acqNum)
+            %     tiffPath = fullfile(logFileSaveDir_, fileName)
+            %
+            %   Precondition: state_=='completed'.
+            %   Postcondition: state_=='idle', so the next trial can arm.
+            %   If the file does not exist on disk, issues a warning but
+            %   still returns the expected path.
+            if ~obj.sessionActive_
+                error('tfp:hardware:ScanImageBridge:badState', ...
+                    'getLastTiffPath requires an active session.');
+            end
+            if ~strcmp(obj.state_, 'completed')
+                error('tfp:hardware:ScanImageBridge:badState', ...
+                    'getLastTiffPath requires state=completed, got %s.', obj.state_);
+            end
+
+            % LOCKED path-derivation formula — do not change without updating
+            % docs/SYNC_EPISODIC.md §9.5 and the matching mock.
+            acqNum   = obj.startAcqNum_ + uint32(obj.trialCounter_) - uint32(1);
+            fmt      = sprintf('%%s_%%0%dd.tif', double(obj.acqNumWidth_));
+            fileName = sprintf(fmt, obj.logFileStem_, acqNum);
+            tiffPath = fullfile(obj.logFileSaveDir_, fileName);
+
+            if exist(tiffPath, 'file') == 0
+                warning('tfp:hardware:ScanImageBridge:tiffNotFound', ...
+                    'Expected TIFF not found on disk: %s', tiffPath);
+            end
+
+            obj.lastTiffPath_ = tiffPath;
+            obj.state_        = 'idle';
+            obj.logEvent('getLastTiffPath', ...
+                struct('tiffPath', tiffPath, ...
+                       'acqNum', acqNum, ...
+                       'trialIndex', obj.trialCounter_));
         end
 
         function result = getSyntheticResult(obj) %#ok<MANU>
@@ -361,6 +603,16 @@ classdef ScanImageBridge < handle
                 obj.tcpClient_  = [];
                 obj.isConnected = false;
             end
+
+            % Clear episodic session state (per docs/SYNC_EPISODIC.md §9.1).
+            obj.sessionActive_   = false;
+            obj.startAcqNum_     = uint32(0);
+            obj.logFileStem_     = '';
+            obj.logFileSaveDir_  = '';
+            obj.trialCounter_    = uint32(0);
+            obj.nFramesExpected_ = uint32(0);
+            obj.state_           = 'idle';
+
             obj.logEvent('disconnect', struct());
         end
 
@@ -368,6 +620,82 @@ classdef ScanImageBridge < handle
             %getLog Return the in-memory session log.
             %   entries is a struct array with fields {timestamp, eventType, payload}.
             entries = obj.log_;
+        end
+
+        function verifyEpisodicProtocol(obj)
+            %verifyEpisodicProtocol Operator-side diagnostic for episodic API.
+            %
+            %   Per docs/SYNC_EPISODIC.md §9.6.  Prints a pass/fail checklist
+            %   covering: hSI accessibility, the three logging properties, and
+            %   an end-to-end probe (beginSession -> arm -> waitForCompletion ->
+            %   getLastTiffPath) with operator-fired external trigger.
+            %
+            %   Never throws.  Restores state on exit (try/finally with
+            %   disconnect()).
+            fprintf('\n[verifyEpisodicProtocol] === ScanImageBridge episodic diagnostic ===\n');
+
+            % --- 1. hSI accessibility -------------------------------------
+            hSIAccessible = false;
+            try
+                hSIAccessible = evalin('base', 'exist(''hSI'',''var'') && ~isempty(hSI)');
+            catch
+                hSIAccessible = false;
+            end
+            obj.printCheck_('hSI accessible in base workspace', hSIAccessible);
+
+            % --- 2. logFileCounter readable -------------------------------
+            counterReadable = false;  counterVal = [];
+            try
+                counterVal = obj.readSiLogFileCounter_();
+                counterReadable = true;
+            catch
+                counterReadable = false;
+            end
+            obj.printCheck_('hSI.hScan2D.logFileCounter readable', counterReadable, counterVal);
+
+            % --- 3. logFileStem readable ----------------------------------
+            stemReadable = false;  stemVal = '';
+            try
+                stemVal = obj.readSiLogFileStem_();
+                stemReadable = true;
+            catch
+                stemReadable = false;
+            end
+            obj.printCheck_('hSI.hScan2D.logFileStem readable', stemReadable, stemVal);
+
+            % --- 4. logFilePath readable ----------------------------------
+            pathReadable = false;  pathVal = '';
+            try
+                pathVal = obj.readSiLogFilePath_();
+                pathReadable = true;
+            catch
+                pathReadable = false;
+            end
+            obj.printCheck_('hSI.hScan2D.logFilePath readable', pathReadable, pathVal);
+
+            % --- 5. End-to-end probe --------------------------------------
+            fprintf('[verifyEpisodicProtocol]\n');
+            fprintf('[verifyEpisodicProtocol] End-to-end probe: 5-frame acquisition.\n');
+            fprintf('[verifyEpisodicProtocol] You must manually fire the external trigger when prompted.\n');
+
+            e2eOk = false;
+            tiffPath = '';
+            try
+                obj.beginSession(struct());
+                obj.armForExternalTrigger(5);
+                fprintf('[verifyEpisodicProtocol] Armed.  Fire the external trigger now.\n');
+                obj.waitForCompletion(60);
+                tiffPath = obj.getLastTiffPath();
+                e2eOk = (exist(tiffPath, 'file') ~= 0);
+            catch ME
+                fprintf('[verifyEpisodicProtocol] End-to-end probe FAILED: %s\n', ME.message);
+            end
+            obj.printCheck_('End-to-end probe TIFF on disk', e2eOk, tiffPath);
+
+            % Always restore to a clean state.
+            try, obj.disconnect(); catch, end %#ok<TRYNC>
+
+            fprintf('[verifyEpisodicProtocol] ===========================================\n\n');
         end
 
         function verifyProtocol(obj)
@@ -695,6 +1023,138 @@ classdef ScanImageBridge < handle
             catch ME
                 warning('tfp:hardware:ScanImageBridge:fileQueryFailed', ...
                     'Could not retrieve TIFF path from ScanImage: %s', ME.message);
+            end
+        end
+
+        % --- episodic API: ScanImage property helpers ---------------------------
+        %
+        % Every ScanImage property read or call goes through one of these
+        % helpers so the rig bring-up has a single place to patch when a
+        % property name turns out to be wrong.  Each is marked %VERIFY with
+        % the assumed property name.
+
+        function val = readSiLogFileCounter_(obj) %#ok<MANU>
+            %readSiLogFileCounter_ Snapshot the per-acquisition file counter.
+            %VERIFY hSI.hScan2D.logFileCounter — confirm property name at the rig.
+            %  ASSUME: hSI lives in the base workspace and hScan2D.logFileCounter
+            %          is a numeric scalar that increments after each acquisition.
+            %  TEST:   ScanImage MATLAB console: disp(hSI.hScan2D.logFileCounter)
+            %  CHANGE: Update the evalin string here.
+            val = evalin('base', 'hSI.hScan2D.logFileCounter');
+        end
+
+        function val = readSiLogFileStem_(obj) %#ok<MANU>
+            %readSiLogFileStem_ Snapshot the logging filename stem.
+            %VERIFY hSI.hScan2D.logFileStem — confirm property name at the rig.
+            %  ASSUME: returns a char vector used as the base of saved TIFF names.
+            %  TEST:   ScanImage MATLAB console: disp(hSI.hScan2D.logFileStem)
+            %  CHANGE: Update the evalin string here.
+            val = evalin('base', 'hSI.hScan2D.logFileStem');
+        end
+
+        function val = readSiLogFilePath_(obj) %#ok<MANU>
+            %readSiLogFilePath_ Snapshot the logging output directory.
+            %VERIFY hSI.hScan2D.logFilePath — confirm property name at the rig.
+            %  ASSUME: returns a char vector with the full save directory.
+            %  TEST:   ScanImage MATLAB console: disp(hSI.hScan2D.logFilePath)
+            %  CHANGE: Update the evalin string here.
+            val = evalin('base', 'hSI.hScan2D.logFilePath');
+        end
+
+        function setSiFramesPerAcq_(obj, n) %#ok<INUSL>
+            %setSiFramesPerAcq_ Set the per-acquisition frame count.
+            %VERIFY hSI.hScan2D.framesPerAcq — newer ScanImage may use
+            %       hSI.hRoiManager.scanFramesPerSlice or similar.
+            %  ASSUME: framesPerAcq lives on hScan2D and is the frame count
+            %          for an externally-triggered grab.
+            %  TEST:   ScanImage MATLAB console: disp(hSI.hScan2D.framesPerAcq)
+            %  CHANGE: Switch to the correct property; some versions need
+            %          hSI.hStackManager.framesPerSlice = n instead.
+            assignin('base', 'tfp_framesPerAcq_tmp__', n);
+            evalin('base', 'hSI.hScan2D.framesPerAcq = tfp_framesPerAcq_tmp__;');
+            evalin('base', 'clear tfp_framesPerAcq_tmp__;');
+        end
+
+        function enableSiExternalTrigger_(obj) %#ok<MANU>
+            %enableSiExternalTrigger_ Configure ScanImage to wait for an external trigger.
+            %VERIFY trigger-mode property — ScanImage version dependent.
+            %  ASSUME: hSI.hScan2D.trigAcqInTerm holds the external trigger
+            %          terminal and that simply setting trigAcqInTerm to a
+            %          non-empty string is sufficient to enable external mode.
+            %          MAY ALSO require hSI.extTrigEnable = true on some
+            %          versions.
+            %  TEST:   ScanImage MATLAB console after manual external arm:
+            %            disp(hSI.hScan2D.trigAcqInTerm); disp(hSI.extTrigEnable)
+            %  CHANGE: Update to whichever property/setter the installed
+            %          ScanImage version requires.  Leave this stub as a
+            %          no-op if external-trigger mode is operator-armed
+            %          out-of-band (Configuration window).
+            % Intentionally no-op by default — most rigs pre-arm external
+            % trigger mode interactively.  Keep this method as the single
+            % patch point.
+        end
+
+        function startSiGrab_(obj) %#ok<MANU>
+            %startSiGrab_ Initiate an externally-triggered grab.
+            %VERIFY hSI.startGrab — confirm method name and that it returns
+            %       quickly (does not block on the trigger).
+            %  ASSUME: startGrab arms the externally-triggered acquisition
+            %          and returns immediately; the actual frames are
+            %          collected when the hardware TTL fires.
+            %  TEST:   ScanImage MATLAB console: hSI.startGrab(); disp(hSI.acqState)
+            %          State should be 'grab' or similar pre-trigger value.
+            %  CHANGE: Replace with hSI.startLoop or a focus/grab variant if
+            %          required by the installed version.
+            evalin('base', 'hSI.startGrab();');
+        end
+
+        function state = readSiAcqState_(obj) %#ok<MANU>
+            %readSiAcqState_ Read the current acquisition state.
+            %VERIFY hSI.acqState — confirm property name and value type.
+            %  ASSUME: hSI.acqState returns a char vector such as
+            %          'idle' / 'grab' / 'loop'.
+            %  TEST:   ScanImage MATLAB console: disp(hSI.acqState)
+            %  CHANGE: Update the evalin string here.
+            state = evalin('base', 'hSI.acqState');
+        end
+
+        function tf = isAcqIdle_(obj, state) %#ok<INUSL>
+            %isAcqIdle_ True when the supplied acqState indicates ScanImage is idle.
+            %VERIFY 'idle' is the exact ScanImage idle state string.
+            %  ASSUME: case-insensitive 'idle' indicates the acquisition has
+            %          finished.  Some versions may report 'IDLE' or use an
+            %          enum that converts to a non-string.
+            %  TEST:   After a grab completes: disp(hSI.acqState) — must be
+            %          something that matches strcmpi(state, 'idle').
+            %  CHANGE: Replace the comparison with the version-correct check.
+            if isnumeric(state)
+                tf = (state == 0);  % some SI versions return an enum int.
+            elseif ischar(state) || isstring(state)
+                tf = strcmpi(strtrim(char(state)), 'idle');
+            else
+                tf = false;
+            end
+        end
+
+        function printCheck_(obj, label, ok, varargin) %#ok<INUSL>
+            %printCheck_ Print a pass/fail line for verifyEpisodicProtocol.
+            if ok
+                tag = 'PASS';
+            else
+                tag = 'FAIL';
+            end
+            if ~isempty(varargin) && ~isempty(varargin{1})
+                detail = varargin{1};
+                if isnumeric(detail)
+                    detailStr = sprintf('%g', detail);
+                elseif ischar(detail) || isstring(detail)
+                    detailStr = char(detail);
+                else
+                    detailStr = mat2str(detail);
+                end
+                fprintf('[verifyEpisodicProtocol]   [%s] %s : %s\n', tag, label, detailStr);
+            else
+                fprintf('[verifyEpisodicProtocol]   [%s] %s\n', tag, label);
             end
         end
 
