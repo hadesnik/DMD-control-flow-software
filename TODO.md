@@ -7,19 +7,15 @@ Bottom line: **do not run on the real rig until the CRITICAL items below are res
 
 ## 🔴 CRITICAL — will break or misbehave on real hardware
 
-- [ ] **C1. Fire the ScanImage start-acquisition TTL.**
-  Architecture says the DAQ PC asserts a TTL on `port0/line10` to start ScanImage's externally-triggered acquisition. Nothing in [Sequencer.m:124-233](src/+tfp/+trial/Sequencer.m#L124-L233) or `ScanImageBridge.armForExternalTrigger` actually drives that line. `NI6323_DAQ.start()` only kicks off queued AO.
-  *Without this, ScanImage will never start.*
+- [x] **C1. Fire the ScanImage start-acquisition TTL.** *(Resolved by T-EP-3c, commit `2f04661`. Sequencer.runOne now calls `daq.sendDigitalPulse(startAcqLine, startAcqPulseS)` per trial.)*
 
 - [ ] **C2. Wire `powerLUT` through Sequencer AO queueing.**
-  [Sequencer.m:148](src/+tfp/+trial/Sequencer.m#L148) queues `zeros(nSamples, nAo)`. `trial.powerMw` is metadata only. [powerLUT.m](src/+tfp/+patterns/powerLUT.m) is only called by `tests/test_patterns.m`. The FS-50 modulation input will sit at 0 V for the entire power curve. Mock tests pass because `MockDAQ` synthesizes responses regardless of AO.
-  *Without this, no light comes out.*
+  [Sequencer.m](src/+tfp/+trial/Sequencer.m) `buildStimWaveform` (line ~782) uses `trial.powerMw` as a raw voltage. [powerLUT.m](src/+tfp/+patterns/powerLUT.m) is only called by `tests/test_patterns.m`. The FS-50 modulation input will sit at the wrong voltage for any power curve. Mock tests pass because `MockDAQ` synthesizes responses regardless of AO.
+  *Next: T-EP-3d.*
 
-- [ ] **C3. Pick one execution path (per-trial vs continuous-session) and unify.**
-  `Sequencer.runOne` uses per-trial API; new ensemble experiments use `startContinuousSession`/`queueClockedAO`. [NI6323_DAQ.m:62-65](src/+tfp/+hardware/NI6323_DAQ.m#L62-L65) warns "mixing is not supported and is intentionally not policed." Sequencer-driven experiments (`exp_ppsf_lateral`, `exp_ppsf_2d`, `exp_axial_ppsf`, `exp_power_curve`, `exp_rapid_sequential`) never integrate with `alignTrialsToFrames`. T-SYNC-13 only covers the ensemble path.
+- [x] **C3. Pick one execution path (per-trial vs continuous-session) and unify.** *(Resolved by T-EP-3c, commit `2f04661`. Sequencer now uses `startContinuousSession`/`queueClockedAO` and arms ScanImage episodically per trial — same path as the ensemble experiments.)*
 
-- [ ] **C4. Configure the frame-clock DI before reading it.**
-  [Sequencer.m:182-192](src/+tfp/+trial/Sequencer.m#L182-L192) calls `daq.readDigitalInput(...)` but `configureDigitalInput` is never called. On `NI6323_DAQ` this throws `tfp:hardware:NI6323_DAQ:noDigitalData` (line 229), gets caught and downgraded to a warning, and every trial completes with `frameClock=[]`.
+- [x] **C4. Configure the frame-clock DI before reading it.** *(Resolved by T-EP-3c, commit `2f04661`. `frameClockLine` is now wired into `sessionCfg.diLines` at `startContinuousSession` time; `decodeFrameClock` runs on the captured continuous DI at session end.)*
 
 - [ ] **C5. Implement real `safetyChecks` before any high-power runs.**
   [safetyChecks.m:12-14](src/+tfp/+util/safetyChecks.m#L12-L14) only checks an in-process abort flag. No power-max enforcement, no Pockels/shutter interlock. Ensemble experiments (which actually drive AO) don't even call it.
@@ -34,26 +30,24 @@ Bottom line: **do not run on the real rig until the CRITICAL items below are res
 - [ ] **C8. Persist axis-sign verify result to YAML automatically.**
   CLAUDE.md promises sign disambiguation gets written into the rig config; [verifyScanFieldComposition.m:206-218](src/+tfp/+calibration/verifyScanFieldComposition.m#L206-L218) only prints suggested YAML lines for the operator to copy. Easy to miss on first real-rig run.
 
-- [ ] **C9. Switch ScanImage from continuous to episodic acquisition (one TIFF per trial, triggered by a per-trial start-acq TTL).**
-  Replaces the previous hybrid-aligner plan. Continuous DAQ session is preserved (AI/DI continuous, AO clocked per trial); only ScanImage's acquisition pattern changes. With trials ≥2 s long, ScanImage's external-trigger arm latency (~50–100 ms) is well under 5% of a trial, so we can afford the episodic switch — and in exchange every trial gets its own TIFF anchored to its own trigger, so a frame drop or trigger glitch is bounded to one trial instead of corrupting everything after.
-  1. Configure ScanImage in external-trigger mode, N frames per trigger (operator-side ScanImage config on the imaging PC; verify arm-ready latency on the rig).
-  2. Per-trial flow: arm ScanImage for `nFrames = ceil(trial.duration_s * frameRateHz) + buffer` → fire start-acq TTL on `port0/line10` → `queueClockedAO` for stim → wait for ScanImage completion → record the resulting TIFF path on the Trial.
-  3. New `tfp.io.alignTrialsEpisodic(trials, tiffPaths, frameStartSamples, sampleRate)`: trivial per-trial frame list (`1:numFramesInTiff(i)`); cross-check against frame-clock DI edge count in trial window.
-  4. Session-level assertion: `numel(tiffPaths) == numel(trials)`. Trial-level assertion: TIFF frame count vs DI-edge count agree to ±1 frame; disagreement → mark trial `alignmentConfidence ∈ {"low","quarantine"}`.
-  5. Add `Trial.siTiffPath`, `Trial.alignmentDiscrepancy`, `Trial.alignmentConfidence` fields.
-  6. Mock support: `MockScanImageBridge` simulates episodic acquisition (synthetic TIFF placeholder + frame count).
-  7. Archive the prior continuous-alignment design — done: tag `archive/continuous-alignment-2026-05-23`, see [docs/ARCHIVE_CONTINUOUS_ALIGNMENT.md](docs/ARCHIVE_CONTINUOUS_ALIGNMENT.md).
-  *Task decomposition for parallel agents: see [tasks.md](tasks.md).*
+- [ ] **C9. Switch ScanImage from continuous to episodic acquisition (one TIFF per trial, triggered by a per-trial start-acq TTL).** *Rounds 0–3 done; Rounds 4–5 pending.*
+  - [x] Round 0 — Design lock (`docs/SYNC_EPISODIC.md`, archive tag).
+  - [x] Round 1 — Foundation (Trial schema, TIFF reader, MockBridge episodic, RealBridge episodic).
+  - [x] Round 2 — Aligner (`alignTrialsEpisodic`) + per-trial cross-check + tests.
+  - [x] Round 3 — Experiment refactor: `exp_ensemble_activation`, `exp_ensemble_fill_factor_power`, and `Sequencer` all now run episodic SI on a continuous DAQ session. Cross-check uses acquisition window (not stim-only). 174/174 tests passing on main at `3800c03`.
+  - [ ] Round 4 — Integration tests covering frame-drop / glitch resilience (T-EP-4a/4b).
+  - [ ] Round 5 — Doc finalisation (SYNC_FRAME.md banner → final), CLAUDE.md update, ScanImage probe script (T-EP-5a/5b/5c), rig-side verification (T-EP-5d — manual).
+  *Archived prior design: tag `archive/continuous-alignment-2026-05-23`, see [docs/ARCHIVE_CONTINUOUS_ALIGNMENT.md](docs/ARCHIVE_CONTINUOUS_ALIGNMENT.md). Task decomposition: [tasks.md](tasks.md).*
 
 ---
 
 ## 🟡 CONSISTENCY — cross-file mismatches & convention violations
 
-- [ ] **S1. Reorder Sequencer: DMD softTrigger before DAQ.start** ([Sequencer.m:176,179](src/+tfp/+trial/Sequencer.m#L176-L179)). Or move to external-trigger gating with the DAQ DO driving both.
+- [x] **S1. Reorder Sequencer: DMD softTrigger before DAQ.start.** *(Resolved by T-EP-3c, commit `2f04661`. Sequencer.runOne now calls `dmd.softTrigger()` before any DAQ AO queueing.)*
 
-- [ ] **S2. Sequencer hardcodes 30 Hz** for `nFrames` ([Sequencer.m:166](src/+tfp/+trial/Sequencer.m#L166)); `ScanImageBridge.frameRate_` is ignored.
+- [x] **S2. Sequencer hardcodes 30 Hz for `nFrames`.** *(Resolved by T-EP-3c, commit `2f04661`. `nFrames = ceil(trial.duration_s * config.imaging.frameRate) + 2` — derived from config.)*
 
-- [ ] **S3. Remove `isa(..., 'MockScanImageBridge')` check** at [Sequencer.m:204](src/+tfp/+trial/Sequencer.m#L204). Real bridge already returns `[]` from `getSyntheticResult`.
+- [x] **S3. Remove `isa(..., 'MockScanImageBridge')` check.** *(Resolved by T-EP-3c, commit `2f04661`. `getSyntheticResult` is called polymorphically; real bridge returns `[]`.)*
 
 - [ ] **S4. Create `ScanImageBridgeBase` abstract class.** Real has `armStreaming`, `disconnect`, `verifyProtocol`; mock lacks them. Sequencer calls `siBridge.armStreaming(...)` ([Sequencer.m:72](src/+tfp/+trial/Sequencer.m#L72)); safe today only because `MockScanImageBridge.supportsStreaming` returns false.
 
@@ -67,7 +61,7 @@ Bottom line: **do not run on the real rig until the CRITICAL items below are res
 
 - [ ] **S8. Unify mock/real DAQ error-namespace.** Both classes throw under both `tfp:hardware:DAQ:*` and `tfp:hardware:MockDAQ:*`/`NI6323_DAQ:*`. Convention: interface errors → `DAQ:*`, class-specific → class.
 
-- [ ] **S9. Fix `exp_ensemble_activation.m:431`** — stores `tr.powerMw = voltageV` (volts under a milliwatt field). Rename, or convert via `powerCurve` when available.
+- [x] **S9. Fix `exp_ensemble_activation.m`** — stores `tr.powerMw = voltageV` (volts under a milliwatt field). *(Resolved by T-EP-3a, commit `be4fea2`. Now interpolates voltage→mW via `powerCurve` when supplied; otherwise falls back with a `metadata.powerNote = 'uncalibrated_AO_volts'` tag.)*
 
 - [ ] **S10. Ensemble experiments never call `siBridge.setActivePattern`.** Synthetic imaging via `MockScanImageBridge.getLastAcquisition → CellResponseModel` is only reachable from the Sequencer path. Ensemble mock tests can't detect a pattern↔cell-position mismatch — exactly what the illuminated-region commit was meant to guard against.
 
