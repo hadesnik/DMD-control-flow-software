@@ -228,9 +228,8 @@ Phase 1 implementation pinned the following conventions; treat them as load-bear
 
 ## Development environment
 - Code is written on macOS (this machine)
-- Code is RUN on Windows PCs attached to the scope
-- I cannot run MATLAB or load the ALP DLL locally — do not propose to "test it" on this machine
-- All hardware verification happens on the scope PC after git push/pull
+- **MATLAB is installed locally on this MacBook** — Claude can and should run unit tests here (e.g. `matlab -batch "runtests('tests')"`) before pushing. Mock-backed tests cover most of the codebase, so local pre-flight catches the majority of regressions.
+- Hardware-touching code (real DMD, NI DAQ, ALP DLL) still RUNS on the Windows scope PC; the ALP DLL cannot be loaded on macOS and hardware verification happens on the scope PC after git push/pull.
 
 ## What Claude should know when working on this codebase
 
