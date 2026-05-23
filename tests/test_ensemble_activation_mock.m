@@ -91,7 +91,10 @@ daqLog = daq.getLog();
 aoEvents = daqLog(strcmp({daqLog.eventType}, 'outputSingleAnalog'));
 
 onVoltages  = arrayfun(@(e) e.payload.voltageV, aoEvents);
-nPulsesOn   = sum(onVoltages == options.powerV);
+% ON = any non-zero pulse. The power-series condition emits at fractions
+% of powerV (only the 100% level equals powerV exactly), so counting
+% `onVoltages == powerV` would undercount the sub-max pulses.
+nPulsesOn   = sum(onVoltages > 0);
 nPulsesOff  = sum(onVoltages == 0);
 
 nPowerLevels   = numel(options.powerFractions);
