@@ -54,6 +54,25 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
         diBuf_                = []   % DI data filled by DataAvailable listener (or startForeground)
         aiListener_           = []   % event.listener handle
         log_                        % struct array {timestamp, eventType, payload}
+
+        % --- Continuous-session state (see docs/SYNC_FRAME.md §4) ---
+        % The continuous-session API uses its OWN daq.createSession instance so
+        % its long-running clock does not interact with the per-trial session
+        % above. Only one of the two is active at a time in practice; mixing
+        % is not supported and is intentionally not policed here.
+        contSession_          = []          % daq.createSession('ni') %LEGACY_API
+        contCfg_              = struct([])  % original cfg
+        contIsRunning_        = false
+        contSessionStart_     = NaT         % wall-clock anchor (datetime)
+        contStartTic_         = []          % tic baseline (fallback timing)
+        contNAi_              = 0
+        contNDi_              = 0
+        contNAo_              = 0
+        contAiBuf_            = []          % nSamples × nAi
+        contDiBuf_            = []          % nSamples × nDi
+        contAoWritten_        = uint64(0)   % running count of clocked-AO samples queued
+        contListener_         = []          % event.listener handle on DataAvailable
+        contLineNames_        = struct([])  % snapshot of cfg line/channel names for stop() result
     end
 
     methods
@@ -405,8 +424,244 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
             obj.logEvent('outputSingleAnalog', struct('channel', chNum, 'voltageV', voltageV));
         end
 
+        function startContinuousSession(obj, cfg)
+            %startContinuousSession Arm the single master-clock session for the experiment.
+            %   Implements docs/SYNC_FRAME.md §4.1. Allocates an independent
+            %   daq.createSession('ni') so its long-running clock does not
+            %   collide with the per-trial session used by start()/stop().
+            %
+            %   cfg fields: sampleRate (req), aiChannels, aiRangeV,
+            %     aoChannels, diLines, doLines, frameClockLine.
+            obj.requireInitialized('startContinuousSession');
+            if obj.contIsRunning_
+                error('tfp:hardware:DAQ:alreadyRunning', ...
+                    'startContinuousSession called while a session is already running.');
+            end
+            if ~isstruct(cfg)
+                error('tfp:hardware:DAQ:badConfig', 'cfg must be a struct.');
+            end
+            sr = configField(cfg, 'sampleRate', []);
+            if ~isnumeric(sr) || ~isscalar(sr) || ~isfinite(sr) || sr <= 0
+                error('tfp:hardware:DAQ:badConfig', ...
+                    'cfg.sampleRate must be a positive finite scalar (Hz).');
+            end
+            aiCh     = configField(cfg, 'aiChannels', []);
+            aiRangeV = configField(cfg, 'aiRangeV',   []);
+            aoCh     = configField(cfg, 'aoChannels', []);
+            diLines  = configField(cfg, 'diLines',    {});
+            doLines  = configField(cfg, 'doLines',    {});
+            frameCl  = configField(cfg, 'frameClockLine', '');
+            if ~isempty(diLines); diLines = cellstr(diLines); end
+            if ~isempty(doLines); doLines = cellstr(doLines); end
+            if ~isempty(frameCl) && ~any(strcmp(char(frameCl), diLines))
+                error('tfp:hardware:DAQ:badConfig', ...
+                    'cfg.frameClockLine ''%s'' must be present in cfg.diLines.', ...
+                    char(frameCl));
+            end
+
+            try
+                s = daq.createSession('ni');  %LEGACY_API
+            catch ME
+                error('tfp:hardware:NI6323_DAQ:driverNotFound', ...
+                    ['Could not create NI session for continuous-session API. ' ...
+                     'Original: %s'], ME.message);
+            end
+            s.Rate = sr;  %LEGACY_API
+            % Run forever; we stop explicitly in stopContinuousSession.
+            % %VERIFY IsContinuous semantics on PCIe-6323 + NI-DAQmx 19.5: with
+            %   IsContinuous=true the session keeps clocking until session.stop().
+            try
+                s.IsContinuous = true;  %LEGACY_API
+            catch
+                % Older NI session subclasses expose this only after channels
+                % are added; set again after channel addition (below).
+            end
+
+            for k = 1:numel(aiCh)
+                ch = s.addAnalogInputChannel(obj.deviceName_, aiCh(k), 'Voltage');  %LEGACY_API
+                if numel(aiRangeV) == 2
+                    try, ch.Range = aiRangeV; catch, end  %LEGACY_API
+                end
+            end
+            for k = 1:numel(aoCh)
+                s.addAnalogOutputChannel(obj.deviceName_, aoCh(k), 'Voltage');  %LEGACY_API
+            end
+            for k = 1:numel(diLines)
+                s.addDigitalChannel(obj.deviceName_, diLines{k}, 'InputOnly');  %LEGACY_API
+            end
+            for k = 1:numel(doLines)
+                s.addDigitalChannel(obj.deviceName_, doLines{k}, 'OutputOnly');  %LEGACY_API
+            end
+            try, s.IsContinuous = true; catch, end  %LEGACY_API
+
+            obj.contSession_   = s;
+            obj.contCfg_       = cfg;
+            obj.contNAi_       = numel(aiCh);
+            obj.contNDi_       = numel(diLines);
+            obj.contNAo_       = numel(aoCh);
+            obj.contAiBuf_     = zeros(0, obj.contNAi_);
+            obj.contDiBuf_     = zeros(0, obj.contNDi_);
+            obj.contAoWritten_ = uint64(0);
+            obj.contLineNames_ = struct( ...
+                'aiChannels',     aiCh, ...
+                'aoChannels',     aoCh, ...
+                'diLines',        {diLines}, ...
+                'doLines',        {doLines}, ...
+                'frameClockLine', char(frameCl));
+
+            if (obj.contNAi_ + obj.contNDi_) > 0
+                obj.contListener_ = s.addlistener('DataAvailable', ...  %LEGACY_API
+                    @(src, evt) obj.onContDataAvailable(evt));
+            else
+                obj.contListener_ = [];
+            end
+
+            obj.contSessionStart_ = datetime('now');
+            obj.contStartTic_     = tic;
+            % Arm. If AO is configured but no waveform queued yet, the session
+            % still clocks AI/DI; AO output begins when queueClockedAO appends
+            % samples. %VERIFY this on NI-DAQmx 19.5 — older drivers required at
+            % least one queued AO sample before startBackground.
+            s.startBackground();  %LEGACY_API
+            obj.contIsRunning_ = true;
+            obj.isRunning      = true;
+
+            obj.logEvent('startContinuousSession', struct( ...
+                'sampleRate', sr, 'nAi', obj.contNAi_, 'nAo', obj.contNAo_, ...
+                'nDi', obj.contNDi_, 'nDo', numel(doLines), ...
+                'frameClockLine', char(frameCl)));
+        end
+
+        function result = stopContinuousSession(obj)
+            %stopContinuousSession Stop the master clock and return captured data.
+            %   See docs/SYNC_FRAME.md §4.2 for the returned struct schema.
+            if ~obj.contIsRunning_
+                error('tfp:hardware:DAQ:notRunning', ...
+                    'stopContinuousSession called before startContinuousSession.');
+            end
+            try
+                obj.contSession_.stop();   %LEGACY_API
+            catch
+            end
+            if ~isempty(obj.contListener_)
+                try, delete(obj.contListener_); catch, end
+                obj.contListener_ = [];
+            end
+
+            ai = obj.contAiBuf_;
+            di = obj.contDiBuf_;
+            % nSamplesTotal is the longest captured stream. When neither AI
+            % nor DI is configured we fall back to the elapsed-tic estimate.
+            if obj.contNAi_ > 0 || obj.contNDi_ > 0
+                nTotal = uint64(max(size(ai, 1), size(di, 1)));
+            else
+                nTotal = uint64(round(toc(obj.contStartTic_) * obj.contCfg_.sampleRate));
+            end
+
+            result = struct( ...
+                'aiData',               ai, ...
+                'diData',               di, ...
+                'aoSamplesWritten',     obj.contAoWritten_, ...
+                'nSamplesTotal',        nTotal, ...
+                'sampleRate',           obj.contCfg_.sampleRate, ...
+                'sessionStartDatetime', obj.contSessionStart_, ...
+                'lineNames',            obj.contLineNames_);
+
+            try, obj.contSession_.release(); catch, end  %LEGACY_API
+            obj.contSession_   = [];
+            obj.contIsRunning_ = false;
+            obj.isRunning      = false;
+            obj.contAiBuf_     = [];
+            obj.contDiBuf_     = [];
+
+            obj.logEvent('stopContinuousSession', struct( ...
+                'nSamplesTotal', nTotal, 'aoSamplesWritten', result.aoSamplesWritten));
+        end
+
+        function idx = currentSampleIndex(obj)
+            %currentSampleIndex 1-based DAQ sample index (uint64).
+            %   See docs/SYNC_FRAME.md §4.3. Returns the next sample to be
+            %   acquired (= ScansAcquired + 1). When neither AI nor DI is
+            %   configured, falls back to a tic-based estimate.
+            if ~obj.contIsRunning_
+                error('tfp:hardware:DAQ:notRunning', ...
+                    'currentSampleIndex called with no active continuous session.');
+            end
+            scans = NaN;
+            try
+                scans = double(obj.contSession_.ScansAcquired);  %LEGACY_API
+            catch
+            end
+            if ~isfinite(scans) || scans < 0
+                scans = toc(obj.contStartTic_) * obj.contCfg_.sampleRate;
+            end
+            idx = uint64(floor(scans) + 1);
+        end
+
+        function startSampleIdx = queueClockedAO(obj, samples, rate, startTrigger)
+            %queueClockedAO Queue a hardware-clocked AO waveform.
+            %   See docs/SYNC_FRAME.md §4.4. Returns the DAQ sample index at
+            %   which the first queued sample will be output — caller stores
+            %   this as t_onset_daq_samples.
+            if ~obj.contIsRunning_
+                error('tfp:hardware:DAQ:notRunning', ...
+                    'queueClockedAO called with no active continuous session.');
+            end
+            if nargin < 4 || isempty(startTrigger)
+                startTrigger = 'immediate';
+            end
+            startTrigger = char(startTrigger);
+            if strcmp(startTrigger, 'sync')
+                error('tfp:hardware:DAQ:notImplemented', ...
+                    'queueClockedAO startTrigger=''sync'' is reserved for a future round.');
+            end
+            if ~strcmp(startTrigger, 'immediate')
+                error('tfp:hardware:DAQ:badConfig', ...
+                    'startTrigger must be ''immediate'' or ''sync''; got ''%s''.', ...
+                    startTrigger);
+            end
+            if ~isnumeric(rate) || ~isscalar(rate) || rate ~= obj.contCfg_.sampleRate
+                error('tfp:hardware:DAQ:badRate', ...
+                    'rate (%g) must equal the active session sampleRate (%g).', ...
+                    rate, obj.contCfg_.sampleRate);
+            end
+            if ~isnumeric(samples) || ndims(samples) > 2 ...
+                    || size(samples, 2) ~= obj.contNAo_
+                error('tfp:hardware:DAQ:badShape', ...
+                    'samples must be nSamples × %d numeric; got size [%s].', ...
+                    obj.contNAo_, num2str(size(samples)));
+            end
+
+            % Anchor at the next clocked sample. With AO sharing the master
+            % clock and no gaps between queued chunks, this equals the AO
+            % output position. Acceptable rounding (one sample period) is
+            % bounded by the spec.
+            startSampleIdx = obj.currentSampleIndex();
+            obj.contSession_.queueOutputData(samples);  %LEGACY_API
+            obj.contAoWritten_ = obj.contAoWritten_ + uint64(size(samples, 1));
+
+            obj.logEvent('queueClockedAO', struct( ...
+                'nSamples',       size(samples, 1), ...
+                'rate',           rate, ...
+                'startTrigger',   startTrigger, ...
+                'startSampleIdx', startSampleIdx));
+        end
+
         function cleanup(obj)
             %cleanup Stop and release the NI-DAQmx session.
+            if obj.contIsRunning_
+                try
+                    obj.contSession_.stop();  %LEGACY_API
+                catch
+                end
+                if ~isempty(obj.contListener_)
+                    try, delete(obj.contListener_); catch, end
+                    obj.contListener_ = [];
+                end
+                try, obj.contSession_.release(); catch, end  %LEGACY_API
+                obj.contSession_   = [];
+                obj.contIsRunning_ = false;
+            end
             if obj.isInitialized_ && ~isempty(obj.session_)
                 try
                     if obj.isRunning
@@ -438,6 +693,16 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
             obj.aiBuf_             = [];
             obj.diBuf_             = [];
             obj.digitalPulses_     = struct('lineNames', {}, 'times', {}, 'durations', {});
+            obj.contCfg_           = struct([]);
+            obj.contAiBuf_         = [];
+            obj.contDiBuf_         = [];
+            obj.contAoWritten_     = uint64(0);
+            obj.contNAi_           = 0;
+            obj.contNDi_           = 0;
+            obj.contNAo_           = 0;
+            obj.contSessionStart_  = NaT;
+            obj.contStartTic_      = [];
+            obj.contLineNames_     = struct([]);
             obj.logEvent('cleanup', []);
         end
 
@@ -461,6 +726,20 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
             if ~obj.isInitialized_
                 error('tfp:hardware:NI6323_DAQ:notInitialized', ...
                     '%s requires initialize() to have been called first.', callerName);
+            end
+        end
+
+        function onContDataAvailable(obj, evt)
+            %onContDataAvailable Continuous-session listener.
+            %   evt.Data columns are [AI(1..nAi) | DI(1..nDi)] in addition
+            %   order (AO/DO are output-only and produce no columns).
+            nAi = obj.contNAi_;
+            nDi = obj.contNDi_;
+            if nAi > 0
+                obj.contAiBuf_ = [obj.contAiBuf_; evt.Data(:, 1:nAi)];  %#ok<AGROW>
+            end
+            if nDi > 0
+                obj.contDiBuf_ = [obj.contDiBuf_; evt.Data(:, nAi+1:nAi+nDi)];  %#ok<AGROW>
             end
         end
 
