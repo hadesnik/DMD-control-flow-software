@@ -12,3 +12,6 @@ slprj/
 
 # Session outputs
 data/
+
+# Claude Code harness state (agent worktrees, local memory)
+.claude/

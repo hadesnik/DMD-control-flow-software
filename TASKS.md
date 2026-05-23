@@ -1479,6 +1479,263 @@ their assigned file lists.
 
 ---
 
+## TASK-EP: Switch ScanImage from continuous to episodic acquisition
+
+**Tracking prefix:** `T-EP-`. **Top-level item:** TODO.md C9.
+**Architecture target:** continuous DAQ session (unchanged) + episodic ScanImage
+acquisition (one externally-triggered TIFF per trial). Replaces the prior
+"continuous DAQ + continuous ScanImage + frame-count alignment" design;
+that design is archived at tag `archive/continuous-alignment-2026-05-23` and
+documented in [docs/ARCHIVE_CONTINUOUS_ALIGNMENT.md](docs/ARCHIVE_CONTINUOUS_ALIGNMENT.md).
+Motivation: with trials ≥2 s long, ScanImage's external-trigger arm latency
+(~50–100 ms) is well under 5% of a trial, and in exchange every trial is
+anchored to its own trigger — a single frame drop or trigger glitch is bounded
+to one trial instead of corrupting everything after.
+
+**Round 0 — Design lock [1 agent, sequential prereq]**
+
+No code deps. Must finish before Round 1.
+
+- [ ] T-EP-0   Lock the new architecture spec:
+                  - Write `docs/SYNC_EPISODIC.md` covering trigger topology,
+                    ScanImage external-trigger config, continuous-DAQ +
+                    episodic-SI coupling, Trial schema additions, aligner
+                    contract, cross-check rules, failure modes.
+                  - Add an archival banner to `docs/SYNC_FRAME.md` pointing to
+                    the new doc and to the archive tag.
+                  - Lock the episodic `ScanImageBridge` API contract:
+                    signatures and semantics of `armForExternalTrigger(nFrames)`,
+                    `waitForCompletion()`, `getLastTiffPath()`. All Round-1
+                    tasks code against this.
+                Files: NEW `docs/SYNC_EPISODIC.md`;
+                       MODIFY `docs/SYNC_FRAME.md` (banner only).
+
+**Round 1 — Foundation [4 parallel agents]**
+
+Depends on T-EP-0.
+
+- [ ] T-EP-1a  Trial schema additions:
+                  - Add `SetAccess = private` properties `siTiffPath` (char/""),
+                    `alignmentDiscrepancy` (int32/NaN), `alignmentConfidence`
+                    (string: "none"|"high"|"low"|"quarantine").
+                  - Extend `markComplete(data, offsetSample, siTiffPath)`.
+                  - New method `attachEpisodicAlignment(frameIndicesDuringStim,
+                    frameIndicesBaseline, discrepancy, confidence)` with
+                    `tfp:trial:Trial:badTransition` enforcement.
+                  - Old `attachFrameAlignment` deprecated with a one-shot
+                    warning; keep callable for back-compat.
+                Files: MODIFY `src/+tfp/+trial/Trial.m`;
+                       NEW `tests/test_trial_schema_episodic.m`.
+
+- [ ] T-EP-1b  TIFF metadata reader:
+                  - `tfp.io.readScanImageTiff(tiffPath)` returns struct with
+                    `numFrames`, `frameRateHz`, `frameTimestamps_s`,
+                    `sourceTiff`.
+                  - Wrap `scanimage.util.opentif` when available; otherwise
+                    fall back to `imfinfo` + parsing
+                    `ImageDescription.frameTimestamps_sec`.
+                  - Handle multi-channel TIFFs (frames-per-channel × nChans).
+                Files: NEW `src/+tfp/+io/readScanImageTiff.m`;
+                       NEW `tests/test_read_scanimage_tiff.m`
+                       (+ small fixture under `tests/fixtures/`).
+
+- [ ] T-EP-1c  MockScanImageBridge episodic mode:
+                  - `armForExternalTrigger(nFrames)` records expected frame
+                    count; on `softTrigger` / external-trigger callback,
+                    synthesize a fake TIFF placeholder (`.mat` sidecar under
+                    mock data dir, or an in-memory struct dispatchable via a
+                    URI scheme — pick one, document choice in T-EP-0).
+                  - `getLastTiffPath()` returns the placeholder.
+                  - Test hooks: `injectFrameDrop()`, `injectSpuriousEdge()`.
+                Files: MODIFY `src/+tfp/+hardware/MockScanImageBridge.m`;
+                       NEW `tests/test_mock_scanimage_episodic.m`.
+
+- [ ] T-EP-1d  Real ScanImageBridge episodic mode:
+                  - Implement `armForExternalTrigger(nFrames)`: configure
+                    `hSI.hScan2D.framesPerAcq`, external-trigger mode,
+                    `hSI.startGrab`. Mark items needing rig verification with
+                    `%VERIFY`.
+                  - `waitForCompletion()`: poll `hSI.acqState` until idle,
+                    with timeout.
+                  - `getLastTiffPath()`: read `hSI.hScan2D.logFileStem` +
+                    counter.
+                  - Stub `verifyEpisodicProtocol()` analogous to existing
+                    `verifyProtocol`.
+                Files: MODIFY `src/+tfp/+hardware/ScanImageBridge.m`
+                       (or `RealScanImageBridge.m` — coordinate with current
+                       class layout).
+
+**Round 2 — Aligner + cross-check [2 agents, sequential pair]**
+
+T-EP-2a depends on T-EP-1b. T-EP-2b depends on T-EP-2a and T-EP-1c.
+
+- [ ] T-EP-2a  Episodic aligner:
+                  - `tfp.io.alignTrialsEpisodic(trials, tiffPaths,
+                    frameStartSamples, sampleRate)`:
+                      perTrial(i).frame_indices_during_stim =
+                        uint64(1 : siMeta(i).numFrames) [or sub-range if
+                        pre-stim baseline frames were armed].
+                      Cross-check: count DI rising edges in
+                        [t_onset_daq_samples, t_offset_daq_samples] via
+                        `decodeFrameClock` + window mask.
+                      discrepancy = siMeta.numFrames -
+                        numel(diEdgesInWindow).
+                      confidence = |d|<=1 → "high", <=5 → "low",
+                        else "quarantine".
+                  - Session-level report: numel(tiffPaths) == numel(trials);
+                    aligned-frame totals; per-confidence counts.
+                  - Mark `tfp.io.alignTrialsToFrames` deprecated with a
+                    one-shot `tfp:io:alignTrialsToFrames:deprecated` warning
+                    on first call.
+                Files: NEW `src/+tfp/+io/alignTrialsEpisodic.m`;
+                       MODIFY `src/+tfp/+io/alignTrialsToFrames.m` (banner +
+                       warning).
+
+- [ ] T-EP-2b  Aligner integration tests:
+                  - Clean run: all trials "high" confidence.
+                  - Inject 1 missing DI edge → affected trial "low".
+                  - Inject 1 spurious DI edge → symmetric.
+                  - Inject 5-frame DI discrepancy → "quarantine".
+                  - Missing TIFF (length mismatch) → fatal report, no
+                    partial alignment returned.
+                Files: NEW `tests/test_align_trials_episodic.m`.
+
+**Round 3 — Experiment refactor [3 parallel agents + 1 coordinated]**
+
+T-EP-3a, T-EP-3b, T-EP-3c can run in parallel after Round 2; T-EP-3d
+coordinates with T-EP-3c (both touch `Sequencer.runOne`) — sequence them.
+
+- [ ] T-EP-3a  Refactor `exp_ensemble_activation` for episodic SI:
+                  - Per-trial: arm SI for nFrames → fire start-acq TTL on
+                    `port0/line10` via `sendDigitalPulse` → `queueClockedAO`
+                    → `waitForCompletion` → record TIFF path on Trial.
+                  - Continuous DAQ session unchanged.
+                  - Drop the per-trial onset `sendDigitalPulse` whose
+                    alignment role is now obsolete (keep the session-start
+                    long pulse for operator sanity).
+                  - Fix `tr.powerMw = voltageV` bug (TODO S9) while in file.
+                  - Call `alignTrialsEpisodic` at session end.
+                Files: MODIFY `src/+tfp/+experiments/exp_ensemble_activation.m`;
+                       MODIFY `tests/test_ensemble_activation_mock.m`.
+
+- [ ] T-EP-3b  Refactor `exp_ensemble_fill_factor_power` for episodic SI:
+                  - Mirror of T-EP-3a applied to the fill-factor experiment.
+                Files: MODIFY
+                       `src/+tfp/+experiments/exp_ensemble_fill_factor_power.m`;
+                       MODIFY `tests/test_ensemble_fill_factor_mock.m`.
+
+- [ ] T-EP-3c  Sequencer convergence (resolves TODO C1, C3, C4, S1):
+                  - `Sequencer.run` opens one continuous DAQ session via
+                    `startContinuousSession` (replaces per-trial start/stop).
+                  - `Sequencer.runOne`:
+                      nFrames = ceil(trial.duration_s *
+                        config.imaging.frameRate) + bufferFrames
+                      siBridge.armForExternalTrigger(nFrames)
+                      daq.sendDigitalPulse(startAcqLine, pulseS)  % C1
+                      daq.queueClockedAO(stimWaveform, sr, 'immediate')
+                      siBridge.waitForCompletion()
+                      trial.markComplete(data, offsetSample,
+                        siBridge.getLastTiffPath())
+                  - Frame-clock DI consumed via continuous session
+                    (TODO C4 resolved by construction).
+                  - Reorder DMD softTrigger before DAQ output queueing
+                    (closes TODO S1).
+                  - Remove `isa(..., 'MockScanImageBridge')` check at
+                    Sequencer.m:204 (TODO S3).
+                Files: MODIFY `src/+tfp/+trial/Sequencer.m`.
+
+- [ ] T-EP-3d  Wire `powerLUT` through Sequencer AO (TODO C2):
+                  - In `Sequencer.runOne` (post-T-EP-3c), translate
+                    `trial.powerMw` to volts via the calibration's
+                    `powerLUT` before queueing AO.
+                  - Throw `tfp:trial:Sequencer:powerExceedsMax` if requested
+                    `powerMw > config.laser.max_mw`.
+                  - Hook to `safetyChecks` (links to TODO C5; full safety
+                    work is a separate stream).
+                Files: MODIFY `src/+tfp/+trial/Sequencer.m`;
+                       MODIFY `src/+tfp/+util/safetyChecks.m`;
+                       NEW `tests/test_sequencer_power.m`.
+
+**Round 4 — Integration tests [2 parallel agents]**
+
+Depends on Round 3.
+
+- [ ] T-EP-4a  Episodic end-to-end mock test:
+                  - Rename / refactor `tests/test_sync_endtoend_mock.m` →
+                    `tests/test_episodic_endtoend_mock.m`.
+                  - Exercises configure-mocks → 5-trial session → assert all
+                    trials "high" confidence → TIFF paths recorded → DAQ
+                    sample anchors monotonically increasing.
+                Files: RENAME `tests/test_sync_endtoend_mock.m`
+                       → `tests/test_episodic_endtoend_mock.m` (rewrite body).
+
+- [ ] T-EP-4b  Frame-drop / glitch resilience integration test:
+                  - Companion test injecting DI drops, spurious edges, and a
+                    missing TIFF; asserts per-trial confidence flags and
+                    session-level fatal report.
+                Files: NEW `tests/test_episodic_resilience_mock.m`.
+
+**Round 5 — Docs + probes + rig verification [3 parallel agents + 1 manual]**
+
+Depends on Rounds 3–4.
+
+- [ ] T-EP-5a  Rewrite `docs/SYNC_FRAME.md` (finalize the archival banner
+                from T-EP-0 — replace bulk content with a 1-paragraph
+                pointer to `SYNC_EPISODIC.md` and the archive tag). Ensure
+                `SYNC_EPISODIC.md` links to landed source files.
+                Files: MODIFY `docs/SYNC_FRAME.md`, `docs/SYNC_EPISODIC.md`.
+
+- [ ] T-EP-5b  Update CLAUDE.md timing section:
+                  - Brief rewrite of "Trigger topology" subsection to reflect
+                    episodic SI acquisition and the continuous DAQ session.
+                Files: MODIFY `CLAUDE.md`.
+
+- [ ] T-EP-5c  ScanImage external-trigger probe script:
+                  - `scripts/probe_scanimage_external_trigger.m` (runs on
+                    imaging PC).
+                  - Dumps the `hSI` properties needed to configure
+                    external-trigger mode; measures arm-ready latency
+                    (timer around `armForExternalTrigger` → first-frame
+                    edge); writes a markdown report under `data/probes/`.
+                Files: NEW `scripts/probe_scanimage_external_trigger.m`.
+
+- [MANUAL] T-EP-5d  Rig verification (operator at scope PC, not for agents):
+                  - Run T-EP-5c probe → confirm external-trigger config and
+                    measure arm latency.
+                  - Run end-to-end mock-disabled session → confirm TIFF
+                    naming/path retrieval is stable; all trials land "high"
+                    confidence.
+                Files: rig-side checklist; logged to `docs/hardware_log.md`.
+
+---
+
+**Parallelism summary (episodic switch):**
+  Round 0: 1 agent (sequential prereq)
+  Round 1: 4 parallel agents (T-EP-1a/1b/1c/1d)
+  Round 2: 1 agent on T-EP-2a; then T-EP-2b
+  Round 3: 3 parallel agents (T-EP-3a/3b/3c); T-EP-3d after T-EP-3c
+  Round 4: 2 parallel agents (T-EP-4a/4b)
+  Round 5: 3 parallel agents (T-EP-5a/5b/5c); T-EP-5d manual at rig
+
+**File-conflict map (episodic switch):**
+  Trial.m              — T-EP-1a only
+  readScanImageTiff.m  — T-EP-1b (new) + T-EP-2a (consumer)
+  MockScanImageBridge.m — T-EP-1c only
+  ScanImageBridge.m    — T-EP-1d only
+  alignTrialsEpisodic.m — T-EP-2a (new) + T-EP-2b (consumer)
+  alignTrialsToFrames.m — T-EP-2a only (banner + warning)
+  exp_ensemble_activation.m         — T-EP-3a only
+  exp_ensemble_fill_factor_power.m  — T-EP-3b only
+  Sequencer.m          — T-EP-3c then T-EP-3d (sequence)
+  test_episodic_endtoend_mock.m     — T-EP-4a only
+  test_episodic_resilience_mock.m   — T-EP-4b only
+  docs/SYNC_EPISODIC.md             — T-EP-0 (draft) then T-EP-5a (finalize)
+  docs/SYNC_FRAME.md   — T-EP-0 (banner) then T-EP-5a (final state)
+  CLAUDE.md            — T-EP-5b only
+  probe_scanimage_external_trigger.m — T-EP-5c only
+
+---
+
 ## COMPLETED TASKS
 
 TASK-15-01 through TASK-15-05: Phase 1.5 all-optical simulator
