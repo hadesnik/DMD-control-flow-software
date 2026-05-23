@@ -34,6 +34,14 @@ classdef MockDAQ < tfp.hardware.DAQ
         fakeCells_ = []
         startTime_ = NaT
         log_ = struct('timestamp', {}, 'eventType', {}, 'payload', {})
+
+        % --- Continuous-session state (T-SYNC-2, see docs/SYNC_FRAME.md) ---
+        continuousCfg_ = []
+        continuousStartTic_ = []
+        continuousStartDatetime_ = NaT
+        continuousAoSamplesWritten_ = uint64(0)
+        continuousFinalSampleCount_ = uint64(0)
+        continuousEverStarted_ = false
     end
 
     methods
@@ -231,6 +239,14 @@ classdef MockDAQ < tfp.hardware.DAQ
             obj.queuedPulses_         = struct('lineNames', {}, 'times', {}, 'durations', {});
             obj.fakeCells_            = [];
             obj.startTime_            = NaT;
+
+            obj.continuousCfg_              = [];
+            obj.continuousStartTic_         = [];
+            obj.continuousStartDatetime_    = NaT;
+            obj.continuousAoSamplesWritten_ = uint64(0);
+            obj.continuousFinalSampleCount_ = uint64(0);
+            obj.continuousEverStarted_      = false;
+
             obj.logEvent('cleanup', []);
         end
 
@@ -245,6 +261,211 @@ classdef MockDAQ < tfp.hardware.DAQ
             end
             obj.logEvent('outputSingleAnalog', struct( ...
                 'channel', char(channelName), 'voltageV', voltageV));
+        end
+
+        function startContinuousSession(obj, cfg)
+            %startContinuousSession Begin the single hardware-clocked session.
+            %   Snapshots cfg, arms a synthetic master clock (wall-clock via
+            %   tic), and begins accumulating synthetic AI/DI for return at
+            %   stopContinuousSession. See docs/SYNC_FRAME.md §4.1.
+            if obj.isRunning
+                error('tfp:hardware:DAQ:alreadyRunning', ...
+                    'startContinuousSession called while a session is already running.');
+            end
+            if ~isstruct(cfg) || ~isscalar(cfg)
+                error('tfp:hardware:DAQ:badConfig', ...
+                    'cfg must be a scalar struct.');
+            end
+            if ~isfield(cfg, 'sampleRate') || ~isnumeric(cfg.sampleRate) ...
+                    || ~isscalar(cfg.sampleRate) || ~isfinite(cfg.sampleRate) ...
+                    || cfg.sampleRate <= 0
+                error('tfp:hardware:DAQ:badConfig', ...
+                    'cfg.sampleRate must be a positive finite scalar.');
+            end
+
+            aiChannels           = configField(cfg, 'aiChannels', []);
+            aiRangeV             = configField(cfg, 'aiRangeV', []);
+            aoChannels           = configField(cfg, 'aoChannels', []);
+            diLinesRaw           = configField(cfg, 'diLines', {});
+            doLinesRaw           = configField(cfg, 'doLines', {});
+            frameClockLine       = configField(cfg, 'frameClockLine', '');
+            syntheticFrameRateHz = configField(cfg, 'syntheticFrameRateHz', 30);
+
+            if ~isnumeric(aiChannels) || (~isempty(aiChannels) && ~isvector(aiChannels))
+                error('tfp:hardware:DAQ:badConfig', ...
+                    'cfg.aiChannels must be a numeric vector (may be empty).');
+            end
+            if ~isnumeric(aoChannels) || (~isempty(aoChannels) && ~isvector(aoChannels))
+                error('tfp:hardware:DAQ:badConfig', ...
+                    'cfg.aoChannels must be a numeric vector (may be empty).');
+            end
+            if isempty(diLinesRaw)
+                diLines = {};
+            else
+                diLines = cellstr(diLinesRaw);
+                diLines = diLines(:)';
+            end
+            if isempty(doLinesRaw)
+                doLines = {};
+            else
+                doLines = cellstr(doLinesRaw);
+                doLines = doLines(:)';
+            end
+            if isempty(frameClockLine)
+                frameClockLineC = '';
+            else
+                frameClockLineC = char(frameClockLine);
+                if ~any(strcmp(frameClockLineC, diLines))
+                    error('tfp:hardware:DAQ:badConfig', ...
+                        'cfg.frameClockLine (''%s'') must appear in cfg.diLines.', ...
+                        frameClockLineC);
+                end
+            end
+            if ~isnumeric(syntheticFrameRateHz) || ~isscalar(syntheticFrameRateHz) ...
+                    || ~isfinite(syntheticFrameRateHz) || syntheticFrameRateHz <= 0
+                error('tfp:hardware:DAQ:badConfig', ...
+                    'cfg.syntheticFrameRateHz must be a positive finite scalar.');
+            end
+
+            snap = struct();
+            snap.sampleRate           = double(cfg.sampleRate);
+            snap.aiChannels           = aiChannels;
+            snap.aiRangeV             = aiRangeV;
+            snap.aoChannels           = aoChannels;
+            snap.diLines              = diLines;
+            snap.doLines              = doLines;
+            snap.frameClockLine       = frameClockLineC;
+            snap.syntheticFrameRateHz = double(syntheticFrameRateHz);
+
+            obj.sampleRate                  = snap.sampleRate;
+            obj.continuousCfg_              = snap;
+            obj.continuousStartTic_         = tic;
+            obj.continuousStartDatetime_    = datetime('now');
+            obj.continuousAoSamplesWritten_ = uint64(0);
+            obj.continuousFinalSampleCount_ = uint64(0);
+            obj.continuousEverStarted_      = true;
+            obj.isRunning                   = true;
+
+            obj.logEvent('startContinuousSession', snap);
+        end
+
+        function result = stopContinuousSession(obj)
+            %stopContinuousSession Stop the master clock; return captured data.
+            %   Returns the schema documented in docs/SYNC_FRAME.md §4.2.
+            if ~obj.isRunning || isempty(obj.continuousCfg_)
+                error('tfp:hardware:DAQ:notRunning', ...
+                    'stopContinuousSession called without an active continuous session.');
+            end
+
+            snap     = obj.continuousCfg_;
+            elapsed  = toc(obj.continuousStartTic_);
+            nSamples = uint64(max(0, floor(elapsed * snap.sampleRate)));
+            nS       = double(nSamples);
+
+            nAi = numel(snap.aiChannels);
+            if nAi > 0 && nS > 0
+                noise = randn(nS, nAi) * 0.01;
+                drift = cumsum(randn(nS, nAi) * 1e-5);
+                aiData = noise + drift;
+            else
+                aiData = zeros(nS, nAi);
+            end
+
+            nDi    = numel(snap.diLines);
+            diData = zeros(nS, nDi);
+            if ~isempty(snap.frameClockLine) && nS > 0 && nDi > 0
+                framePeriod = max(1, round(snap.sampleRate / snap.syntheticFrameRateHz));
+                col         = find(strcmp(snap.frameClockLine, snap.diLines), 1);
+                pulseIdx    = 1:framePeriod:nS;
+                diData(pulseIdx, col) = 1;
+            end
+
+            lineNames                = struct();
+            lineNames.aiChannels     = snap.aiChannels;
+            lineNames.aoChannels     = snap.aoChannels;
+            lineNames.diLines        = snap.diLines;
+            lineNames.doLines        = snap.doLines;
+            lineNames.frameClockLine = snap.frameClockLine;
+
+            result                       = struct();
+            result.aiData                = aiData;
+            result.diData                = diData;
+            result.aoSamplesWritten      = obj.continuousAoSamplesWritten_;
+            result.nSamplesTotal         = nSamples;
+            result.sampleRate            = snap.sampleRate;
+            result.sessionStartDatetime  = obj.continuousStartDatetime_;
+            result.lineNames             = lineNames;
+
+            obj.continuousFinalSampleCount_ = nSamples;
+            obj.isRunning                   = false;
+
+            obj.logEvent('stopContinuousSession', struct( ...
+                'nSamplesTotal',    nSamples, ...
+                'aoSamplesWritten', obj.continuousAoSamplesWritten_));
+        end
+
+        function idx = currentSampleIndex(obj)
+            %currentSampleIndex 1-based DAQ sample index since session start.
+            %   Returns count-of-samples-acquired + 1 while running; the
+            %   frozen final count after stopContinuousSession. See
+            %   docs/SYNC_FRAME.md §4.3.
+            if ~obj.continuousEverStarted_
+                error('tfp:hardware:DAQ:notRunning', ...
+                    'currentSampleIndex called without an active continuous session.');
+            end
+            if obj.isRunning
+                elapsed = toc(obj.continuousStartTic_);
+                rate    = obj.continuousCfg_.sampleRate;
+                idx     = uint64(max(0, floor(elapsed * rate)) + 1);
+            else
+                idx = obj.continuousFinalSampleCount_;
+            end
+        end
+
+        function startSampleIdx = queueClockedAO(obj, samples, rate, startTrigger)
+            %queueClockedAO Queue a hardware-clocked AO waveform.
+            %   Returns the DAQ sample index at which the first queued
+            %   sample will be output (use as t_onset_daq_samples). See
+            %   docs/SYNC_FRAME.md §4.4.
+            if ~obj.isRunning || isempty(obj.continuousCfg_)
+                error('tfp:hardware:DAQ:notRunning', ...
+                    'queueClockedAO requires an active continuous session.');
+            end
+            snap = obj.continuousCfg_;
+            nAo  = numel(snap.aoChannels);
+            if ~isnumeric(samples) || ndims(samples) > 2 || size(samples, 2) ~= nAo
+                error('tfp:hardware:DAQ:badShape', ...
+                    'samples must be (nSamples x %d) numeric; got size [%s].', ...
+                    nAo, num2str(size(samples)));
+            end
+            if ~isnumeric(rate) || ~isscalar(rate) || rate ~= snap.sampleRate
+                error('tfp:hardware:DAQ:badRate', ...
+                    'rate (%g) must equal the active session sampleRate (%g).', ...
+                    double(rate), snap.sampleRate);
+            end
+            trigC = char(startTrigger);
+            switch trigC
+                case 'immediate'
+                    % Round-1 default; nothing to do.
+                case 'sync'
+                    error('tfp:hardware:DAQ:notImplemented', ...
+                        'startTrigger=''sync'' is reserved for future use.');
+                otherwise
+                    error('tfp:hardware:DAQ:badConfig', ...
+                        'startTrigger must be ''immediate'' or ''sync''; got ''%s''.', ...
+                        trigC);
+            end
+
+            startSampleIdx = obj.currentSampleIndex();
+            obj.continuousAoSamplesWritten_ = ...
+                obj.continuousAoSamplesWritten_ + uint64(size(samples, 1));
+
+            obj.logEvent('queueClockedAO', struct( ...
+                'startSampleIdx', startSampleIdx, ...
+                'nSamples',       uint64(size(samples, 1)), ...
+                'nChans',         nAo, ...
+                'rate',           rate, ...
+                'startTrigger',   trigC));
         end
 
         function entries = getLog(obj)
