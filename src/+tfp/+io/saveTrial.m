@@ -7,11 +7,30 @@ function [metaPath, rawPath] = saveTrial(trial, dataDir, options)
 %     trial_NNNN_meta.mat  — always written; small (~10 KB).
 %       Variable 'meta': trialIdx, status, targetSpec (pattern arrays
 %       stripped), powerMw, timingSpec, metadata, responseSummary, error
-%       (failed trials only), fileRef (path to raw file or '').
+%       (failed trials only), fileRef (path to raw file or ''), plus the
+%       TASK-SYNC-ALIGN sync fields documented below.
 %
 %     trial_NNNN_raw.mat   — written when options.saveRawData is true (default).
 %       Variable 'raw': trialIdx, status, aiData, frameClock,
 %       frameTimestamps, imaging, imagingTiffPath, dmdLog, daqLog, plmLog.
+%
+%   TASK-SYNC-ALIGN (T-SYNC-6) extension: meta also carries the seven
+%   trial-schema fields from docs/SYNC_FRAME.md §6, mirroring the
+%   tfp.trial.Trial property names exactly:
+%
+%     meta.t_onset_daq_samples         — uint64/NaN, DAQ sample index
+%     meta.t_offset_daq_samples        — uint64/NaN
+%     meta.daq_master_sample_rate_hz   — double/NaN (Hz)
+%     meta.session_start_datetime      — datetime/NaT (wall-clock anchor)
+%     meta.t_onset_si_aux_edge_index   — double/NaN (1-based edge index)
+%     meta.frame_indices_during_stim   — uint64 row vector (may be empty)
+%     meta.frame_indices_baseline      — uint64 row vector (may be empty)
+%
+%   Backward compatibility: previously-written meta files lack these fields.
+%   Consumers must `isfield`-check before reading; loading old files via
+%   `load(metaPath)` is unaffected. The Trial-level defaults (NaN / NaT /
+%   empty uint64) are what gets written for trials that were never anchored
+%   to a continuous DAQ session, so an unaligned trial round-trips cleanly.
 %
 %   Migration note: code that loaded trial_NNNN.mat and accessed
 %   loaded.trial.* must be updated to load trial_NNNN_meta.mat and access
@@ -78,6 +97,18 @@ meta.timingSpec      = timingSpec;
 meta.metadata        = trial.metadata;
 meta.responseSummary = computeResponseSummary(trial);
 meta.fileRef         = rawPath;
+
+% --- TASK-SYNC-ALIGN (T-SYNC-6) schema fields; see docs/SYNC_FRAME.md §6.
+% Names and types mirror tfp.trial.Trial exactly; unset trials carry the
+% Trial-class defaults (NaN / NaT / empty uint64) so old experiments still
+% round-trip without migration.
+meta.t_onset_daq_samples        = trial.t_onset_daq_samples;
+meta.t_offset_daq_samples       = trial.t_offset_daq_samples;
+meta.daq_master_sample_rate_hz  = trial.daq_master_sample_rate_hz;
+meta.session_start_datetime     = trial.session_start_datetime;
+meta.t_onset_si_aux_edge_index  = trial.t_onset_si_aux_edge_index;
+meta.frame_indices_during_stim  = trial.frame_indices_during_stim;
+meta.frame_indices_baseline     = trial.frame_indices_baseline;
 
 % Error detail lives in meta so failed trials can be diagnosed without the
 % raw file (important when saveRawData is false for dry runs).
