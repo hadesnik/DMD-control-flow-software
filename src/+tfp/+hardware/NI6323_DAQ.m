@@ -389,10 +389,10 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
                 raw  = obj.session_.inputSingleScan();  %LEGACY_API
                 data = reshape(raw(1:nChans), 1, nChans);
             elseif obj.isRunning
-                % Listener was registered in start() — reset buffer and wait.
-                obj.aiBuf_ = zeros(0, nChans);
-                obj.diBuf_ = zeros(0, numel(obj.configuredDiLines_));
-                timeout = nSamples / obj.sampleRate * 3;  % 3× headroom
+                % Listener was registered in start() and may have already
+                % filled aiBuf_ — do NOT reset it here or that data is lost.
+                % start() resets the buffer; stop() clears it between trials.
+                timeout = max(1.0, nSamples / obj.sampleRate * 3);  % ≥1 s
                 t0      = tic;
                 while size(obj.aiBuf_, 1) < nSamples && toc(t0) < timeout
                     pause(0.001);
