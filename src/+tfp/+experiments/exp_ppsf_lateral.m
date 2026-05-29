@@ -32,7 +32,7 @@ targets     = resolveTargets(config, calibration);
 distancesUm = [0, 3, 6, 9, 12, 15, 20, 30, 40];
 nReps       = 2;
 powerMw     = 5;
-radiusPx    = 50;   % TEMP: large for visual bringup — change back to 15 before real experiments
+radiusPx    = 15;
 
 sequence = tfp.trial.TrialSequence.generatePPSF( ...
     targets, distancesUm, nReps, powerMw);
