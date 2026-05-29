@@ -12,9 +12,17 @@ function si_frame_callback(src, ~) %#ok<INUSL>
 %   - msocket library must be on the MATLAB path
 %
 % The packet sent to scope PC is a struct:
-%   packet.frame  — integer frame counter from ScanImage
-%   packet.F      — nROIs × 1 double, ROI integration values
-%   packet.t      — datenum timestamp at time of callback
+%   packet.frame          — ScanImage absolute frame number (frameNumberAcqMode)
+%   packet.F              — nROIs × 1 double, ROI integration values
+%   packet.frameTimestamp — ScanImage frame timestamp (s), for alignment
+%   packet.t              — datenum wall-clock at callback time
+%
+% NOTE — frame indexing: packet.frame is ScanImage's *absolute* acquisition
+% frame number (e.g. 20214), not a per-trial 1..nFrames index. The scope-side
+% accumulator (ScanImageBridge.receiveLiveFrame) currently uses packet.frame
+% directly as a column index into a per-trial buffer, so it must be updated to
+% map absolute → trial-relative (subtract the trial's first frame number).
+% See the 3044-streaming follow-up before relying on live ΔF/F end-to-end.
 
 global SIStreamSocket %#ok<GVMIS>
 
@@ -23,33 +31,33 @@ if isempty(SIStreamSocket)
 end
 
 try
-    %VERIFY frameCounter property name with Masato.
-    %  ASSUME: hSI.hScan2D.frameCounter increments by 1 each frameAcquired event.
-    %  TEST:   Add disp(hSI.hScan2D.frameCounter) in the callback and watch it.
-    %  CHANGE: Replace frameCounter with the correct property if it differs.
-    frameNum = src.hSI.hScan2D.frameCounter;
-
-    %VERIFY ROI integration output property path with Masato.
-    %  ASSUME: hSI.hIntegrationRoiManager.roiGroup.rois is an array of roi objects,
-    %          each with a scanfields(1).integrationValue scalar.
-    %  TEST:   In ScanImage MATLAB console (with ROI Integration enabled):
-    %            r = hSI.hIntegrationRoiManager.roiGroup.rois;
-    %            disp(r(1).scanfields(1).integrationValue)
-    %  CHANGE: Update the property path to match the actual ScanImage API.
-    rois = src.hSI.hIntegrationRoiManager.roiGroup.rois;
-    F = zeros(numel(rois), 1);
-    for k = 1:numel(rois)
-        F(k) = rois(k).scanfields(1).integrationValue;
+    % Current per-ROI integration values via ScanImage's public user method.
+    % getIntegrationValues handles the internal circular-buffer cursor and
+    % returns, for each integration ROI, the newest value plus its frame
+    % number and timestamp. This is the supported API — do NOT read the
+    % hidden integrationValueHistory buffer directly (its rows are in
+    % cursor order, not time order, so v(1,:)/v(end,:) are arbitrary-age).
+    %
+    % CONFIRMED against SI2018b on the rig (2026-05-29):
+    %   F  : 1 x nROIs current integration values
+    %   ts : 1 x nROIs frame timestamps (s) — identical across ROIs (one frame)
+    %   fn : 1 x nROIs frame numbers       — identical across ROIs (one frame)
+    % Earlier guesses (rois(k).scanfields(1).integrationValue and
+    % hSI.hScan2D.frameCounter) do not exist / were unverified on this rig.
+    [~, F, ts, fn] = src.hSI.hIntegrationRoiManager.getIntegrationValues();
+    if isempty(F)
+        return;  % integration not active this frame — drop silently
     end
 
-    packet.frame = frameNum;
-    packet.F     = F;
-    packet.t     = now;  % datenum; scope PC converts with datetime(...,'ConvertFrom','datenum')
+    packet.frame          = fn(1);   % ScanImage absolute frame number (frameNumberAcqMode)
+    packet.F              = F(:);    % nROIs x 1 column vector
+    packet.frameTimestamp = ts(1);   % ScanImage frame timestamp (s), for alignment
+    packet.t              = now;     % datenum wall-clock at callback time
 
     mssend(SIStreamSocket, packet);
 
 catch
     % CRITICAL: never let the callback propagate an error to ScanImage.
-    % Silently drop this frame if the socket is closed or any property lookup fails.
+    % Silently drop this frame if the socket is closed or any lookup fails.
 end
 end
