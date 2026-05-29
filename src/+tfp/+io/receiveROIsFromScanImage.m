@@ -54,11 +54,16 @@ fprintf('  On the ScanImage PC, run si_send_rois (it does msconnect/mssend/msclo
 % sock = msaccept(srvsock, timeout); data = msrecv(sock). (Confirmed against
 % SImsocketPrep.m and the verified 3044 dry-run — there is no implicit-handle
 % form, and msdisconnect does not exist in this msocket build.)
+srvsock = [];
 try
     srvsock = mslisten(port);
     sock    = msaccept(srvsock, timeoutS);
-    msclose(srvsock);
+    msclose(srvsock); srvsock = [];          % done listening; close promptly
 catch ME
+    % Always close the listening socket, even on accept timeout — otherwise a
+    % failed/interrupted call leaks a listener bound to the port, and later
+    % connections get routed to a dead listener ("connected but no data").
+    if ~isempty(srvsock), try, msclose(srvsock); catch, end, end %#ok<TRYNC>
     error('tfp:io:receiveROIsFromScanImage:listenFailed', ...
         'msocket listen/accept on port %d failed: %s', port, ME.message);
 end
