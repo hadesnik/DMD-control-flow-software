@@ -123,6 +123,12 @@ if strcmpi(char(config.hardwareKind), 'mock')
     end
     return
 end
+% testTargets bypasses ScanImage for hardware bringup without a live imaging PC.
+% Values are DMD pixel coordinates [col, row]; calibration conversion is skipped.
+if isfield(config, 'testTargets') && ~isempty(config.testTargets)
+    targets = double(config.testTargets);
+    return
+end
 roiOpts = struct();
 if isfield(config, 'roi')
     roiOpts = config.roi;
