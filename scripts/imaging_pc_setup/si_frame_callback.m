@@ -19,10 +19,15 @@ function si_frame_callback(src, ~) %#ok<INUSL>
 %
 % NOTE — frame indexing: packet.frame is ScanImage's *absolute* acquisition
 % frame number (e.g. 20214), not a per-trial 1..nFrames index. The scope-side
-% accumulator (ScanImageBridge.receiveLiveFrame) currently uses packet.frame
-% directly as a column index into a per-trial buffer, so it must be updated to
-% map absolute → trial-relative (subtract the trial's first frame number).
-% See the 3044-streaming follow-up before relying on live ΔF/F end-to-end.
+% accumulator (ScanImageBridge.receiveLiveFrame) anchors on the first frame of
+% each trial and converts to a 1-based column index.
+%
+% NOTE — single-plane only: frameAcquired fires once per FRAME/slice (SI2018b
+% SI.m ~L1178). On a single-plane scan frame == volume, so each callback yields
+% one fresh integration value. On a multi-plane stack the callback fires N times
+% per volume while integration values finalize per volume → duplicate sends and
+% non-contiguous frame indices. Add dedupe-by-frame + volume indexing on both
+% ends before streaming multi-plane.
 
 global SIStreamSocket %#ok<GVMIS>
 
