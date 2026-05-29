@@ -12,7 +12,7 @@ function centroids = receiveROIsFromScanImage(options)
 %   Inputs (all optional via options struct):
 %     .port          - msocket listening port           (default 3045)
 %     .msocketPath   - path to msocket\ directory on this PC (default '')
-%     .timeoutS      - seconds to wait for connection   (default 60)
+%     .timeoutS      - seconds to wait for connection   (default 30)
 %
 %   Output:
 %     centroids      - Nx2 double, [x y] scan-field coordinates per ROI,
@@ -39,7 +39,7 @@ end
 
 port        = configField(options, 'port',        3045);
 msocketPath = configField(options, 'msocketPath', '');
-timeoutS    = configField(options, 'timeoutS',    60);
+timeoutS    = configField(options, 'timeoutS',    30);
 
 if ~isempty(msocketPath) && isfolder(msocketPath)
     addpath(msocketPath);
