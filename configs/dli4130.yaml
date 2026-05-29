@@ -68,6 +68,10 @@ laser:
 # No fake cells for real hardware.
 fakeCells: []
 
+# bringupMode: skip inter-trial wait (duration_s=0.1, preStim_s=0) for
+# rapid visual pattern verification. Set false before real experiments.
+bringupMode: true
+
 # testTargets: DMD [col, row] pairs for bringup testing (no ScanImage needed).
 # Flat list [c1,r1, c2,r2, ...] — same format as analogInChannels.
 # Three spots in the central 6x6 mm active region (center ~[512,384] on 1024x768).

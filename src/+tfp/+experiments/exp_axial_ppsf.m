@@ -54,6 +54,13 @@ end
 sequence = tfp.trial.TrialSequence.generateAxialPPSF( ...
     targets, dzUm, nReps, powerMw);
 
+if isfield(config, 'bringupMode') && config.bringupMode
+    for k = 1:numel(sequence.trials)
+        sequence.trials(k).duration_s = 0.1;
+        sequence.trials(k).preStim_s  = 0.0;
+    end
+end
+
 % Compute PLM patterns once per unique dz; attach patternRef and plmPattern
 % to each trial. Both are needed: DMD fires the lateral stim; PLM shifts focus.
 sys = struct();

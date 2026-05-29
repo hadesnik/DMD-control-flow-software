@@ -37,6 +37,13 @@ radiusPx    = 15;
 sequence = tfp.trial.TrialSequence.generatePPSF( ...
     targets, distancesUm, nReps, powerMw);
 
+if isfield(config, 'bringupMode') && config.bringupMode
+    for k = 1:numel(sequence.trials)
+        sequence.trials(k).duration_s = 0.1;
+        sequence.trials(k).preStim_s  = 0.0;
+    end
+end
+
 % Attach patternRef per trial: spot at center + (distance um -> px) along +x.
 for k = 1:numel(sequence.trials)
     tr = sequence.trials(k);

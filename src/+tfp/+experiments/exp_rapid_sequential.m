@@ -29,6 +29,13 @@ radiusPx = 15;
 
 sequence = tfp.trial.TrialSequence.generateRapidSequential(targets, isi_s, nReps);
 
+if isfield(config, 'bringupMode') && config.bringupMode
+    for k = 1:numel(sequence.trials)
+        sequence.trials(k).duration_s = 0.1;
+        sequence.trials(k).preStim_s  = 0.0;
+    end
+end
+
 for k = 1:numel(sequence.trials)
     tr = sequence.trials(k);
     tr.targetSpec.patternRef = tfp.patterns.singleSpot( ...
