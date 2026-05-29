@@ -86,17 +86,11 @@ if ndims(pat) > 2
 end
 [H, W] = size(pat);
 
-% Center the 200×200 crop on the stim target when coordinates are known.
-if isstruct(trial.targetSpec) && isfield(trial.targetSpec, 'dmdCoords') && ...
-        ~isempty(trial.targetSpec.dmdCoords)
-    xy = trial.targetSpec.dmdCoords;
-    cC = max(1, min(W, round(xy(1))));
-    rC = max(1, min(H, round(xy(2))));
-else
-    cC = round(W/2);
-    rC = round(H/2);
-end
-half = 100;
+% Show the central active region: chip center ± floor(H/2) covers the
+% full 6×6 mm illuminated area on both DLP7000 (768 rows) and DLP650LNIR (800 rows).
+cC  = round(W/2);
+rC  = round(H/2);
+half = floor(H/2);
 r1 = max(1, rC - half);     r2 = min(H, rC + half - 1);
 c1 = max(1, cC - half);     c2 = min(W, cC + half - 1);
 crop = logical(pat(r1:r2, c1:c2));
