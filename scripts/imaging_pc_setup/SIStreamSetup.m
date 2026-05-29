@@ -51,8 +51,13 @@ disp(['Connected to ' scopePcIp ':' num2str(streamPort) '.']);
 % In R2018b, assigning a differently-ordered struct into a non-empty struct
 % array errors with "dissimilar structures".
 % 'frameAcquired' is a valid user-function event (SI.m notifies it).
-% NOTE: on a single-plane scan frame == volume; for multi-plane stacks confirm
-%   whether frameAcquired fires per frame or per volume before relying on it.
+% CONFIRMED (SI2018b source, SI.m ~L1178): frameAcquired fires per FRAME
+% (per z-slice on stripeData.endOfFrame), NOT per volume. On a single-plane
+% scan frame == volume, so the callback gets one fresh integration value per
+% frame — correct, and what the 3044 dry-run validated. Multi-plane stacks are
+% NOT supported here: the callback would fire once per slice while integration
+% values only finalize per volume (duplicate sends + non-contiguous frame
+% indices). Add dedupe-by-frame + volume indexing before streaming multi-plane.
 % Idempotent: drop any prior si_frame_callback entries first, so re-running
 % this script does not stack duplicate callbacks (each copy fires per frame
 % and sends a redundant packet — observed as ~Nx duplicates in the stream).
