@@ -1,5 +1,10 @@
 # TF-Photostim: Temporal Focusing Patterned Photostimulation Control Software
 
+## ⚠️ Hard rule: stay inside this repo
+
+**NEVER create, edit, move, or delete any file outside this repository's folder.**
+This machine also holds the lab's shared MATLAB code (e.g. `C:\Users\scanimage\Documents\MATLAB\CodeBase\`, ScanImage, Masato's/others' scripts) and network shares (`P:\`, etc.). Those are **read-only references**: you may open them to understand the real protocol/conventions, but all writes must land under this repo. If a task seems to require changing an external file, stop and ask the user — propose the change for them to apply by hand rather than editing it yourself.
+
 This repository implements MATLAB-based control software for a 2-photon temporal-focusing patterned photostimulation system being built to support a BRAIN Initiative R01 (RFA-NS-25-018). The grant proposes an NIR DMD + NIR PLM + temporal focusing photostimulation engine targeting single-cell resolution across a 3×3 mm FOV with simultaneous mesoscale 2p calcium imaging. Aim 1 of the grant is the photostimulation subsystem this software controls.
 
 ## Status
