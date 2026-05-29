@@ -53,22 +53,18 @@ The NIR DMD (TI DLP650LNIR) is not in hand yet; arrival expected second week of 
 - DAQ generates: (a) TTL to start ScanImage acquisition on imaging PC, (b) DMD pattern-advance triggers, (c) PLM phase-state triggers (when functional), (d) analog power control of NKT FS-50 via ao3, (e) sync line(s) recorded back into the ephys channels.
 - ScanImage frame clock is fed back to the DAQ PC as a digital input for post-hoc frame-stim alignment.
 
-**Confirmed NI PCIe-6323 wiring (as of 2026-05-29, DLi4130 rig)**:
+**Confirmed NI PCIe-6323 wiring (cross-referenced with Masato's DAQ code, 2026-05-29)**:
 
 | Line | Direction | Connected to | Notes |
 |------|-----------|--------------|-------|
-| ai0 | in | — | floating |
-| ai1 | in | — | floating |
-| ai2 | in | Multiclamp 700B output | primary ephys recording channel |
-| ai3 | in | — | floating |
-| ao0 | out | Multiclamp 700B command | current/voltage clamp command |
-| ao1 | out | PsychToolbox digitizer (other PC) | unused by this software |
-| ao2 | out | unknown | TBD |
+| ai2 | in | Multiclamp 700B output | primary ephys / patch electrode |
+| ai3 | in | Stim trigger monitor | reads back stimulation trigger for post-hoc alignment |
+| ao0 | out | Multiclamp 700B ch1 command | postsynaptic cell current/voltage command |
+| ao2 | out | Multiclamp 700B ch2 command | presynaptic cell command — normally unused |
 | ao3 | out | NKT FS-50 power modulator | **photostim laser power control** — 0–5 V |
-| port0/line0 | out | TBD | intended ScanImage acquisition trigger — confirm with Masato |
-| port0/line1 | out | — | spare |
-| port0/line10 | out | — | spare |
-| port0/line2 | in | ScanImage frame clock | rising edge = frame acquired (Phase 2+) |
+| port0/line10 | out | ScanImage acquisition trigger | rising edge starts SI acquisition |
+| port0/line8 | out | SLM trigger out | Masato's SLM rig — spare for our DMD setup |
+| port0/line1 | in | ScanImage frame clock | rising edge = frame acquired |
 
 ## Software architecture
 

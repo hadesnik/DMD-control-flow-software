@@ -17,25 +17,25 @@ dmd:
   roiHalfWidthPx: 278
 
 # DAQ configuration. Consumed by tfp.hardware.NI6323_DAQ.initialize.
-# Confirmed wiring (2026-05-29):
-#   ai0: floating  ai1: floating  ai2: Multiclamp 700B output  ai3: floating
-#   ao0: Multiclamp 700B command  ao1: PsychToolbox digitizer (other PC, unused here)
+# Confirmed wiring (cross-referenced with Masato's DAQ code, 2026-05-29):
+#   ai2: patch electrode / Multiclamp 700B output (primary ephys)
+#   ai3: SLM/stim trigger monitor — reads back the stimulation trigger line
+#   ao0: Multiclamp 700B ch1 command (postsynaptic cell)
+#   ao2: Multiclamp 700B ch2 command (presynaptic cell, normally unused)
 #   ao3: NKT FS-50 power modulator (photostim laser power control)
-#   port0/line0: ScanImage acquisition trigger (TBD — confirm with Masato)
-#   port0/line1: spare  port0/line10: spare
-#   port0/line2 (DI): ScanImage frame clock (rising edge = frame acquired)
+#   port0/line10 (DO): ScanImage acquisition trigger
+#   port0/line8  (DO): SLM trigger out (Masato's SLM; spare for our DMD rig)
+#   port0/line1  (DI): ScanImage frame clock (rising edge = frame acquired)
 daq:
   deviceName: 'Dev1'
   sampleRate: 10000
-  analogInChannels: [0, 1, 2, 3]
+  analogInChannels: [2, 3]
   aiRangeV: [-5, 5]
-  analogOutChannels: [0, 1, 3]
+  analogOutChannels: [0, 3]
   digitalOutChannels:
-    - 'port0/line0'    # ScanImage acquisition trigger (TBD — confirm with Masato)
-    - 'port0/line1'    # spare
-    - 'port0/line10'   # spare
+    - 'port0/line10'   # ScanImage acquisition trigger
   digitalInChannels:
-    - 'port0/line2'    # ScanImage frame clock (rising edge = frame acquired)
+    - 'port0/line1'    # ScanImage frame clock (rising edge = frame acquired)
 
 # Imaging parameters. Consumed by ScanImageBridge (Phase 2+).
 imaging:
