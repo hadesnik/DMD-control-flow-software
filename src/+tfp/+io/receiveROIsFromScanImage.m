@@ -63,13 +63,26 @@ catch ME
         'msocket listen/accept on port %d failed: %s', port, ME.message);
 end
 
+% Poll with a timeout instead of a bare blocking msrecv, so a stale/closed
+% connection or a sender that never sends can't hang MATLAB indefinitely.
+data  = [];
+tPoll = tic;
 try
-    data = msrecv(sock);
+    while toc(tPoll) < timeoutS
+        data = msrecv(sock, 0.2);     % [] on timeout; never blocks forever
+        if ~isempty(data), break; end
+    end
     msclose(sock);
 catch ME
     try, msclose(sock); catch, end %#ok<TRYNC>
     error('tfp:io:receiveROIsFromScanImage:recvFailed', ...
         'msrecv failed: %s', ME.message);
+end
+if isempty(data)
+    error('tfp:io:receiveROIsFromScanImage:noData', ...
+        ['Imaging PC connected but sent no ROI data within %.0f s.\n' ...
+         'Re-run si_send_rois on the imaging PC (and check it prints a non-empty centroid table).'], ...
+        timeoutS);
 end
 
 % Payload is a bare Nx2 double (si_send_rois sends the matrix directly —
