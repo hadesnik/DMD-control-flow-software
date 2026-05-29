@@ -31,7 +31,8 @@ tfp.io.sessionLog(sessionDir, 'session-start', struct( ...
 plm        = makePlm(config);
 cleanupHw  = onCleanup(@() teardownHardware(dmd, daq, plm)); %#ok<NASGU>
 
-daq.configureAnalogInput(config.daq.analogInChannels, config.daq.aiRangeV);
+aiSE = []; if isfield(config.daq,'aiSingleEndedChannels'), aiSE = config.daq.aiSingleEndedChannels; end
+daq.configureAnalogInput(config.daq.analogInChannels, config.daq.aiRangeV, aiSE);
 daq.configureAnalogOutput(config.daq.analogOutChannels);
 daq.configureDigitalOutput(config.daq.digitalOutChannels);
 

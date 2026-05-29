@@ -38,9 +38,11 @@ dmd:
 #   port0/line1  (DI): ScanImage frame clock (rising edge = frame acquired)
 daq:
   deviceName: 'Dev1'
-  sampleRate: 10000
+  sampleRate: 20000
   analogInChannels: [2, 3]
   aiRangeV: [-5, 5]
+  # ai3 reads a 0-5V trigger monitor signal; use SingleEnded not differential.
+  aiSingleEndedChannels: [3]
   analogOutChannels: [0, 3]
   digitalOutChannels: [port0/line10]
   digitalInChannels: [port0/line1]

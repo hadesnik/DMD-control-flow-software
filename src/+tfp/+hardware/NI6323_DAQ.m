@@ -139,9 +139,14 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
                 'deviceName', obj.deviceName_, 'sampleRate', obj.sampleRate));
         end
 
-        function configureAnalogInput(obj, channels, rangeV)
+        function configureAnalogInput(obj, channels, rangeV, singleEndedChannels)
             %configureAnalogInput Add AI voltage channels to the session.
+            %   singleEndedChannels (optional): list of channel numbers that
+            %   should use SingleEnded input type instead of the default
+            %   Differential. Use for 0-5V trigger monitor lines (e.g. ai3).
+            %   In NI-DAQmx legacy API this sets ch.InputType = 'SingleEnded'.
             obj.requireInitialized('configureAnalogInput');
+            if nargin < 4, singleEndedChannels = []; end
             for k = 1:numel(channels)
                 ch = obj.session_.addAnalogInputChannel( ...  %LEGACY_API
                     obj.deviceName_, channels(k), 'Voltage');
@@ -150,6 +155,13 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
                         ch.Range = rangeV;  %LEGACY_API
                     catch
                         % Range property not available on all channel subtypes.
+                    end
+                end
+                if ~isempty(singleEndedChannels) && any(channels(k) == singleEndedChannels)
+                    try
+                        ch.InputType = 'SingleEnded';  %LEGACY_API
+                    catch
+                        % InputType not settable on all NI-DAQmx versions.
                     end
                 end
             end
