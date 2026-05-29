@@ -38,13 +38,26 @@ disp(['Connected to ' scopePcIp ':' num2str(streamPort) '.']);
 % Register si_frame_callback as a ScanImage frameAcquired user function.
 % ScanImage stores these in hSI.hUserFunctions.userFunctionsCfg.
 %
-% %VERIFY: confirm with Masato that frameAcquired fires once per frame
-%   (not once per volume) on this ScanImage version.
-%   ScanImage 2020+ uses 'frameAcquired'; earlier versions may differ.
-newEntry.Enable       = true;
+% Field order MUST match ScanImage's record layout (EventName, UserFcnName,
+% Arguments, Enable) — confirmed against SI2018b guis/userFunctionControlsV4.m.
+% In R2018b, assigning a differently-ordered struct into a non-empty struct
+% array errors with "dissimilar structures".
+% 'frameAcquired' is a valid user-function event (SI.m notifies it).
+% NOTE: on a single-plane scan frame == volume; for multi-plane stacks confirm
+%   whether frameAcquired fires per frame or per volume before relying on it.
+% Idempotent: drop any prior si_frame_callback entries first, so re-running
+% this script does not stack duplicate callbacks (each copy fires per frame
+% and sends a redundant packet — observed as ~Nx duplicates in the stream).
+existing = hSI.hUserFunctions.userFunctionsCfg;
+if ~isempty(existing)
+    keep = ~strcmp({existing.UserFcnName}, 'si_frame_callback');
+    hSI.hUserFunctions.userFunctionsCfg = existing(keep);
+end
+
 newEntry.EventName    = 'frameAcquired';
 newEntry.UserFcnName  = 'si_frame_callback';
 newEntry.Arguments    = {};
+newEntry.Enable       = true;
 
 hSI.hUserFunctions.userFunctionsCfg(end+1) = newEntry;
 
