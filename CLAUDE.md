@@ -251,6 +251,10 @@ Phase 1 implementation pinned the following conventions; treat them as load-bear
 - **MATLAB is installed locally on this MacBook** — Claude can and should run unit tests here (e.g. `matlab -batch "runtests('tests')"`) before pushing. Mock-backed tests cover most of the codebase, so local pre-flight catches the majority of regressions.
 - Hardware-touching code (real DMD, NI DAQ, ALP DLL) still RUNS on the Windows scope PC; the ALP DLL cannot be loaded on macOS and hardware verification happens on the scope PC after git push/pull.
 
+## Hard rules for Claude
+
+- **Never edit files outside this repository** (`c:\projects\DMD-control-flow-software`). Do not modify files in other directories on the system, regardless of what a task seems to require.
+
 ## What Claude should know when working on this codebase
 
 - This is a research instrument, not production software. Optimize for clarity and ease of modification, not absolute robustness. But: anything that touches the high-power laser path needs explicit safety interlocks (see `+util/safetyChecks.m`).

@@ -84,15 +84,16 @@ switch lower(char(config.hardwareKind))
         daq = tfp.hardware.MockDAQ();
     case 'real'
         dmd = tfp.hardware.DLP650LNIR_DMD(config.dmd);
-        daq = tfp.hardware.MockDAQ();   % DAQ: real NI6323 wired in Phase 2
+        daq = tfp.hardware.NI6323_DAQ(config.daq);
     otherwise
         error('tfp:experiments:exp_rapid_sequential:badKind', ...
             'unknown hardwareKind: %s.', config.hardwareKind);
 end
-if ~strcmp(config.hardwareKind, 'real')
+% Mock constructors do not call initialize(); real constructors do.
+if strcmp(lower(char(config.hardwareKind)), 'mock')
     dmd.initialize(config.dmd);
+    daq.initialize(config.daq);
 end
-daq.initialize(config.daq);
 end
 
 function teardownHardware(dmd, daq)

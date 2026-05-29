@@ -1,22 +1,22 @@
-function [SISocket]=SImsocketPrep()
-global ExpStruct
+function SISocket = SImsocketPrep()
+%SImsocketPrep Connect to the ScanImage PC via msocket and perform A/B handshake.
+%   SISocket = SImsocketPrep()
+%   Returns the open socket handle. Caller is responsible for storing it.
+%   Example:
+%     SISocket = SImsocketPrep();
+%     SIEngaged = 1;
 
-%run this first
 addpath(genpath('C:\Users\adesniklab\Documents\MATLAB\msocket\'));
 
-%initialize socket connection with the si computer
 disp('establishing socket connection to SI computer');
 
 srvsock = mslisten(3043);
-SISocket = msaccept(srvsock,42);
+SISocket = msaccept(srvsock, 42);
 msclose(srvsock);
 
-sendVar = 'A';
-mssend(SISocket,sendVar);
-invar=[];
-while ~strcmp(invar,'B');
-    invar=msrecv(SISocket,.5);
+mssend(SISocket, 'A');
+invar = [];
+while ~strcmp(invar, 'B')
+    invar = msrecv(SISocket, .5);
 end
 disp('input from SI computer validated');
-ExpStruct.SIMsocketEstablished = 1;
-ExpStruct.SISocket = SISocket;

@@ -290,10 +290,46 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
         end
 
         function start(obj)
-            %start Queue AO data and start background output.
+            %start Build combined AO+DO output matrix and start background session.
+            %   Synthesizes DO pulse waveforms from stored digitalPulses_ specs
+            %   and assembles all output columns in outputOrder_ order, as
+            %   required by daq.createSession (legacy) mixed AO+DO sessions.
             obj.requireInitialized('start');
-            if ~isempty(obj.aoData_)
-                obj.session_.queueOutputData(obj.aoData_);  %LEGACY_API
+            nOut = numel(obj.outputOrder_);
+            if nOut > 0
+                if isempty(obj.aoData_)
+                    error('tfp:hardware:NI6323_DAQ:noOutputData', ...
+                        'queueAnalogOutput() must be called before start().');
+                end
+                nSamp   = size(obj.aoData_, 1);
+                outData = zeros(nSamp, nOut);
+
+                % Fill AO columns in outputOrder_ order.
+                aoCol = 0;
+                for i = 1:nOut
+                    if strcmp(obj.outputOrder_(i).kind, 'ao')
+                        aoCol = aoCol + 1;
+                        if aoCol <= size(obj.aoData_, 2)
+                            outData(:, i) = obj.aoData_(:, aoCol);
+                        end
+                    end
+                end
+
+                % Synthesize DO pulse waveforms from queued specs.
+                for p = 1:numel(obj.digitalPulses_)
+                    spec = obj.digitalPulses_(p);
+                    for j = 1:numel(spec.lineNames)
+                        slot    = obj.outputSlotForDOLine_(spec.lineNames{j});
+                        onSamp  = max(1, round(spec.times(j) * obj.sampleRate) + 1);
+                        offSamp = min(nSamp, ...
+                            onSamp + round(spec.durations(j) * obj.sampleRate) - 1);
+                        if onSamp <= offSamp
+                            outData(onSamp:offSamp, slot) = 1;
+                        end
+                    end
+                end
+
+                obj.session_.queueOutputData(outData);  %LEGACY_API
             end
             obj.session_.startBackground();  %LEGACY_API
             obj.isRunning = true;
@@ -683,10 +719,10 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
                         delete(obj.aiListener_);
                         obj.aiListener_ = [];
                     end
-                    if ~isempty(obj.configuredAoChannels_)
+                    if ~isempty(obj.outputOrder_)
                         try
                             obj.session_.outputSingleScan( ...
-                                zeros(1, numel(obj.configuredAoChannels_)));  %LEGACY_API
+                                zeros(1, numel(obj.outputOrder_)));  %LEGACY_API
                         catch
                         end
                     end
