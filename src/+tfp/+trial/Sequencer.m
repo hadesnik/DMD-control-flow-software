@@ -166,6 +166,11 @@ classdef Sequencer < handle
                 obj.siBridge.armForExternalTrigger(round(trial.duration_s * 30));
                 obj.siBridge.setActivePattern(patternMask, trial.preStim_s, ...
                     trial.pulseTrain.pulseWidth_s);
+                if obj.siBridge.supportsStreaming()
+                    % Reset the per-trial F accumulator + frame anchor (after
+                    % armForExternalTrigger, so nFrames_ is set; before frames arrive).
+                    obj.siBridge.clearLiveTraces();
+                end
             else
                 tfp.io.sessionLog(obj.log, 'siBridge-skipped', ...
                     struct('trialIdx', trial.trialIdx, ...
@@ -198,6 +203,7 @@ classdef Sequencer < handle
             frameTimestamps = [];
             imaging         = [];
             imagingTiffPath = '';
+            liveF           = [];
             if ~isempty(obj.siBridge)
                 obj.siBridge.waitForCompletion(trial.duration_s * 2);
                 [framesPath, frameTimestamps] = obj.siBridge.getLastAcquisition();
@@ -207,6 +213,11 @@ classdef Sequencer < handle
                     % Real bridge: ScanImage writes TIFFs on the imaging PC.
                     % Store the path; don't copy the matrix into the trial .mat.
                     imagingTiffPath = framesPath;
+                end
+                if obj.siBridge.supportsStreaming()
+                    % Per-frame ROI fluorescence streamed over port 3044 this trial
+                    % (nCells × nFrames; NaN columns = frames not received).
+                    liveF = obj.siBridge.getLiveTraces();
                 end
             end
 
@@ -221,6 +232,7 @@ classdef Sequencer < handle
                 'frameTimestamps',    frameTimestamps, ...
                 'imaging',            imaging, ...
                 'imagingTiffPath',    imagingTiffPath, ...
+                'liveF',              liveF, ...
                 'dmdLog',             obj.dmd.getLog(), ...
                 'daqLog',             obj.daq.getLog(), ...
                 'plmLog',             plmLog, ...

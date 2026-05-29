@@ -103,6 +103,7 @@ classdef ScanImageBridge < handle
         liveF_           % nCells × maxFrames double accumulator (NaN = not yet received)
         liveFTimes_      % 1 × maxFrames double epoch-s (NaN = not yet received)
         streamSocket_    % msocket handle for F streaming (port 3044; separate from siSocket_)
+        firstFrameNum_   % absolute frame number of this trial's first streamed frame (relative-index anchor)
     end
 
     methods
@@ -139,6 +140,7 @@ classdef ScanImageBridge < handle
             obj.liveF_          = [];
             obj.liveFTimes_     = [];
             obj.streamSocket_   = [];
+            obj.firstFrameNum_  = [];
 
             if strcmp(obj.mode_, 'tcp')
                 obj.tcpConnect();
@@ -290,8 +292,9 @@ classdef ScanImageBridge < handle
             if ~obj.streamLiveF_
                 return;
             end
-            obj.liveF_      = NaN(obj.nCellsExpected_, obj.nFrames_);
-            obj.liveFTimes_ = NaN(1, obj.nFrames_);
+            obj.liveF_         = NaN(obj.nCellsExpected_, obj.nFrames_);
+            obj.liveFTimes_    = NaN(1, obj.nFrames_);
+            obj.firstFrameNum_ = [];   % re-anchor relative frame indexing for this trial
             obj.logEvent('clearLiveTraces', ...
                 struct('nCells', obj.nCellsExpected_, 'nFrames', obj.nFrames_));
         end
@@ -533,22 +536,35 @@ classdef ScanImageBridge < handle
 
         function receiveLiveFrame(obj, data)
             %receiveLiveFrame Accumulate one frame of ROI fluorescence from ScanImage.
-            %   data.frame: 1-based frame index within current trial
-            %   data.F:     nCells × 1 fluorescence values (ROI integration output)
+            %   data.frame:          ScanImage ABSOLUTE acquisition frame number
+            %                        (frameNumberAcqMode), NOT a per-trial index.
+            %   data.F:              nCells × 1 fluorescence values (ROI integration)
+            %   data.frameTimestamp: (optional) ScanImage frame timestamp, seconds
             if ~isfield(data, 'frame') || ~isfield(data, 'F') || isempty(obj.liveF_)
                 return;
             end
-            idx = data.frame;
+            % Anchor on the first frame received this trial, then convert the
+            % absolute frame number to a 1-based column. clearLiveTraces resets
+            % the anchor (and the buffer) at the start of each trial, so indices
+            % restart at 1 every trial regardless of the running ScanImage count.
+            if isempty(obj.firstFrameNum_)
+                obj.firstFrameNum_ = data.frame;
+            end
+            idx = data.frame - obj.firstFrameNum_ + 1;
             if idx < 1 || idx > size(obj.liveF_, 2)
-                return;
+                return;  % outside this trial's frame window — drop
             end
             nCells = numel(data.F);
             if nCells ~= size(obj.liveF_, 1)
                 % Cell count differs from expectation — resize on first real frame.
                 obj.liveF_ = NaN(nCells, size(obj.liveF_, 2));
             end
-            obj.liveF_(:, idx)   = data.F(:);
-            obj.liveFTimes_(idx) = posixtime(datetime('now'));
+            obj.liveF_(:, idx) = data.F(:);
+            if isfield(data, 'frameTimestamp') && ~isempty(data.frameTimestamp)
+                obj.liveFTimes_(idx) = data.frameTimestamp;   % ScanImage frame time (s)
+            else
+                obj.liveFTimes_(idx) = posixtime(datetime('now'));
+            end
         end
 
         function pollLiveFrames(obj, timeoutS)
