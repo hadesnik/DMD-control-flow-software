@@ -75,6 +75,10 @@ try
     % round-trip structs reliably on this path (a struct payload arrived as a
     % plain double on the scope PC). receiveROIsFromScanImage accepts the matrix.
     mssend(sock, centroids);
+    % Wait for the scope PC to acknowledge receipt BEFORE closing. Closing
+    % immediately after mssend races the receiver — msocket drops un-read data
+    % on an early client close, so the scope would see an empty payload.
+    ack = msrecv(sock, 10);   %#ok<NASGU>
     msclose(sock);
 catch ME
     error('si_send_rois:sendFailed', ...
