@@ -71,7 +71,10 @@ fprintf('(Scope PC must already be running run_ensemble_activation)\n');
 
 try
     sock = msconnect(SCOPE_PC_IP, ROI_PORT);
-    mssend(sock, struct('centroids', centroids));
+    % Send a bare Nx2 double, NOT a struct: this msocket build does not
+    % round-trip structs reliably on this path (a struct payload arrived as a
+    % plain double on the scope PC). receiveROIsFromScanImage accepts the matrix.
+    mssend(sock, centroids);
     msclose(sock);
 catch ME
     error('si_send_rois:sendFailed', ...

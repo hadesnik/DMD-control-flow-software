@@ -5,7 +5,8 @@ function centroids = receiveROIsFromScanImage(options)
 %   centroids = receiveROIsFromScanImage(options)
 %
 %   Acts as an msocket server on the scope (DAQ) PC. The imaging PC connects
-%   and sends a struct with field .centroids (Nx2 double, scan-field coords).
+%   and sends an Nx2 double of [x y] centroids in scan-field coords (a struct
+%   with a .centroids field is also accepted for backward compatibility).
 %   Port 3045 is used (separate from stim metadata on 3043 and F-stream on 3044).
 %
 %   Inputs (all optional via options struct):
@@ -71,12 +72,17 @@ catch ME
         'msrecv failed: %s', ME.message);
 end
 
-if ~isstruct(data) || ~isfield(data, 'centroids')
+% Payload is a bare Nx2 double (si_send_rois sends the matrix directly —
+% structs do not round-trip reliably on this msocket build). Still accept a
+% struct with a .centroids field for backward compatibility.
+if isnumeric(data)
+    centroids = double(data);
+elseif isstruct(data) && isfield(data, 'centroids')
+    centroids = double(data.centroids);
+else
     error('tfp:io:receiveROIsFromScanImage:badPayload', ...
-        'Expected struct with .centroids field; received %s.', class(data));
+        'Expected an Nx2 double (or struct with .centroids); received %s.', class(data));
 end
-
-centroids = double(data.centroids);
 if ~isnumeric(centroids) || ndims(centroids) ~= 2 || size(centroids, 2) ~= 2
     error('tfp:io:receiveROIsFromScanImage:badCentroids', ...
         '.centroids must be Nx2 numeric; got size [%s].', num2str(size(centroids)));
