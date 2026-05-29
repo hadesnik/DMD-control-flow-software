@@ -22,7 +22,7 @@ daq.configureDigitalOutput(config.daq.digitalOutChannels);
 target   = [500, 400];
 powersMw = [1, 2, 4];
 nReps    = 2;
-radiusPx = 5;
+radiusPx = 15;
 
 sequence = tfp.trial.TrialSequence.generatePowerCurve(target, powersMw, nReps);
 

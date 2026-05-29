@@ -25,7 +25,7 @@ calibration = loadCalibrationOrIdentity(config);
 targets     = resolveTargets(config, calibration);
 isi_s    = 0.1;
 nReps    = 2;
-radiusPx = 5;
+radiusPx = 15;
 
 sequence = tfp.trial.TrialSequence.generateRapidSequential(targets, isi_s, nReps);
 

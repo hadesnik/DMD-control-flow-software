@@ -43,7 +43,7 @@ targets  = resolveTargets(config, calibration);
 dzUm     = [0, 5, 10, 20, 30, 50, -5, -10, -20, -30, -50];
 nReps    = 2;
 powerMw  = 5;
-radiusPx = 5;
+radiusPx = 15;
 if isfield(config, 'axialPpsf')
     ap = config.axialPpsf;
     if isfield(ap, 'dzUm'),    dzUm    = ap.dzUm;    end

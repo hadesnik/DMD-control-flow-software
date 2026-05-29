@@ -44,7 +44,7 @@ end
 offsetsUm = tfp.trial.TrialSequence.gaussianGrid2D(g.maxUm, g.nPointsPerHalfAxis, g.sigmaPsfUm);
 nReps     = g.nReps;
 powerMw   = 5;
-radiusPx  = 5;
+radiusPx  = 15;
 
 sequence = tfp.trial.TrialSequence.generatePPSF( ...
     targets, offsetsUm, nReps, powerMw);
