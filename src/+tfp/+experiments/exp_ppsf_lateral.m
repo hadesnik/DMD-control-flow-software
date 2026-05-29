@@ -133,12 +133,16 @@ if isfield(config, 'calibration_file') && ~isempty(char(config.calibration_file)
     error('tfp:experiments:exp_ppsf_lateral:notImplemented', ...
         'calibration_file loading is Phase 3.');
 end
+umPerPx = 1;
+if isfield(config, 'dmd') && isfield(config.dmd, 'umPerPixel')
+    umPerPx = double(config.dmd.umPerPixel);
+end
 calibration.dmdToSample_affine = eye(3);
 calibration.dmdToScan_affine   = eye(3);
-calibration.pixelsPerUm        = 1;
-calibration.umPerPixel         = 1;
+calibration.pixelsPerUm        = 1 / umPerPx;
+calibration.umPerPixel         = umPerPx;
 calibration.timestamp          = datetime('now');
-calibration.notes              = 'identity fallback (mock)';
+calibration.notes              = sprintf('pixel-scale only: %.4f um/px (no spatial calibration)', umPerPx);
 end
 
 function targets = resolveTargets(config, calibration)
