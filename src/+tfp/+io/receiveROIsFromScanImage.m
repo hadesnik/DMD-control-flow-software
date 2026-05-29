@@ -72,6 +72,11 @@ try
         data = msrecv(sock, 0.2);     % [] on timeout; never blocks forever
         if ~isempty(data), break; end
     end
+    % Acknowledge receipt so the imaging PC can close without racing us
+    % (an early client close drops un-read data on this msocket build).
+    if ~isempty(data)
+        try, mssend(sock, 'ROIS_RECEIVED'); catch, end %#ok<TRYNC>
+    end
     msclose(sock);
 catch ME
     try, msclose(sock); catch, end %#ok<TRYNC>
