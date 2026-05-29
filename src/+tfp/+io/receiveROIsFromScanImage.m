@@ -12,7 +12,7 @@ function centroids = receiveROIsFromScanImage(options)
 %   Inputs (all optional via options struct):
 %     .port          - msocket listening port           (default 3045)
 %     .msocketPath   - path to msocket\ directory on this PC (default '')
-%     .timeoutS      - seconds to wait for connection   (default 60)
+%     .timeoutS      - seconds to wait for connection   (default 30)
 %
 %   Output:
 %     centroids      - Nx2 double, [x y] scan-field coordinates per ROI,
@@ -39,7 +39,7 @@ end
 
 port        = configField(options, 'port',        3045);
 msocketPath = configField(options, 'msocketPath', '');
-timeoutS    = configField(options, 'timeoutS',    60);
+timeoutS    = configField(options, 'timeoutS',    30);
 
 if ~isempty(msocketPath) && isfolder(msocketPath)
     addpath(msocketPath);
@@ -63,13 +63,26 @@ catch ME
         'msocket listen/accept on port %d failed: %s', port, ME.message);
 end
 
+% Poll with a timeout instead of a bare blocking msrecv, so a stale/closed
+% connection or a sender that never sends can't hang MATLAB indefinitely.
+data  = [];
+tPoll = tic;
 try
-    data = msrecv(sock);
+    while toc(tPoll) < timeoutS
+        data = msrecv(sock, 0.2);     % [] on timeout; never blocks forever
+        if ~isempty(data), break; end
+    end
     msclose(sock);
 catch ME
     try, msclose(sock); catch, end %#ok<TRYNC>
     error('tfp:io:receiveROIsFromScanImage:recvFailed', ...
         'msrecv failed: %s', ME.message);
+end
+if isempty(data)
+    error('tfp:io:receiveROIsFromScanImage:noData', ...
+        ['Imaging PC connected but sent no ROI data within %.0f s.\n' ...
+         'Re-run si_send_rois on the imaging PC (and check it prints a non-empty centroid table).'], ...
+        timeoutS);
 end
 
 % Payload is a bare Nx2 double (si_send_rois sends the matrix directly —
