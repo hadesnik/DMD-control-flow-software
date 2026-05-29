@@ -32,7 +32,7 @@ targets     = resolveTargets(config, calibration);
 distancesUm = [0, 3, 6, 9, 12, 15, 20, 30, 40];
 nReps       = 2;
 powerMw     = 5;
-radiusPx    = 15;
+radiusPx    = 50;   % TEMP: large for visual bringup — change back to 15 before real experiments
 
 sequence = tfp.trial.TrialSequence.generatePPSF( ...
     targets, distancesUm, nReps, powerMw);
@@ -155,7 +155,7 @@ if strcmpi(char(config.hardwareKind), 'mock')
     return
 end
 if isfield(config, 'testTargets') && ~isempty(config.testTargets)
-    targets = double(config.testTargets);
+    targets = reshape(double(config.testTargets(:)), 2, [])';
     return
 end
 roiOpts = struct();

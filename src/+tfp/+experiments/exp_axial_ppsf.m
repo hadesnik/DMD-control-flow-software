@@ -197,7 +197,7 @@ if strcmpi(char(config.hardwareKind), 'mock')
     return
 end
 if isfield(config, 'testTargets') && ~isempty(config.testTargets)
-    targets = double(config.testTargets);
+    targets = reshape(double(config.testTargets(:)), 2, [])';
     return
 end
 roiOpts = struct();

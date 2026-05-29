@@ -68,10 +68,8 @@ laser:
 # No fake cells for real hardware.
 fakeCells: []
 
-# testTargets: DMD pixel [col, row] coordinates used by exp_rapid_sequential
-# when ScanImage is not connected. Remove or clear once the ScanImage link is live.
+# testTargets: DMD [col, row] pairs for bringup testing (no ScanImage needed).
+# Flat list [c1,r1, c2,r2, ...] — same format as analogInChannels.
 # Three spots in the central 6x6 mm active region (center ~[512,384] on 1024x768).
-testTargets:
-  - [512, 384]
-  - [450, 330]
-  - [570, 440]
+# Remove or clear once the ScanImage link is live.
+testTargets: [512, 384, 450, 330, 570, 440]

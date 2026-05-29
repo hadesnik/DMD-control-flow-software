@@ -126,7 +126,7 @@ end
 % testTargets bypasses ScanImage for hardware bringup without a live imaging PC.
 % Values are DMD pixel coordinates [col, row]; calibration conversion is skipped.
 if isfield(config, 'testTargets') && ~isempty(config.testTargets)
-    targets = double(config.testTargets);
+    targets = reshape(double(config.testTargets(:)), 2, [])';
     return
 end
 roiOpts = struct();
