@@ -27,6 +27,14 @@ cfg        = imaging_pc_config();
 scopePcIp  = cfg.scopePcIp;
 streamPort = cfg.streamPort;
 
+% Registering a user function requires ScanImage to be idle. Fail fast (before
+% opening the socket) so the order is always: SIStreamSetup, THEN start Focus.
+if isprop(hSI, 'acqState') && ~strcmpi(hSI.acqState, 'idle')
+    error('SIStreamSetup:acquiring', ...
+        ['ScanImage is acquiring (%s). Registering the frame callback requires idle.\n' ...
+         'Stop Focus/Grab, run SIStreamSetup, THEN start Focus.'], hSI.acqState);
+end
+
 disp('Connecting to scope PC for F streaming...');
 disp('Make sure scope PC experiment has started (armStreaming opens port 3044).');
 

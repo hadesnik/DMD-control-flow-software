@@ -21,6 +21,15 @@ end
 % Remove (not just disable) ALL matching entries — re-running SIStreamSetup
 % could have stacked duplicates, and `cfg(idx).Enable = false` fails when idx
 % selects more than one element.
+%
+% ScanImage forbids touching userFunctionsCfg during an active acquisition,
+% so bail out with a clear instruction if a Focus/Grab is still running.
+if isprop(hSI, 'acqState') && ~strcmpi(hSI.acqState, 'idle')
+    fprintf(['ScanImage is acquiring (%s) — cannot modify user functions now.\n' ...
+             'Stop Focus/Grab, then re-run SIStreamTeardown to remove the callback.\n'], ...
+             hSI.acqState);
+    return;
+end
 try
     cfg = hSI.hUserFunctions.userFunctionsCfg;
     if ~isempty(cfg)

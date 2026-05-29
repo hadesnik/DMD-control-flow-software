@@ -43,11 +43,16 @@ Anything you omit keeps the rig default in `imaging_pc_config.m`.
 
 ### End of session (imaging PC)
 
+**Stop the Focus/Grab first** — ScanImage won't let user functions be modified
+during an active acquisition. Then:
+
 ```matlab
 SIStreamTeardown
 ```
 
-This closes the socket and disables the frame callback cleanly.
+This closes the socket and removes the frame callback cleanly. (Likewise, run
+`SIStreamSetup` while idle, *then* start Focus — both scripts now error early
+with a clear message if ScanImage is acquiring.)
 
 ## Files
 
