@@ -124,14 +124,16 @@ switch lower(char(config.hardwareKind))
         dmd = tfp.hardware.MockDMD();
         daq = tfp.hardware.MockDAQ();
     case 'real'
-        error('tfp:experiments:exp_ppsf_2d:notImplemented', ...
-            'real hardware is Phase 2+.');
+        dmd = tfp.hardware.DLP650LNIR_DMD(config.dmd);
+        daq = tfp.hardware.NI6323_DAQ(config.daq);
     otherwise
         error('tfp:experiments:exp_ppsf_2d:badKind', ...
             'unknown hardwareKind: %s.', config.hardwareKind);
 end
-dmd.initialize(config.dmd);
-daq.initialize(config.daq);
+if strcmp(lower(char(config.hardwareKind)), 'mock')
+    dmd.initialize(config.dmd);
+    daq.initialize(config.daq);
+end
 end
 
 function teardownHardware(dmd, daq)
@@ -159,6 +161,10 @@ if strcmpi(char(config.hardwareKind), 'mock')
     else
         targets = [400, 400; 500, 400; 600, 400];
     end
+    return
+end
+if isfield(config, 'testTargets') && ~isempty(config.testTargets)
+    targets = double(config.testTargets);
     return
 end
 roiOpts = struct();
