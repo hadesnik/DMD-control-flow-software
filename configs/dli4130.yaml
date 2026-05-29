@@ -9,28 +9,37 @@ dmd:
   alpVersion: '4.1'
   dmdType: 'DLP7000'
   dllPath: 'C:\Program Files\ALP-4.1\ALP-4.1 high-speed API\x64\alpD41.dll'
-  # alpV42x64proto.m is used for ALP-4.1 because function signatures are
-  # identical to ALP-4.2 x64 (verified in docs/alp-api-audit.md).
-  # No ALP-4.1-specific proto file ships with the SDK.
-  protoFile: 'vendor\alp\reference\parot-alptool\alpV42x64proto.m'
+  # Header-based loading is required — the pre-compiled thunk does not correctly
+  # marshal the void* data buffer in AlpSeqPut. MinGW must be installed.
+  # Path is relative to the MATLAB working directory (repo root).
+  headerPath: 'vendor\alp\official-4.1\alp.h'
   nRows: 768
   nCols: 1024
   maxPatternRate: 22727
+  # Pixel scale: 13.68 µm pitch / ~40x optical demag → 0.342 µm/px.
+  # Central 6×6 mm active region: 6 mm / 13.68 µm/px = 439 px → roiHalfWidthPx = 219.
+  # Both values need re-verification once the optical path is measured on the rig.
+  umPerPixel: 0.342
+  roiHalfWidthPx: 219
   activationKey: '223000-000442-987359'
   deviceSerial: '00D256FC'
   loadLatencyMsPerPattern: 10
   debugFigure: false
 
 # DAQ configuration. Consumed by tfp.hardware.NI6323_DAQ.initialize.
+# Confirmed wiring (2026-05-29):
+#   ai0: floating  ai1: floating  ai2: Multiclamp 700B output  ai3: floating
+#   ao0: Multiclamp 700B command  ao1: PsychToolbox digitizer (other PC, unused here)
+#   ao3: NKT FS-50 power modulator (photostim laser power control)
+#   port0/line0: TBD — ScanImage acquisition trigger (confirm with Masato)
+#   port0/line1: spare  port0/line10: spare
 daq:
   deviceName: 'Dev1'
   sampleRate: 10000
   analogInChannels: [0, 1, 2, 3]
-  analogOutChannels: [0, 1]
-  digitalOutChannels:
-    - 'port0/line0'    # DMD pattern-advance trigger
-    - 'port0/line1'    # Pockels cell gate
-    - 'port0/line10'   # ScanImage acquisition trigger
+  aiRangeV: [-5, 5]
+  analogOutChannels: [0, 1, 3]
+  digitalOutChannels: [port0/line0, port0/line1, port0/line10]
 
 # Imaging parameters. Consumed by ScanImageBridge (Phase 2+).
 imaging:
@@ -40,9 +49,15 @@ imaging:
   simulateLatency: false
 
 # Filesystem paths for session data and calibration.
-session:
+paths:
   dataDir: 'C:\data'
   calibration_file: ''
+
+# Laser modulation — NKT FS-50 analog control on ao3.
+laser:
+  fs50_ao_channel: 'ao3'
+  modulation_voltage_max: 5.0
+  modulation_voltage_min: 0.0
 
 # No fake cells for real hardware.
 fakeCells: []

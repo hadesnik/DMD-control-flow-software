@@ -82,13 +82,15 @@ switch lower(char(config.hardwareKind))
         dmd = tfp.hardware.MockDMD();
         daq = tfp.hardware.MockDAQ();
     case 'real'
-        error('tfp:experiments:exp_rapid_sequential:notImplemented', ...
-            'real hardware is Phase 2+.');
+        dmd = tfp.hardware.DLP650LNIR_DMD(config.dmd);
+        daq = tfp.hardware.MockDAQ();   % DAQ: real NI6323 wired in Phase 2
     otherwise
         error('tfp:experiments:exp_rapid_sequential:badKind', ...
             'unknown hardwareKind: %s.', config.hardwareKind);
 end
-dmd.initialize(config.dmd);
+if ~strcmp(config.hardwareKind, 'real')
+    dmd.initialize(config.dmd);
+end
 daq.initialize(config.daq);
 end
 

@@ -50,8 +50,25 @@ The NIR DMD (TI DLP650LNIR) is not in hand yet; arrival expected second week of 
 
 **Trigger topology**:
 - DAQ PC is the timing master.
-- DAQ generates: (a) TTL to start ScanImage acquisition on imaging PC, (b) DMD pattern-advance triggers, (c) PLM phase-state triggers (when functional), (d) analog control of Pockels cell / shutter / variable attenuator, (e) sync line(s) recorded back into the ephys channels.
+- DAQ generates: (a) TTL to start ScanImage acquisition on imaging PC, (b) DMD pattern-advance triggers, (c) PLM phase-state triggers (when functional), (d) analog power control of NKT FS-50 via ao3, (e) sync line(s) recorded back into the ephys channels.
 - ScanImage frame clock is fed back to the DAQ PC as a digital input for post-hoc frame-stim alignment.
+
+**Confirmed NI PCIe-6323 wiring (as of 2026-05-29, DLi4130 rig)**:
+
+| Line | Direction | Connected to | Notes |
+|------|-----------|--------------|-------|
+| ai0 | in | — | floating |
+| ai1 | in | — | floating |
+| ai2 | in | Multiclamp 700B output | primary ephys recording channel |
+| ai3 | in | — | floating |
+| ao0 | out | Multiclamp 700B command | current/voltage clamp command |
+| ao1 | out | PsychToolbox digitizer (other PC) | unused by this software |
+| ao2 | out | unknown | TBD |
+| ao3 | out | NKT FS-50 power modulator | **photostim laser power control** — 0–5 V |
+| port0/line0 | out | TBD | intended ScanImage acquisition trigger — confirm with Masato |
+| port0/line1 | out | — | spare |
+| port0/line10 | out | — | spare |
+| port0/line2 | in | ScanImage frame clock | rising edge = frame acquired (Phase 2+) |
 
 ## Software architecture
 
@@ -204,6 +221,8 @@ Both new fields (`scanToCam_affine`, `dmdToScan_affine`) are appended to the cal
 - **Data**: trial-level data saved as `.mat` (v7.3) with a consistent schema. Session metadata as YAML alongside.
 - **Time**: all timestamps in seconds, double precision, referenced to DAQ master clock. Convert at the boundary, not in the middle.
 - **Coordinates**: DMD pixels are integer (col, row) with origin top-left. Sample coordinates are µm (x, y, z) with z=0 at the focal plane during calibration. All transforms live in `+calibration/`.
+- **Active DMD region**: Only the **central 6×6 mm** of the DMD chip is optically active (flat-top beam footprint). Pattern generation should constrain spot placement to this region. For the DLP7000 (13.68 µm pitch): `roiHalfWidthPx = 219` (439 px). For the DLP650LNIR (10.8 µm pitch): `roiHalfWidthPx = 278` (556 px). Both stored in config under `dmd.roiHalfWidthPx`.
+- **Pixel scale**: ~40× optical demagnification gives ~0.342 µm/px (DLP7000) and ~0.270 µm/px (DLP650LNIR) at the sample plane. A 10 µm cell body (5 µm radius) → 15 px radius on DLP7000, 19 px on DLP650LNIR. Stored in config as `dmd.umPerPixel`. **Verify both values on the rig before using for calibrated coordinates.**
 
 ## Conventions established in implementation
 
