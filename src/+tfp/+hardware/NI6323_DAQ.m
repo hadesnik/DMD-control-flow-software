@@ -331,6 +331,15 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
 
                 obj.session_.queueOutputData(outData);  %LEGACY_API
             end
+            % NI legacy session requires a DataAvailable listener before
+            % startBackground() when the session has input channels.
+            if ~isempty(obj.configuredAiChannels_)
+                nAiChans = numel(obj.configuredAiChannels_);
+                obj.aiBuf_ = zeros(0, nAiChans);
+                obj.diBuf_ = zeros(0, numel(obj.configuredDiLines_));
+                obj.aiListener_ = obj.session_.addlistener( ...  %LEGACY_API
+                    'DataAvailable', @(src, evt) obj.onDataAvailable(evt, nAiChans));
+            end
             obj.session_.startBackground();  %LEGACY_API
             obj.isRunning = true;
             obj.logEvent('start', []);
@@ -380,18 +389,14 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
                 raw  = obj.session_.inputSingleScan();  %LEGACY_API
                 data = reshape(raw(1:nChans), 1, nChans);
             elseif obj.isRunning
-                % Background AO is active — collect AI (and DI if configured) via listener.
+                % Listener was registered in start() — reset buffer and wait.
                 obj.aiBuf_ = zeros(0, nChans);
                 obj.diBuf_ = zeros(0, numel(obj.configuredDiLines_));
-                obj.aiListener_ = obj.session_.addlistener( ...  %LEGACY_API
-                    'DataAvailable', @(src, evt) obj.onDataAvailable(evt, nChans));
                 timeout = nSamples / obj.sampleRate * 3;  % 3× headroom
                 t0      = tic;
                 while size(obj.aiBuf_, 1) < nSamples && toc(t0) < timeout
                     pause(0.001);
                 end
-                delete(obj.aiListener_);
-                obj.aiListener_ = [];
                 if size(obj.aiBuf_, 1) < nSamples
                     error('tfp:hardware:NI6323_DAQ:readTimeout', ...
                         'readAnalogInput timed out after %.1f s (got %d/%d samples).', ...
