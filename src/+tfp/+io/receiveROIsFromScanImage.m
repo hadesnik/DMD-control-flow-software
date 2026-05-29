@@ -47,21 +47,26 @@ end
 fprintf('[receiveROIsFromScanImage] Listening on port %d (timeout %.0f s)...\n', ...
     port, timeoutS);
 fprintf('  On the ScanImage PC:\n');
-fprintf("    msconnect('<daqPcIp>', %d);\n", port);
-fprintf("    mssend(struct('centroids', roi_Nx2));\n");
-fprintf('    msdisconnect();\n\n');
+fprintf('  On the ScanImage PC, run si_send_rois (it does msconnect/mssend/msclose).\n\n');
 
+% Lab msocket uses explicit handles: srvsock = mslisten(port);
+% sock = msaccept(srvsock, timeout); data = msrecv(sock). (Confirmed against
+% SImsocketPrep.m and the verified 3044 dry-run — there is no implicit-handle
+% form, and msdisconnect does not exist in this msocket build.)
 try
-    mslisten(port);
-    sock = msaccept(timeoutS);  %#ok<NASGU>  — handle used implicitly by msrecv
+    srvsock = mslisten(port);
+    sock    = msaccept(srvsock, timeoutS);
+    msclose(srvsock);
 catch ME
     error('tfp:io:receiveROIsFromScanImage:listenFailed', ...
         'msocket listen/accept on port %d failed: %s', port, ME.message);
 end
 
 try
-    data = msrecv();
+    data = msrecv(sock);
+    msclose(sock);
 catch ME
+    try, msclose(sock); catch, end %#ok<TRYNC>
     error('tfp:io:receiveROIsFromScanImage:recvFailed', ...
         'msrecv failed: %s', ME.message);
 end
