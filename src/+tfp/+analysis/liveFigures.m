@@ -14,7 +14,7 @@ function liveFigures(seqState)
 %     .sessionStartTime     datetime when run() started
 %     .lastTrialDuration_s  measured wall-clock seconds for last trial
 %
-%   Figure layout — 2 rows × 3 columns:
+%   Figure layout  - 2 rows × 3 columns:
 %     Row 1: DMD pattern preview | Power timeline   | Acquisition status
 %     Row 2: ΔF/F traces        | PPSF curve       | Response map
 
@@ -52,12 +52,12 @@ if isempty(hFig) || ~ishghandle(hFig) || isempty(hAxes) || ~all(ishghandle(hAxes
 end
 set(0, 'CurrentFigure', hFig);
 
-% Row 1 — hardware status
+% Row 1  - hardware status
 renderDmdPattern(hAxes(1), seqState);
 renderPowerTimeline(hAxes(2), seqState);
 renderAcquisitionStatus(hAxes(3), seqState);
 
-% Row 2 — neural data
+% Row 2  - neural data
 renderDffTraces(hAxes(4), seqState, BASELINE, RESP_THRESH);
 renderPpsfCurve(hAxes(5), seqState, BASELINE);
 renderResponseMap(hAxes(6), seqState, BASELINE);
@@ -66,7 +66,7 @@ drawnow();
 end
 
 % =========================================================================
-% Panel renderers — one function per subplot
+% Panel renderers  - one function per subplot
 % =========================================================================
 
 function renderDmdPattern(ax, seqState)
@@ -116,7 +116,7 @@ dist = '';
 if isstruct(trial.metadata) && isfield(trial.metadata, 'distanceUm')
     dist = sprintf(', %.1f um', trial.metadata.distanceUm);
 end
-title(ax, sprintf('DMD — trial %d/%d%s%s', ...
+title(ax, sprintf('DMD  - trial %d/%d%s%s', ...
     seqState.trialIdx, seqState.nTrials, coords, dist), ...
     'Interpreter', 'none');
 end
@@ -223,12 +223,12 @@ function renderDffTraces(ax, seqState, BASELINE, RESP_THRESH)
 %renderDffTraces Panel 4: waterfall dF/F traces from the last trial.
 cla(ax);
 if isempty(seqState.lastTrial)
-    showPlaceholder(ax, 'No trial yet', 'Last trial — cell responses');
+    showPlaceholder(ax, 'No trial yet', 'Last trial  - cell responses');
     return;
 end
 imaging = extractImaging(seqState.lastTrial);
 if isempty(imaging)
-    showPlaceholder(ax, 'No imaging data', 'Last trial — no imaging');
+    showPlaceholder(ax, 'No imaging data', 'Last trial  - no imaging');
     return;
 end
 
@@ -265,7 +265,7 @@ hold(ax, 'off');
 
 xlabel(ax, 'Time (s)');
 ylabel(ax, '\DeltaF/F (offset)');
-title(ax, sprintf('Last trial — %d cell(s)', nCells));
+title(ax, sprintf('Last trial  - %d cell(s)', nCells));
 end
 
 % -------------------------------------------------------------------------
@@ -297,7 +297,7 @@ if numel(distUm) >= 5
         plot(ax, xFine, gFit(xFine), 'r-', 'LineWidth', 1.5);
         legend(ax, 'Mean ± SEM', 'Gaussian fit', 'Location', 'best');
     catch
-        % Curve Fitting Toolbox unavailable or fit failed — skip overlay.
+        % Curve Fitting Toolbox unavailable or fit failed  - skip overlay.
     end
 end
 hold(ax, 'off');
@@ -305,7 +305,7 @@ hold(ax, 'off');
 xlabel(ax, 'Distance (\mum)');
 ylabel(ax, 'Mean peak \DeltaF/F');
 nDone = sum(strcmp({seqState.allTrials.status}, 'complete'));
-title(ax, sprintf('PPSF curve — %d trials', nDone));
+title(ax, sprintf('PPSF curve  - %d trials', nDone));
 end
 
 % -------------------------------------------------------------------------
