@@ -28,14 +28,12 @@
 %   See also: https://docs.scanimage.org (ROI API section for your version)
 
 % =========================================================================
-% CONFIG — edit before running
+% CONFIG — edit imaging_pc_config.m / imaging_pc_config_local.m, not here
 % =========================================================================
 
-%FILL: path to msocket on this imaging PC
-addpath(genpath('C:\Users\adesniklab\Documents\MATLAB\msocket'));
-
-SCOPE_PC_IP = '128.32.177.203';  % IP of the DAQ / scope PC
-ROI_PORT    = 3045;               % must match receiveROIsFromScanImage default
+cfg         = imaging_pc_config();   % msocket path, scope-PC IP, ports
+SCOPE_PC_IP = cfg.scopePcIp;          % IP of the DAQ / scope PC
+ROI_PORT    = cfg.roiPort;            % must match receiveROIsFromScanImage default
 
 % =========================================================================
 % Extract ROI centroids from ScanImage ROI manager

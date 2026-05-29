@@ -21,11 +21,11 @@
 
 global SIStreamSocket %#ok<GVMIS>
 
-%FILL: set this to the msocket\ directory on this imaging PC
-addpath(genpath('C:\path\to\msocket'));
-
-scopePcIp  = '128.32.177.203';
-streamPort = 3044;
+% Machine-local settings (msocket path, scope-PC IP, ports).
+% Edit imaging_pc_config.m / imaging_pc_config_local.m, not this script.
+cfg        = imaging_pc_config();
+scopePcIp  = cfg.scopePcIp;
+streamPort = cfg.streamPort;
 
 disp('Connecting to scope PC for F streaming...');
 disp('Make sure scope PC experiment has started (armStreaming opens port 3044).');

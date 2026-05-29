@@ -12,3 +12,6 @@ slprj/
 
 # Session outputs
 data/
+
+# Per-machine imaging-PC overrides (template is .example; real file is local)
+scripts/imaging_pc_setup/imaging_pc_config_local.m
