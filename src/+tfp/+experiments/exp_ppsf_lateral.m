@@ -29,7 +29,7 @@ daq.configureDigitalOutput(config.daq.digitalOutChannels);
 calibration = loadCalibrationOrIdentity(config);
 
 targets     = resolveTargets(config, calibration);
-distancesUm = [0, 3, 6, 9, 12, 15, 20, 30, 40];
+distancesUm = [-40, -30, -20, -15, -12, -9, -6, -3, 0, 3, 6, 9, 12, 15, 20, 30, 40];
 nReps       = 2;
 powerMw     = 5;
 radiusPx    = 15;
@@ -44,13 +44,12 @@ if isfield(config, 'bringupMode') && config.bringupMode
     end
 end
 
-% Attach patternRef per trial: spot at center + (distance um -> px) along +x.
+% Attach patternRef per trial: spot at center + signed offset along +x.
 for k = 1:numel(sequence.trials)
     tr = sequence.trials(k);
     center     = tr.targetSpec.dmdCoords;
-    d          = tr.metadata.distanceUm;
-    offsetPx   = d * calibration.pixelsPerUm;
-    stimTarget = center + [offsetPx, 0];
+    offsetPx   = tr.metadata.offsetUm * calibration.pixelsPerUm;
+    stimTarget = center + offsetPx;
     tr.targetSpec.patternRef = tfp.patterns.singleSpot(dmd, stimTarget, radiusPx);
 end
 

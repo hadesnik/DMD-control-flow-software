@@ -45,7 +45,7 @@ daq:
   aiSingleEndedChannels: [3]
   analogOutChannels: [0, 3]
   digitalOutChannels: [port0/line10]
-  digitalInChannels: [port0/line1]
+  # digitalInChannels: [port0/line1]   # frame clock — not yet wired; add when needed
 
 # Imaging parameters. Consumed by ScanImageBridge (Phase 2+).
 imaging:
@@ -73,7 +73,15 @@ fakeCells: []
 bringupMode: true
 
 # testTargets: DMD [col, row] pairs for bringup testing (no ScanImage needed).
-# Flat list [c1,r1, c2,r2, ...] — same format as analogInChannels.
-# Three spots in the central 6x6 mm active region (center ~[512,384] on 1024x768).
-# Remove or clear once the ScanImage link is live.
-testTargets: [512, 384, 450, 330, 570, 440]
+# Single center target — used by ppsf_lateral (sweep offsets applied in script).
+# Remove once the ScanImage link is live.
+testTargets: [512, 384]
+
+# bringupGrid: when true, exp_rapid_sequential generates a 7x7 target grid
+# across the active DMD region (overrides testTargets). Set false when
+# testTargets or ScanImage ROIs should be used instead.
+bringupGrid: true
+
+# bringupDuration_s: stim duration per trial in bringupMode, for visual DMD
+# inspection. 5 s gives enough time to walk over to the DMD and verify the pattern.
+bringupDuration_s: 0.25

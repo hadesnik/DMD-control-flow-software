@@ -102,8 +102,11 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
             obj.sampleRate         = configField(config, 'sampleRate', 10000);
             obj.analogInChannels   = configField(config, 'analogInChannels',  []);
             obj.analogOutChannels  = configField(config, 'analogOutChannels', []);
-            obj.digitalInChannels  = configField(config, 'digitalInChannels',  {});
             obj.digitalOutChannels = configField(config, 'digitalOutChannels', {});
+            % digitalInChannels reflects only lines that have been actively
+            % configured via configureDigitalInput(). Do not pre-populate
+            % from config here — the Sequencer uses this to decide whether
+            % to attempt a frame-clock read, so it must reflect real state.
 
             try
                 s = daq.createSession('ni');  %LEGACY_API

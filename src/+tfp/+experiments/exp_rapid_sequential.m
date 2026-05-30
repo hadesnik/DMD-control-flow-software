@@ -25,13 +25,17 @@ calibration = loadCalibrationOrIdentity(config);
 targets     = resolveTargets(config, calibration);
 isi_s    = 0.1;
 nReps    = 2;
-radiusPx = 15;
+radiusPx = 25;
 
 sequence = tfp.trial.TrialSequence.generateRapidSequential(targets, isi_s, nReps);
 
 if isfield(config, 'bringupMode') && config.bringupMode
+    bringupDur = 5.0;
+    if isfield(config, 'bringupDuration_s')
+        bringupDur = double(config.bringupDuration_s);
+    end
     for k = 1:numel(sequence.trials)
-        sequence.trials(k).duration_s = 0.1;
+        sequence.trials(k).duration_s = bringupDur;
         sequence.trials(k).preStim_s  = 0.0;
     end
 end
@@ -134,8 +138,14 @@ if strcmpi(char(config.hardwareKind), 'mock')
     end
     return
 end
-% testTargets bypasses ScanImage for hardware bringup without a live imaging PC.
-% Values are DMD pixel coordinates [col, row]; calibration conversion is skipped.
+% bringupGrid flag: auto-generate 7x7 grid across the central active region,
+% overriding any testTargets entry (which is typically a single centre point
+% used by ppsf experiments).
+if isfield(config, 'bringupGrid') && config.bringupGrid
+    targets = generateBringupGrid(config);
+    return
+end
+% testTargets: explicit DMD coordinate override (bypasses ScanImage).
 if isfield(config, 'testTargets') && ~isempty(config.testTargets)
     targets = reshape(double(config.testTargets(:)), 2, [])';
     return
@@ -190,4 +200,18 @@ for t = 1:size(targets, 1)
         summary(t).nTrials      = numel(responses);
     end
 end
+end
+
+function targets = generateBringupGrid(config)
+% 7x7 grid of DMD spots, 60 px spacing (~20 um), centred on the DMD chip.
+% Covers ±180 px from centre — safely within the 219 px active half-width.
+ctrCol = 512;
+ctrRow = 384;
+if isfield(config, 'dmd')
+    if isfield(config.dmd, 'nCols'), ctrCol = round(double(config.dmd.nCols) / 2); end
+    if isfield(config.dmd, 'nRows'), ctrRow = round(double(config.dmd.nRows) / 2); end
+end
+offsets = (-3:3) * 60;
+[dc, dr] = meshgrid(offsets, offsets);
+targets = [ctrCol + dc(:), ctrRow + dr(:)];
 end
