@@ -5,13 +5,14 @@ function centroids = receiveROIsFromScanImage(options)
 %   centroids = receiveROIsFromScanImage(options)
 %
 %   Acts as an msocket server on the scope (DAQ) PC. The imaging PC connects
-%   and sends a struct with field .centroids (Nx2 double, scan-field coords).
+%   and sends an Nx2 double of [x y] centroids in scan-field coords (a struct
+%   with a .centroids field is also accepted for backward compatibility).
 %   Port 3045 is used (separate from stim metadata on 3043 and F-stream on 3044).
 %
 %   Inputs (all optional via options struct):
 %     .port          - msocket listening port           (default 3045)
 %     .msocketPath   - path to msocket\ directory on this PC (default '')
-%     .timeoutS      - seconds to wait for connection   (default 60)
+%     .timeoutS      - seconds to wait for connection   (default 30)
 %
 %   Output:
 %     centroids      - Nx2 double, [x y] scan-field coordinates per ROI,
@@ -38,7 +39,7 @@ end
 
 port        = configField(options, 'port',        3045);
 msocketPath = configField(options, 'msocketPath', '');
-timeoutS    = configField(options, 'timeoutS',    60);
+timeoutS    = configField(options, 'timeoutS',    30);
 
 if ~isempty(msocketPath) && isfolder(msocketPath)
     addpath(msocketPath);
@@ -47,31 +48,64 @@ end
 fprintf('[receiveROIsFromScanImage] Listening on port %d (timeout %.0f s)...\n', ...
     port, timeoutS);
 fprintf('  On the ScanImage PC:\n');
-fprintf("    msconnect('<daqPcIp>', %d);\n", port);
-fprintf("    mssend(struct('centroids', roi_Nx2));\n");
-fprintf('    msdisconnect();\n\n');
+fprintf('  On the ScanImage PC, run si_send_rois (it does msconnect/mssend/msclose).\n\n');
 
+% Lab msocket uses explicit handles: srvsock = mslisten(port);
+% sock = msaccept(srvsock, timeout); data = msrecv(sock). (Confirmed against
+% SImsocketPrep.m and the verified 3044 dry-run — there is no implicit-handle
+% form, and msdisconnect does not exist in this msocket build.)
+srvsock = [];
 try
-    mslisten(port);
-    sock = msaccept(timeoutS);  %#ok<NASGU>  — handle used implicitly by msrecv
+    srvsock = mslisten(port);
+    sock    = msaccept(srvsock, timeoutS);
+    msclose(srvsock); srvsock = [];          % done listening; close promptly
 catch ME
+    % Always close the listening socket, even on accept timeout — otherwise a
+    % failed/interrupted call leaks a listener bound to the port, and later
+    % connections get routed to a dead listener ("connected but no data").
+    if ~isempty(srvsock), try, msclose(srvsock); catch, end, end %#ok<TRYNC>
     error('tfp:io:receiveROIsFromScanImage:listenFailed', ...
         'msocket listen/accept on port %d failed: %s', port, ME.message);
 end
 
+% Poll with a timeout instead of a bare blocking msrecv, so a stale/closed
+% connection or a sender that never sends can't hang MATLAB indefinitely.
+data  = [];
+tPoll = tic;
 try
-    data = msrecv();
+    while toc(tPoll) < timeoutS
+        data = msrecv(sock, 0.2);     % [] on timeout; never blocks forever
+        if ~isempty(data), break; end
+    end
+    % Acknowledge receipt so the imaging PC can close without racing us
+    % (an early client close drops un-read data on this msocket build).
+    if ~isempty(data)
+        try, mssend(sock, 'ROIS_RECEIVED'); catch, end %#ok<TRYNC>
+    end
+    msclose(sock);
 catch ME
+    try, msclose(sock); catch, end %#ok<TRYNC>
     error('tfp:io:receiveROIsFromScanImage:recvFailed', ...
         'msrecv failed: %s', ME.message);
 end
-
-if ~isstruct(data) || ~isfield(data, 'centroids')
-    error('tfp:io:receiveROIsFromScanImage:badPayload', ...
-        'Expected struct with .centroids field; received %s.', class(data));
+if isempty(data)
+    error('tfp:io:receiveROIsFromScanImage:noData', ...
+        ['Imaging PC connected but sent no ROI data within %.0f s.\n' ...
+         'Re-run si_send_rois on the imaging PC (and check it prints a non-empty centroid table).'], ...
+        timeoutS);
 end
 
-centroids = double(data.centroids);
+% Payload is a bare Nx2 double (si_send_rois sends the matrix directly —
+% structs do not round-trip reliably on this msocket build). Still accept a
+% struct with a .centroids field for backward compatibility.
+if isnumeric(data)
+    centroids = double(data);
+elseif isstruct(data) && isfield(data, 'centroids')
+    centroids = double(data.centroids);
+else
+    error('tfp:io:receiveROIsFromScanImage:badPayload', ...
+        'Expected an Nx2 double (or struct with .centroids); received %s.', class(data));
+end
 if ~isnumeric(centroids) || ndims(centroids) ~= 2 || size(centroids, 2) ~= 2
     error('tfp:io:receiveROIsFromScanImage:badCentroids', ...
         '.centroids must be Nx2 numeric; got size [%s].', num2str(size(centroids)));

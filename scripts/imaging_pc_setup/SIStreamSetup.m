@@ -21,11 +21,19 @@
 
 global SIStreamSocket %#ok<GVMIS>
 
-%FILL: set this to the msocket\ directory on this imaging PC
-addpath(genpath('C:\path\to\msocket'));
+% Machine-local settings (msocket path, scope-PC IP, ports).
+% Edit imaging_pc_config.m / imaging_pc_config_local.m, not this script.
+cfg        = imaging_pc_config();
+scopePcIp  = cfg.scopePcIp;
+streamPort = cfg.streamPort;
 
-scopePcIp  = '128.32.177.203';
-streamPort = 3044;
+% Registering a user function requires ScanImage to be idle. Fail fast (before
+% opening the socket) so the order is always: SIStreamSetup, THEN start Focus.
+if isprop(hSI, 'acqState') && ~strcmpi(hSI.acqState, 'idle')
+    error('SIStreamSetup:acquiring', ...
+        ['ScanImage is acquiring (%s). Registering the frame callback requires idle.\n' ...
+         'Stop Focus/Grab, run SIStreamSetup, THEN start Focus.'], hSI.acqState);
+end
 
 disp('Connecting to scope PC for F streaming...');
 disp('Make sure scope PC experiment has started (armStreaming opens port 3044).');
@@ -38,13 +46,31 @@ disp(['Connected to ' scopePcIp ':' num2str(streamPort) '.']);
 % Register si_frame_callback as a ScanImage frameAcquired user function.
 % ScanImage stores these in hSI.hUserFunctions.userFunctionsCfg.
 %
-% %VERIFY: confirm with Masato that frameAcquired fires once per frame
-%   (not once per volume) on this ScanImage version.
-%   ScanImage 2020+ uses 'frameAcquired'; earlier versions may differ.
-newEntry.Enable       = true;
+% Field order MUST match ScanImage's record layout (EventName, UserFcnName,
+% Arguments, Enable) — confirmed against SI2018b guis/userFunctionControlsV4.m.
+% In R2018b, assigning a differently-ordered struct into a non-empty struct
+% array errors with "dissimilar structures".
+% 'frameAcquired' is a valid user-function event (SI.m notifies it).
+% CONFIRMED (SI2018b source, SI.m ~L1178): frameAcquired fires per FRAME
+% (per z-slice on stripeData.endOfFrame), NOT per volume. On a single-plane
+% scan frame == volume, so the callback gets one fresh integration value per
+% frame — correct, and what the 3044 dry-run validated. Multi-plane stacks are
+% NOT supported here: the callback would fire once per slice while integration
+% values only finalize per volume (duplicate sends + non-contiguous frame
+% indices). Add dedupe-by-frame + volume indexing before streaming multi-plane.
+% Idempotent: drop any prior si_frame_callback entries first, so re-running
+% this script does not stack duplicate callbacks (each copy fires per frame
+% and sends a redundant packet — observed as ~Nx duplicates in the stream).
+existing = hSI.hUserFunctions.userFunctionsCfg;
+if ~isempty(existing)
+    keep = ~strcmp({existing.UserFcnName}, 'si_frame_callback');
+    hSI.hUserFunctions.userFunctionsCfg = existing(keep);
+end
+
 newEntry.EventName    = 'frameAcquired';
 newEntry.UserFcnName  = 'si_frame_callback';
 newEntry.Arguments    = {};
+newEntry.Enable       = true;
 
 hSI.hUserFunctions.userFunctionsCfg(end+1) = newEntry;
 

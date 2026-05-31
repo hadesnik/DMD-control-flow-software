@@ -408,6 +408,11 @@ classdef Sequencer < handle
                 obj.siBridge.armForExternalTrigger(double(nFrames));
                 obj.siBridge.setActivePattern(patternMask, ...
                     trial.preStim_s, trial.pulseTrain.pulseWidth_s);
+                if obj.siBridge.supportsStreaming()
+                    % Reset the per-trial F accumulator + frame anchor (after
+                    % armForExternalTrigger, so nFrames_ is set; before frames arrive).
+                    obj.siBridge.clearLiveTraces();
+                end
             else
                 tfp.io.sessionLog(obj.log, 'siBridge-skipped', ...
                     struct('trialIdx', trial.trialIdx, ...
@@ -652,6 +657,12 @@ classdef Sequencer < handle
                     tiffPaths{k} = char(p);
                 end
             end
+            % NOTE: per-trial liveF collection from port 3044 used to live in
+            % this loop (orphan from the pre-merge bringup work), but it was
+            % unguarded against empty siBridge AND in the wrong scope (it
+            % overwrote liveF per trial, never persisting any). Streaming
+            % collection belongs in runOne; re-add it there per-trial if/when
+            % we wire F-stream into the trial schema.
 
             try
                 [perTrialAlignment, perFrame, alignReport] = ...

@@ -31,7 +31,8 @@ tfp.io.sessionLog(sessionDir, 'session-start', struct( ...
 plm        = makePlm(config);
 cleanupHw  = onCleanup(@() teardownHardware(dmd, daq, plm)); %#ok<NASGU>
 
-daq.configureAnalogInput(config.daq.analogInChannels, config.daq.aiRangeV);
+aiSE = []; if isfield(config.daq,'aiSingleEndedChannels'), aiSE = config.daq.aiSingleEndedChannels; end
+daq.configureAnalogInput(config.daq.analogInChannels, config.daq.aiRangeV, aiSE);
 daq.configureAnalogOutput(config.daq.analogOutChannels);
 daq.configureDigitalOutput(config.daq.digitalOutChannels);
 
@@ -44,7 +45,7 @@ targets  = target;     % single-target sequence
 dzUm     = [0, 5, 10, 20, 30, 50, -5, -10, -20, -30, -50];
 nReps    = 2;
 powerMw  = 5;
-radiusPx = 14;
+radiusPx = 15;
 if isfield(config, 'axialPpsf')
     ap = config.axialPpsf;
     if isfield(ap, 'dzUm'),    dzUm    = ap.dzUm;    end
@@ -54,6 +55,13 @@ end
 
 sequence = tfp.trial.TrialSequence.generateAxialPPSF( ...
     targets, dzUm, nReps, powerMw);
+
+if isfield(config, 'bringupMode') && config.bringupMode
+    for k = 1:numel(sequence.trials)
+        sequence.trials(k).duration_s = 0.1;
+        sequence.trials(k).preStim_s  = 0.0;
+    end
+end
 
 % Compute PLM patterns once per unique dz; attach patternRef and plmPattern
 % to each trial. Both are needed: DMD fires the lateral stim; PLM shifts focus.
@@ -136,14 +144,16 @@ switch lower(char(config.hardwareKind))
         dmd = tfp.hardware.MockDMD();
         daq = tfp.hardware.MockDAQ();
     case 'real'
-        error('tfp:experiments:exp_axial_ppsf:notImplemented', ...
-            'real DMD/DAQ hardware is Phase 2+.');
+        dmd = tfp.hardware.DLP650LNIR_DMD(config.dmd);
+        daq = tfp.hardware.NI6323_DAQ(config.daq);
     otherwise
         error('tfp:experiments:exp_axial_ppsf:badKind', ...
             'unknown hardwareKind: %s.', config.hardwareKind);
 end
-dmd.initialize(config.dmd);
-daq.initialize(config.daq);
+if strcmp(lower(char(config.hardwareKind)), 'mock')
+    dmd.initialize(config.dmd);
+    daq.initialize(config.daq);
+end
 end
 
 function plm = makePlm(config)
@@ -175,12 +185,16 @@ if isfield(config, 'calibration_file') && ~isempty(char(config.calibration_file)
     error('tfp:experiments:exp_axial_ppsf:notImplemented', ...
         'calibration_file loading is Phase 3.');
 end
+umPerPx = 1;
+if isfield(config, 'dmd') && isfield(config.dmd, 'umPerPixel')
+    umPerPx = double(config.dmd.umPerPixel);
+end
 calibration.dmdToSample_affine = eye(3);
 calibration.dmdToScan_affine   = eye(3);
-calibration.pixelsPerUm        = 1;
-calibration.umPerPixel         = 1;
+calibration.pixelsPerUm        = 1 / umPerPx;
+calibration.umPerPixel         = umPerPx;
 calibration.timestamp          = datetime('now');
-calibration.notes              = 'identity fallback (mock)';
+calibration.notes              = sprintf('pixel-scale only: %.4f um/px (no spatial calibration)', umPerPx);
 end
 
 function targets = resolveTargets(config, calibration)
@@ -193,6 +207,10 @@ if strcmpi(char(config.hardwareKind), 'mock')
     else
         targets = [640, 400];
     end
+    return
+end
+if isfield(config, 'testTargets') && ~isempty(config.testTargets)
+    targets = reshape(double(config.testTargets(:)), 2, [])';
     return
 end
 roiOpts = struct();

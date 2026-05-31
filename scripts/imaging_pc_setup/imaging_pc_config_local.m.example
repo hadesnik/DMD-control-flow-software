@@ -1,0 +1,26 @@
+% imaging_pc_config_local.m.example
+%
+% TEMPLATE for per-machine overrides of imaging_pc_config().
+%
+% To use:
+%   1. Copy this file to `imaging_pc_config_local.m` in the same folder.
+%   2. Keep only the fields this machine needs to override; delete the rest.
+%   3. The real `imaging_pc_config_local.m` is gitignored, so your machine's
+%      paths/IPs never get committed.
+%
+% imaging_pc_config() merges whatever fields you return over its rig defaults.
+
+function local = imaging_pc_config_local()
+
+% Folder containing mssend.m / msrecv.m / msconnect.m on THIS machine.
+local.msocketPath = 'C:\Users\scanimage\Documents\MATLAB\msocket';
+
+% IP address of the DAQ / scope PC (the msocket server).
+local.scopePcIp = '128.32.177.203';
+
+% Ports are protocol constants — override only if the scope PC changed them.
+% local.controlPort = 3043;
+% local.streamPort  = 3044;
+% local.roiPort     = 3045;
+
+end

@@ -15,3 +15,6 @@ data/
 
 # Claude Code harness state (agent worktrees, local memory)
 .claude/
+
+# Per-machine imaging-PC overrides (template is .example; real file is local)
+scripts/imaging_pc_setup/imaging_pc_config_local.m

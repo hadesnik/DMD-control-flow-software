@@ -30,7 +30,7 @@ classdef DLP650LNIR_DMD < tfp.hardware.DMD
         seqLoaded_  = false       % true when a sequence is allocated
         dllName_    = ''          % library alias for calllib (no extension)
         dllPath_    = ''          % full path to .dll file
-        protoFile_  = ''          % full path to the proto .m file
+        headerPath_ = ''          % full path to alp.h header file
         projMode_   = int32(2301) % ALP_MASTER by default (from alp.h line ~321)
         state_      = 'idle'      % 'idle' | 'armed' | 'running'
         log_        = struct('timestamp', {}, 'eventType', {}, 'payload', {})
@@ -70,30 +70,27 @@ classdef DLP650LNIR_DMD < tfp.hardware.DMD
                         'config.alpVersion must be ''4.1'' or ''4.3''; got ''%s''.', alpVer);
             end
 
-            obj.dllPath_   = configField(config, 'dllPath',   '');
-            obj.protoFile_ = configField(config, 'protoFile', '');
+            obj.dllPath_    = configField(config, 'dllPath',    '');
+            obj.headerPath_ = configField(config, 'headerPath', '');
             if isempty(obj.dllPath_)
                 error('tfp:hardware:DLP650LNIR_DMD:missingDllPath', ...
                     'config.dllPath is required (full path to %s.dll).', obj.dllName_);
             end
-            if isempty(obj.protoFile_)
-                error('tfp:hardware:DLP650LNIR_DMD:missingProtoFile', ...
-                    'config.protoFile is required (path to proto .m file).');
+            if isempty(obj.headerPath_)
+                error('tfp:hardware:DLP650LNIR_DMD:missingHeaderPath', ...
+                    'config.headerPath is required (path to alp.h).');
             end
 
-            % Load the DLL via its MATLAB prototype function.
-            % The proto function must be on the path; add its directory temporarily.
+            % Load DLL via header file — header approach is required because the
+            % pre-compiled thunk (proto file) does not correctly marshal the
+            % void* data buffer in AlpSeqPut. MinGW or MSVC must be installed.
             if ~libisloaded(obj.dllName_)
-                [protoDir, protoFcn] = fileparts(obj.protoFile_);
-                if ~isempty(protoDir)
-                    addpath(protoDir);
-                end
-                loadlibrary(obj.dllPath_, str2func(protoFcn));
+                loadlibrary(obj.dllPath_, obj.headerPath_, 'alias', obj.dllName_);
             end
 
             % AlpDevAlloc — allocate the first available ALP device.
             % Signature: long AlpDevAlloc(long DeviceNum, long InitFlag, ALP_ID *DeviceIdPtr)
-            devIdPtr = libpointer('ulongPtr', uint32(0));
+            devIdPtr = libpointer('uint32Ptr', uint32(0));
             ret = calllib(obj.dllName_, 'AlpDevAlloc', int32(0), int32(0), devIdPtr);
             obj.checkAlpReturn(ret, 'AlpDevAlloc');
             obj.deviceId_ = devIdPtr.Value;
@@ -107,7 +104,7 @@ classdef DLP650LNIR_DMD < tfp.hardware.DMD
 
             % AlpDevInquire — confirm the DMD type matches the config.
             % ALP_DEV_DMDTYPE=2021  (alp.h:141)
-            dmdTypePtr = libpointer('longPtr', int32(0));
+            dmdTypePtr = libpointer('int32Ptr', int32(0));
             ret = calllib(obj.dllName_, 'AlpDevInquire', ...
                 obj.deviceId_, int32(2021), dmdTypePtr);
             obj.checkAlpReturn(ret, 'AlpDevInquire(ALP_DEV_DMDTYPE)');
@@ -166,7 +163,7 @@ classdef DLP650LNIR_DMD < tfp.hardware.DMD
 
             % AlpSeqAlloc — allocate sequence memory on the device.
             % Signature: long AlpSeqAlloc(ALP_ID DeviceId, long BitPlanes, long PicNum, ALP_ID *SequenceIdPtr)
-            seqIdPtr = libpointer('ulongPtr', uint32(0));
+            seqIdPtr = libpointer('uint32Ptr', uint32(0));
             ret = calllib(obj.dllName_, 'AlpSeqAlloc', ...
                 obj.deviceId_, int32(1), int32(nPatterns), seqIdPtr);
             obj.checkAlpReturn(ret, 'AlpSeqAlloc');
@@ -189,8 +186,11 @@ classdef DLP650LNIR_DMD < tfp.hardware.DMD
             % AlpSeqPut — upload all patterns at once.
             % Signature: long AlpSeqPut(ALP_ID DeviceId, ALP_ID SequenceId,
             %                           long PicOffset, long PicLoad, void *UserArrayPtr)
+            % Must wrap data in libpointer('uint8Ptr',...) — passing a plain array
+            % to the void* parameter results in ALP_ADDR_INVALID (1006).
+            dataPtr = libpointer('uint8Ptr', imgData);
             ret = calllib(obj.dllName_, 'AlpSeqPut', ...
-                obj.deviceId_, obj.sequenceId_, int32(0), int32(nPatterns), imgData);
+                obj.deviceId_, obj.sequenceId_, int32(0), int32(nPatterns), dataPtr);
             obj.checkAlpReturn(ret, 'AlpSeqPut');
 
             % AlpSeqTiming — set exposure and frame period.
@@ -295,7 +295,7 @@ classdef DLP650LNIR_DMD < tfp.hardware.DMD
 
             % AlpProjInquire — query the live projection state.
             % ALP_PROJ_STATE=2400, ALP_PROJ_ACTIVE=1200, ALP_PROJ_IDLE=1201  (alp.h:84-87, 311)
-            projStatePtr = libpointer('longPtr', int32(0));
+            projStatePtr = libpointer('int32Ptr', int32(0));
             ret = calllib(obj.dllName_, 'AlpProjInquire', ...
                 obj.deviceId_, int32(2400), projStatePtr);
             if ret == int32(0)

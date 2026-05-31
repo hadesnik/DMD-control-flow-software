@@ -2,8 +2,8 @@ classdef test_exp_ppsf_lateral_mock < matlab.unittest.TestCase
     %test_exp_ppsf_lateral_mock Phase 1 milestone -- full PPSF experiment
     %against mocks. PPSF runs against a single central target cell
     %(within 80 px of the DMD geometric center) and verifies the end-to-end
-    %pipeline produces 18 completed trials (1 target * 9 distances * 2 reps)
-    %with a well-shaped summary across 9 distance bins.
+    %pipeline produces 34 completed trials (1 target * 17 distances * 2 reps)
+    %with a well-shaped summary across 17 distance bins (symmetric -40..40 µm).
 
     methods (TestMethodSetup)
         function armSafety(~)
@@ -50,13 +50,13 @@ classdef test_exp_ppsf_lateral_mock < matlab.unittest.TestCase
 
             result = tfp.experiments.exp_ppsf_lateral(config, 'test-session');
 
-            % 1 target * 9 distances * 2 reps = 18 trials.
-            testCase.verifyEqual(result.nTrialsCompleted, 18);
+            % 1 target * 17 distances * 2 reps = 34 trials.
+            testCase.verifyEqual(result.nTrialsCompleted, 34);
             testCase.verifyEqual(result.nTrialsFailed, 0);
 
-            % 18 _meta.mat files on disk, each loadable, status complete.
+            % 34 _meta.mat files on disk, each loadable, status complete.
             files = dir(fullfile(result.sessionDir, 'trials', 'trial_*_meta.mat'));
-            testCase.verifyEqual(numel(files), 18);
+            testCase.verifyEqual(numel(files), 34);
             for k = 1:numel(files)
                 loaded = load(fullfile(files(k).folder, files(k).name));
                 testCase.verifyEqual(loaded.meta.status, 'complete');
@@ -64,22 +64,29 @@ classdef test_exp_ppsf_lateral_mock < matlab.unittest.TestCase
 
             % Summary shape: 9 rows (one per distance), expected fields,
             % 2 trials per distance (1 target x 2 reps).
-            testCase.verifyEqual(numel(result.summary), 9);
+            testCase.verifyEqual(numel(result.summary), 17);
             testCase.verifyTrue(isfield(result.summary, 'distanceUm'));
             testCase.verifyTrue(isfield(result.summary, 'meanResponse'));
             testCase.verifyTrue(isfield(result.summary, 'nTrials'));
-            for d = 1:9
+            for d = 1:17
                 testCase.verifyEqual(result.summary(d).nTrials, 2);
             end
 
             % meanResponse at d=0 should be positive (cells directly under spot).
-            testCase.verifyGreaterThan(result.summary(1).meanResponse, 0, ...
+            % distancesUm is symmetric -40..40; d=0 lives at the middle entry
+            % (index 9 of 17), not index 1 as in the pre-bringup asymmetric form.
+            d0idx = find([result.summary.distanceUm] == 0, 1);
+            testCase.verifyGreaterThan(result.summary(d0idx).meanResponse, 0, ...
                 'meanResponse at d=0 must be positive (on-target cells).');
 
-            % meanResponse should decrease monotonically from d=0 to d=40.
+            % meanResponse should peak at d=0 and fall off toward the edges.
+            % distancesUm is symmetric, so check that the d=0 entry exceeds
+            % BOTH endpoints (d=-40 and d=+40).
             responses = [result.summary.meanResponse];
-            testCase.verifyGreaterThan(responses(1), responses(end), ...
-                'meanResponse at d=0 must exceed meanResponse at d=40 um.');
+            testCase.verifyGreaterThan(responses(d0idx), responses(1), ...
+                'meanResponse at d=0 must exceed meanResponse at d=-40 um.');
+            testCase.verifyGreaterThan(responses(d0idx), responses(end), ...
+                'meanResponse at d=0 must exceed meanResponse at d=+40 um.');
         end
 
         function ppsf2d_runs_end_to_end(testCase)

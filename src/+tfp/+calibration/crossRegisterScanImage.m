@@ -5,14 +5,19 @@ function calib = crossRegisterScanImage(camera, dmdCalib, options)
 %   scan-field pixel coordinates → substage-camera pixels, enabling the
 %   full DMD → ScanImage scan-field affine by composition.
 %
-%   OPERATOR PREREQUISITE (Option A — manual scan setup):
+%   dmdCalib is optional. Omit it (or pass []) to run Step B alone — useful
+%   when the DMD is not yet aligned. The output will contain scanToCam_affine
+%   but dmdToScan_affine will be identity (placeholder). Re-run
+%   composeDmdToScan(calib, dmdCalib) later to fill in the full affine once
+%   alignDMDtoCamera has been completed.
+%
+%   OPERATOR PREREQUISITE:
 %     Before calling this function the operator must:
 %       1. Place a thin fluorescent film on the sample stage.
 %       2. Start ScanImage in Focus mode with a NON-SQUARE pixel count
 %          matching options.scanPixels, e.g. 512 pixels × 256 lines.
 %          The resonant (fast) axis must have MORE pixels than the galvo
-%          (slow) axis. With square pixels this makes the scan region
-%          appear as a non-square bright rectangle on the substage camera;
+%          (slow) axis so the camera sees a non-square bright rectangle;
 %          the longer camera dimension = fast (resonant) axis.
 %       3. Confirm the scan rectangle is bright and in focus on the camera.
 %
@@ -26,15 +31,15 @@ function calib = crossRegisterScanImage(camera, dmdCalib, options)
 %       4. If off, flip scan_fast_axis_sign and/or scan_slow_axis_sign.
 %       5. Write confirmed signs into the rig config YAML.
 %
+%   calib = crossRegisterScanImage(camera)
 %   calib = crossRegisterScanImage(camera, dmdCalib)
 %   calib = crossRegisterScanImage(camera, dmdCalib, options)
+%   calib = crossRegisterScanImage(camera, [], options)
 %
 %   Inputs:
 %     camera    - tfp.hardware.SubstageCamera-derived, already initialized.
-%                 Must be viewing the fluorescent film with ScanImage running
-%                 in Focus mode before this call.
-%     dmdCalib  - calibration struct from alignDMDtoCamera; must contain
-%                 .dmdToSample_affine (3x3).
+%     dmdCalib  - calibration struct from alignDMDtoCamera containing
+%                 .dmdToSample_affine (3x3). Pass [] to skip composition.
 %     options   - optional struct:
 %       .scanPixels  — [nFast nSlow] matching ScanImage pixel count;
 %                      nFast must be > nSlow (default [512 256])
@@ -43,20 +48,13 @@ function calib = crossRegisterScanImage(camera, dmdCalib, options)
 %       .showFigure  — display diagnostic figure (default true)
 %       .notes       — char string appended to calib.notes
 %
-%   Output calib — inherits all fields from dmdCalib, plus:
+%   Output calib:
 %     .scanToCam_affine      3x3: [x;y;1] = A * [fast;slow;1].
-%                            Maps scan-field pixel [fast,slow] to camera
-%                            pixel [x,y]. Corner convention: bbox edges.
-%                            Signs are nominal; verify step confirms axis
-%                            orientation.
-%     .dmdToScan_affine      3x3: DMD pixel [col,row] → scan-field pixel
-%                            [fast,slow]. Composed as:
-%                            inv(scanToCam_affine) * dmdToSample_affine.
+%     .dmdToScan_affine      3x3: composed from dmdCalib (eye(3) if omitted).
 %     .scanPixels            [nFast nSlow] echo.
 %     .scan_fast_axis_sign   NaN — set empirically after verify step.
 %     .scan_slow_axis_sign   NaN — set empirically after verify step.
-%     .rectBboxPx            [xmin ymin width height] detected bounding box
-%                            in MATLAB regionprops BoundingBox units.
+%     .rectBboxPx            [xmin ymin width height] detected bounding box.
 %     .fastAxisIsHorizontal  logical; true when fast axis is wider on cam.
 %     .timestamp             datetime('now').
 %     .notes                 updated note string.
@@ -64,9 +62,8 @@ function calib = crossRegisterScanImage(camera, dmdCalib, options)
 %   Requires: Image Processing Toolbox (bwconncomp, regionprops, imclose,
 %   imopen).
 
-if nargin < 3
-    options = struct();
-end
+if nargin < 2, dmdCalib = []; end
+if nargin < 3, options  = struct(); end
 
 scanPixels = configField(options, 'scanPixels', [512, 256]);
 threshFrac = configField(options, 'threshFrac', 0.3);
@@ -86,7 +83,8 @@ if nFast <= nSlow
          'Set ScanImage with more pixels per line than lines, e.g. 512x256.'], ...
         nFast, nSlow);
 end
-if ~isfield(dmdCalib, 'dmdToSample_affine')
+hasDmdCalib = ~isempty(dmdCalib);
+if hasDmdCalib && ~isfield(dmdCalib, 'dmdToSample_affine')
     error('tfp:calibration:crossRegisterScanImage:missingDmdCalib', ...
         'dmdCalib must contain .dmdToSample_affine (run alignDMDtoCamera first).');
 end
@@ -114,11 +112,21 @@ fprintf('[crossRegisterScanImage] Fast axis orientation: %s\n', ...
 calib_fit = fitAffineCalib(scanPts, camPts, []);
 
 scanToCam = calib_fit.dmdToSample_affine;   % reuses helper; 'dmd' = scan here
-dmdToCam  = dmdCalib.dmdToSample_affine;
-dmdToScan = inv(scanToCam) * dmdToCam;      %#ok<MINV> small 3x3, explicit ok
+if hasDmdCalib
+    dmdToCam  = dmdCalib.dmdToSample_affine;
+    dmdToScan = inv(scanToCam) * dmdToCam;  %#ok<MINV> small 3x3, explicit ok
+else
+    dmdToScan = eye(3);  % placeholder — recompose after alignDMDtoCamera
+    fprintf('[crossRegisterScanImage] dmdCalib omitted: dmdToScan_affine is identity.\n');
+    fprintf('  Run composeDmdToScan(calib, dmdCalib) after alignDMDtoCamera.\n');
+end
 
 % --- assemble output ---
-calib = dmdCalib;
+if hasDmdCalib
+    calib = dmdCalib;
+else
+    calib = struct();
+end
 calib.scanToCam_affine    = scanToCam;
 calib.dmdToScan_affine    = dmdToScan;
 calib.scanPixels          = [nFast, nSlow];

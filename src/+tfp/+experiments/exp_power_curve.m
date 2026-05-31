@@ -14,16 +14,24 @@ tfp.io.sessionLog(sessionDir, 'session-start', struct( ...
 [dmd, daq] = makeHardware(config);
 cleanupHw = onCleanup(@() teardownHardware(dmd, daq)); %#ok<NASGU>
 
-daq.configureAnalogInput(config.daq.analogInChannels, config.daq.aiRangeV);
+aiSE = []; if isfield(config.daq,'aiSingleEndedChannels'), aiSE = config.daq.aiSingleEndedChannels; end
+daq.configureAnalogInput(config.daq.analogInChannels, config.daq.aiRangeV, aiSE);
 daq.configureAnalogOutput(config.daq.analogOutChannels);
 daq.configureDigitalOutput(config.daq.digitalOutChannels);
 
 target   = [500, 400];
 powersMw = [1, 2, 4];
 nReps    = 2;
-radiusPx = 14;
+radiusPx = 15;
 
 sequence = tfp.trial.TrialSequence.generatePowerCurve(target, powersMw, nReps);
+
+if isfield(config, 'bringupMode') && config.bringupMode
+    for k = 1:numel(sequence.trials)
+        sequence.trials(k).duration_s = 0.1;
+        sequence.trials(k).preStim_s  = 0.0;
+    end
+end
 
 for k = 1:numel(sequence.trials)
     tr = sequence.trials(k);
@@ -78,14 +86,16 @@ switch lower(char(config.hardwareKind))
         dmd = tfp.hardware.MockDMD();
         daq = tfp.hardware.MockDAQ();
     case 'real'
-        error('tfp:experiments:exp_power_curve:notImplemented', ...
-            'real hardware is Phase 2+.');
+        dmd = tfp.hardware.DLP650LNIR_DMD(config.dmd);
+        daq = tfp.hardware.NI6323_DAQ(config.daq);
     otherwise
         error('tfp:experiments:exp_power_curve:badKind', ...
             'unknown hardwareKind: %s.', config.hardwareKind);
 end
-dmd.initialize(config.dmd);
-daq.initialize(config.daq);
+if strcmp(lower(char(config.hardwareKind)), 'mock')
+    dmd.initialize(config.dmd);
+    daq.initialize(config.daq);
+end
 end
 
 function teardownHardware(dmd, daq)

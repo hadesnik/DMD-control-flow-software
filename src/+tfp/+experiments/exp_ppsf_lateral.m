@@ -21,7 +21,8 @@ tfp.io.sessionLog(sessionDir, 'session-start', struct( ...
 [dmd, daq] = makeHardware(config);
 cleanupHw = onCleanup(@() teardownHardware(dmd, daq)); %#ok<NASGU>
 
-daq.configureAnalogInput(config.daq.analogInChannels, config.daq.aiRangeV);
+aiSE = []; if isfield(config.daq,'aiSingleEndedChannels'), aiSE = config.daq.aiSingleEndedChannels; end
+daq.configureAnalogInput(config.daq.analogInChannels, config.daq.aiRangeV, aiSE);
 daq.configureAnalogOutput(config.daq.analogOutChannels);
 daq.configureDigitalOutput(config.daq.digitalOutChannels);
 
@@ -30,21 +31,27 @@ calibration = loadCalibrationOrIdentity(config);
 targets     = resolveTargets(config, calibration);
 target      = tfp.util.validatePPSFTarget(targets, dmd, 'exp_ppsf_lateral');
 targets     = target;     % single-target sequence
-distancesUm = [0, 3, 6, 9, 12, 15, 20, 30, 40];
+distancesUm = [-40, -30, -20, -15, -12, -9, -6, -3, 0, 3, 6, 9, 12, 15, 20, 30, 40];
 nReps       = 2;
 powerMw     = 5;
-radiusPx    = 14;
+radiusPx    = 15;
 
 sequence = tfp.trial.TrialSequence.generatePPSF( ...
     targets, distancesUm, nReps, powerMw);
 
-% Attach patternRef per trial: spot at center + (distance um -> px) along +x.
+if isfield(config, 'bringupMode') && config.bringupMode
+    for k = 1:numel(sequence.trials)
+        sequence.trials(k).duration_s = 0.1;
+        sequence.trials(k).preStim_s  = 0.0;
+    end
+end
+
+% Attach patternRef per trial: spot at center + signed offset along +x.
 for k = 1:numel(sequence.trials)
     tr = sequence.trials(k);
     center     = tr.targetSpec.dmdCoords;
-    d          = tr.metadata.distanceUm;
-    offsetPx   = d * calibration.pixelsPerUm;
-    stimTarget = center + [offsetPx, 0];
+    offsetPx   = tr.metadata.offsetUm * calibration.pixelsPerUm;
+    stimTarget = center + offsetPx;
     tr.targetSpec.patternRef = tfp.patterns.singleSpot(dmd, stimTarget, radiusPx);
 end
 
@@ -112,14 +119,16 @@ switch lower(char(config.hardwareKind))
         dmd = tfp.hardware.MockDMD();
         daq = tfp.hardware.MockDAQ();
     case 'real'
-        error('tfp:experiments:exp_ppsf_lateral:notImplemented', ...
-            'real hardware is Phase 2+.');
+        dmd = tfp.hardware.DLP650LNIR_DMD(config.dmd);
+        daq = tfp.hardware.NI6323_DAQ(config.daq);
     otherwise
         error('tfp:experiments:exp_ppsf_lateral:badKind', ...
             'unknown hardwareKind: %s.', config.hardwareKind);
 end
-dmd.initialize(config.dmd);
-daq.initialize(config.daq);
+if strcmp(lower(char(config.hardwareKind)), 'mock')
+    dmd.initialize(config.dmd);
+    daq.initialize(config.daq);
+end
 end
 
 function teardownHardware(dmd, daq)
@@ -132,12 +141,16 @@ if isfield(config, 'calibration_file') && ~isempty(char(config.calibration_file)
     error('tfp:experiments:exp_ppsf_lateral:notImplemented', ...
         'calibration_file loading is Phase 3.');
 end
+umPerPx = 1;
+if isfield(config, 'dmd') && isfield(config.dmd, 'umPerPixel')
+    umPerPx = double(config.dmd.umPerPixel);
+end
 calibration.dmdToSample_affine = eye(3);
 calibration.dmdToScan_affine   = eye(3);
-calibration.pixelsPerUm        = 1;
-calibration.umPerPixel         = 1;
+calibration.pixelsPerUm        = 1 / umPerPx;
+calibration.umPerPixel         = umPerPx;
 calibration.timestamp          = datetime('now');
-calibration.notes              = 'identity fallback (mock)';
+calibration.notes              = sprintf('pixel-scale only: %.4f um/px (no spatial calibration)', umPerPx);
 end
 
 function targets = resolveTargets(config, calibration)
@@ -151,6 +164,10 @@ if strcmpi(char(config.hardwareKind), 'mock')
     else
         targets = [400, 400; 500, 400; 600, 400];
     end
+    return
+end
+if isfield(config, 'testTargets') && ~isempty(config.testTargets)
+    targets = reshape(double(config.testTargets(:)), 2, [])';
     return
 end
 roiOpts = struct();
@@ -201,6 +218,13 @@ r   = max(dff(:));
 end
 
 function summary = summarizeByDistance(trials, distancesUm)
+%summarizeByDistance Bin trials by the SIGNED x-component of their offset.
+%
+%   distancesUm is 1D so generatePPSF treats each entry d as the 2D offset
+%   [d, 0]. Trial.metadata stores both .offsetUm = [dx dy] (signed) and
+%   .distanceUm = norm([dx dy]) (radial, always non-negative). For a
+%   symmetric input like [-40 ... 40] the radial distanceUm aliases
+%   sign-flipped pairs, so we bin on the signed x-offset instead.
 summary = struct('distanceUm', {}, 'meanResponse', {}, 'nTrials', {});
 for d = 1:numel(distancesUm)
     dist = distancesUm(d);
@@ -209,7 +233,8 @@ for d = 1:numel(distancesUm)
         tr = trials(k);
         if ~strcmp(tr.status, 'complete'), continue; end
         if ~isstruct(tr.data), continue; end
-        if abs(tr.metadata.distanceUm - dist) > 1e-9, continue; end
+        % Match the signed x-offset (column 1 of offsetUm) for 1D PPSF runs.
+        if abs(tr.metadata.offsetUm(1) - dist) > 1e-9, continue; end
         if ~isfield(tr.data, 'imaging') || isempty(tr.data.imaging) || ...
                 ~isfield(tr.data.imaging, 'F')
             continue;

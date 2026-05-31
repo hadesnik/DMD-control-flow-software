@@ -10,19 +10,34 @@ dmd:
   protoFile: 'vendor\alp\reference\parot-alptool\alpV43x64proto.m'
   loadLatencyMsPerPattern: 10
   debugFigure: false
+  # Pixel scale: 10.8 µm pitch / ~40x optical demag → 0.270 µm/px.
+  # Central 6×6 mm active region: 6 mm / 10.8 µm/px = 556 px → roiHalfWidthPx = 278.
+  # Both values need re-verification once the optical path is measured on the rig.
+  umPerPixel: 0.270
+  roiHalfWidthPx: 278
 
 # DAQ configuration. Consumed by tfp.hardware.NI6323_DAQ.initialize.
+# Confirmed wiring (cross-referenced with Masato's DAQ code, 2026-05-29):
+#   ai2: patch electrode / Multiclamp 700B output (primary ephys)
+#   ai3: SLM/stim trigger monitor — reads back the stimulation trigger line
+#   ao0: Multiclamp 700B ch1 command (postsynaptic cell)
+#   ao2: Multiclamp 700B ch2 command (presynaptic cell, normally unused)
+#   ao3: NKT FS-50 power modulator (photostim laser power control)
+#   port0/line10 (DO): ScanImage acquisition trigger
+#   port0/line8  (DO): SLM trigger out (Masato's SLM; spare for our DMD rig)
+#   port0/line1  (DI): ScanImage frame clock (rising edge = frame acquired)
 daq:
   deviceName: 'Dev1'
-  sampleRate: 10000
-  analogInChannels: [0, 1, 2, 3]
-  analogOutChannels: [0, 1]
+  sampleRate: 20000
+  analogInChannels: [2, 3]
+  aiRangeV: [-5, 5]
+  # ai3 reads a 0-5V trigger monitor signal; use SingleEnded not differential.
+  aiSingleEndedChannels: [3]
+  analogOutChannels: [0, 3]
   digitalOutChannels:
-    - 'port0/line0'    # DMD pattern-advance trigger
-    - 'port0/line1'    # Pockels cell gate
     - 'port0/line10'   # ScanImage acquisition trigger
   digitalInChannels:
-    - 'port0/line2'    # ScanImage frame clock (rising edge = frame acquired)
+    - 'port0/line1'    # ScanImage frame clock (rising edge = frame acquired)
 
 # Imaging parameters. Consumed by ScanImageBridge (Phase 2+).
 imaging:
@@ -35,6 +50,14 @@ imaging:
 session:
   dataDir: 'C:\data'
   calibration_file: ''   # fill in after first alignDMDtoCamera run
+
+# Laser modulation (NKT FS-50). Analog output ao3 on the NI PCIe-6323.
+laser:
+  fs50_ao_channel: 'ao3'
+  modulation_voltage_max: 5.0
+  modulation_voltage_min: 0.0     # 0 V = laser off
+  calibration_file: ''
+  default_power_mw: 1.0
 
 # Power meter — Thorlabs PM100D, serial P0004058.
 # Accessed via TLPM_64.dll (vendor/thorlabs/TLPM.m); no config fields needed,

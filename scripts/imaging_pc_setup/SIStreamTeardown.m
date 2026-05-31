@@ -17,18 +17,34 @@ else
     disp('No streaming socket was open.');
 end
 
-% Disable si_frame_callback in ScanImage user functions.
+% Remove si_frame_callback from ScanImage user functions.
+% Remove (not just disable) ALL matching entries — re-running SIStreamSetup
+% could have stacked duplicates, and `cfg(idx).Enable = false` fails when idx
+% selects more than one element.
+%
+% ScanImage forbids touching userFunctionsCfg during an active acquisition,
+% so bail out with a clear instruction if a Focus/Grab is still running.
+if isprop(hSI, 'acqState') && ~strcmpi(hSI.acqState, 'idle')
+    fprintf(['ScanImage is acquiring (%s) — cannot modify user functions now.\n' ...
+             'Stop Focus/Grab, then re-run SIStreamTeardown to remove the callback.\n'], ...
+             hSI.acqState);
+    return;
+end
 try
     cfg = hSI.hUserFunctions.userFunctionsCfg;
-    idx = strcmp({cfg.UserFcnName}, 'si_frame_callback');
-    if any(idx)
-        hSI.hUserFunctions.userFunctionsCfg(idx).Enable = false;
-        disp('Frame callback disabled.');
+    if ~isempty(cfg)
+        idx = strcmp({cfg.UserFcnName}, 'si_frame_callback');
+        if any(idx)
+            hSI.hUserFunctions.userFunctionsCfg = cfg(~idx);
+            fprintf('Frame callback removed (%d entries).\n', nnz(idx));
+        else
+            disp('Frame callback was not registered.');
+        end
     else
         disp('Frame callback was not registered.');
     end
 catch ME
-    fprintf('Could not disable callback: %s\n', ME.message);
+    fprintf('Could not remove callback: %s\n', ME.message);
 end
 
 disp('F streaming stopped.');

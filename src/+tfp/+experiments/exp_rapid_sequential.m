@@ -16,7 +16,8 @@ tfp.io.sessionLog(sessionDir, 'session-start', struct( ...
 [dmd, daq] = makeHardware(config);
 cleanupHw = onCleanup(@() teardownHardware(dmd, daq)); %#ok<NASGU>
 
-daq.configureAnalogInput(config.daq.analogInChannels, config.daq.aiRangeV);
+aiSE = []; if isfield(config.daq,'aiSingleEndedChannels'), aiSE = config.daq.aiSingleEndedChannels; end
+daq.configureAnalogInput(config.daq.analogInChannels, config.daq.aiRangeV, aiSE);
 daq.configureAnalogOutput(config.daq.analogOutChannels);
 daq.configureDigitalOutput(config.daq.digitalOutChannels);
 
@@ -24,9 +25,20 @@ calibration = loadCalibrationOrIdentity(config);
 targets     = resolveTargets(config, calibration);
 isi_s    = 0.1;
 nReps    = 2;
-radiusPx = 14;
+radiusPx = 25;
 
 sequence = tfp.trial.TrialSequence.generateRapidSequential(targets, isi_s, nReps);
+
+if isfield(config, 'bringupMode') && config.bringupMode
+    bringupDur = 5.0;
+    if isfield(config, 'bringupDuration_s')
+        bringupDur = double(config.bringupDuration_s);
+    end
+    for k = 1:numel(sequence.trials)
+        sequence.trials(k).duration_s = bringupDur;
+        sequence.trials(k).preStim_s  = 0.0;
+    end
+end
 
 for k = 1:numel(sequence.trials)
     tr = sequence.trials(k);
@@ -82,14 +94,17 @@ switch lower(char(config.hardwareKind))
         dmd = tfp.hardware.MockDMD();
         daq = tfp.hardware.MockDAQ();
     case 'real'
-        error('tfp:experiments:exp_rapid_sequential:notImplemented', ...
-            'real hardware is Phase 2+.');
+        dmd = tfp.hardware.DLP650LNIR_DMD(config.dmd);
+        daq = tfp.hardware.NI6323_DAQ(config.daq);
     otherwise
         error('tfp:experiments:exp_rapid_sequential:badKind', ...
             'unknown hardwareKind: %s.', config.hardwareKind);
 end
-dmd.initialize(config.dmd);
-daq.initialize(config.daq);
+% Mock constructors do not call initialize(); real constructors do.
+if strcmp(lower(char(config.hardwareKind)), 'mock')
+    dmd.initialize(config.dmd);
+    daq.initialize(config.daq);
+end
 end
 
 function teardownHardware(dmd, daq)
@@ -102,12 +117,16 @@ if isfield(config, 'calibration_file') && ~isempty(char(config.calibration_file)
     error('tfp:experiments:exp_rapid_sequential:notImplemented', ...
         'calibration_file loading is Phase 3.');
 end
+umPerPx = 1;
+if isfield(config, 'dmd') && isfield(config.dmd, 'umPerPixel')
+    umPerPx = double(config.dmd.umPerPixel);
+end
 calibration.dmdToSample_affine = eye(3);
 calibration.dmdToScan_affine   = eye(3);
-calibration.pixelsPerUm        = 1;
-calibration.umPerPixel         = 1;
+calibration.pixelsPerUm        = 1 / umPerPx;
+calibration.umPerPixel         = umPerPx;
 calibration.timestamp          = datetime('now');
-calibration.notes              = 'identity fallback (mock)';
+calibration.notes              = sprintf('pixel-scale only: %.4f um/px (no spatial calibration)', umPerPx);
 end
 
 function targets = resolveTargets(config, calibration)
@@ -117,6 +136,18 @@ if strcmpi(char(config.hardwareKind), 'mock')
     else
         targets = [400, 400; 500, 400; 600, 400];
     end
+    return
+end
+% bringupGrid flag: auto-generate 7x7 grid across the central active region,
+% overriding any testTargets entry (which is typically a single centre point
+% used by ppsf experiments).
+if isfield(config, 'bringupGrid') && config.bringupGrid
+    targets = generateBringupGrid(config);
+    return
+end
+% testTargets: explicit DMD coordinate override (bypasses ScanImage).
+if isfield(config, 'testTargets') && ~isempty(config.testTargets)
+    targets = reshape(double(config.testTargets(:)), 2, [])';
     return
 end
 roiOpts = struct();
@@ -169,4 +200,18 @@ for t = 1:size(targets, 1)
         summary(t).nTrials      = numel(responses);
     end
 end
+end
+
+function targets = generateBringupGrid(config)
+% 7x7 grid of DMD spots, 60 px spacing (~20 um), centred on the DMD chip.
+% Covers ±180 px from centre — safely within the 219 px active half-width.
+ctrCol = 512;
+ctrRow = 384;
+if isfield(config, 'dmd')
+    if isfield(config.dmd, 'nCols'), ctrCol = round(double(config.dmd.nCols) / 2); end
+    if isfield(config.dmd, 'nRows'), ctrRow = round(double(config.dmd.nRows) / 2); end
+end
+offsets = (-3:3) * 60;
+[dc, dr] = meshgrid(offsets, offsets);
+targets = [ctrCol + dc(:), ctrRow + dr(:)];
 end

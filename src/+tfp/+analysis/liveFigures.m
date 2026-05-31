@@ -14,7 +14,7 @@ function liveFigures(seqState)
 %     .sessionStartTime     datetime when run() started
 %     .lastTrialDuration_s  measured wall-clock seconds for last trial
 %
-%   Figure layout — 2 rows × 3 columns:
+%   Figure layout  - 2 rows × 3 columns:
 %     Row 1: DMD pattern preview | Power timeline   | Acquisition status
 %     Row 2: ΔF/F traces        | PPSF curve       | Response map
 
@@ -52,12 +52,12 @@ if isempty(hFig) || ~ishghandle(hFig) || isempty(hAxes) || ~all(ishghandle(hAxes
 end
 set(0, 'CurrentFigure', hFig);
 
-% Row 1 — hardware status
+% Row 1  - hardware status
 renderDmdPattern(hAxes(1), seqState);
 renderPowerTimeline(hAxes(2), seqState);
 renderAcquisitionStatus(hAxes(3), seqState);
 
-% Row 2 — neural data
+% Row 2  - neural data
 renderDffTraces(hAxes(4), seqState, BASELINE, RESP_THRESH);
 renderPpsfCurve(hAxes(5), seqState, BASELINE);
 renderResponseMap(hAxes(6), seqState, BASELINE);
@@ -66,7 +66,7 @@ drawnow();
 end
 
 % =========================================================================
-% Panel renderers — one function per subplot
+% Panel renderers  - one function per subplot
 % =========================================================================
 
 function renderDmdPattern(ax, seqState)
@@ -86,17 +86,11 @@ if ndims(pat) > 2
 end
 [H, W] = size(pat);
 
-% Center the 200×200 crop on the stim target when coordinates are known.
-if isstruct(trial.targetSpec) && isfield(trial.targetSpec, 'dmdCoords') && ...
-        ~isempty(trial.targetSpec.dmdCoords)
-    xy = trial.targetSpec.dmdCoords;
-    cC = max(1, min(W, round(xy(1))));
-    rC = max(1, min(H, round(xy(2))));
-else
-    cC = round(W/2);
-    rC = round(H/2);
-end
-half = 100;
+% Show the central active region: chip center ± floor(H/2) covers the
+% full 6×6 mm illuminated area on both DLP7000 (768 rows) and DLP650LNIR (800 rows).
+cC  = round(W/2);
+rC  = round(H/2);
+half = floor(H/2);
 r1 = max(1, rC - half);     r2 = min(H, rC + half - 1);
 c1 = max(1, cC - half);     c2 = min(W, cC + half - 1);
 crop = logical(pat(r1:r2, c1:c2));
@@ -116,7 +110,7 @@ dist = '';
 if isstruct(trial.metadata) && isfield(trial.metadata, 'distanceUm')
     dist = sprintf(', %.1f um', trial.metadata.distanceUm);
 end
-title(ax, sprintf('DMD — trial %d/%d%s%s', ...
+title(ax, sprintf('DMD  - trial %d/%d%s%s', ...
     seqState.trialIdx, seqState.nTrials, coords, dist), ...
     'Interpreter', 'none');
 end
@@ -223,12 +217,12 @@ function renderDffTraces(ax, seqState, BASELINE, RESP_THRESH)
 %renderDffTraces Panel 4: waterfall dF/F traces from the last trial.
 cla(ax);
 if isempty(seqState.lastTrial)
-    showPlaceholder(ax, 'No trial yet', 'Last trial — cell responses');
+    showPlaceholder(ax, 'No trial yet', 'Last trial  - cell responses');
     return;
 end
 imaging = extractImaging(seqState.lastTrial);
 if isempty(imaging)
-    showPlaceholder(ax, 'No imaging data', 'Last trial — no imaging');
+    showPlaceholder(ax, 'No imaging data', 'Last trial  - no imaging');
     return;
 end
 
@@ -265,7 +259,7 @@ hold(ax, 'off');
 
 xlabel(ax, 'Time (s)');
 ylabel(ax, '\DeltaF/F (offset)');
-title(ax, sprintf('Last trial — %d cell(s)', nCells));
+title(ax, sprintf('Last trial  - %d cell(s)', nCells));
 end
 
 % -------------------------------------------------------------------------
@@ -297,7 +291,7 @@ if numel(distUm) >= 5
         plot(ax, xFine, gFit(xFine), 'r-', 'LineWidth', 1.5);
         legend(ax, 'Mean ± SEM', 'Gaussian fit', 'Location', 'best');
     catch
-        % Curve Fitting Toolbox unavailable or fit failed — skip overlay.
+        % Curve Fitting Toolbox unavailable or fit failed  - skip overlay.
     end
 end
 hold(ax, 'off');
@@ -305,7 +299,7 @@ hold(ax, 'off');
 xlabel(ax, 'Distance (\mum)');
 ylabel(ax, 'Mean peak \DeltaF/F');
 nDone = sum(strcmp({seqState.allTrials.status}, 'complete'));
-title(ax, sprintf('PPSF curve — %d trials', nDone));
+title(ax, sprintf('PPSF curve  - %d trials', nDone));
 end
 
 % -------------------------------------------------------------------------

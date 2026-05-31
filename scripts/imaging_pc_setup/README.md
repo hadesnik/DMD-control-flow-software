@@ -13,12 +13,24 @@ Port assignment:
 - **3043** — control channel (ScanImage metadata, already in SImsocketPrep.m)
 - **3044** — F-streaming channel (these scripts)
 
+## Machine-local configuration
+
+The msocket library path, the scope-PC IP, and the socket ports live in one
+place: [`imaging_pc_config.m`](imaging_pc_config.m). The scripts call it — they
+contain no hardcoded paths.
+
+To adapt a new/reimaged imaging PC **without editing tracked code**, copy
+`imaging_pc_config_local.m.example` to `imaging_pc_config_local.m` (gitignored)
+and set only the fields that differ (typically `msocketPath` and `scopePcIp`).
+Anything you omit keeps the rig default in `imaging_pc_config.m`.
+
 ## Session workflow
 
 ### Once per scope session (imaging PC, before first trial)
 
 1. Open MATLAB on the imaging PC.
-2. Make sure msocket is on the path (or edit the `addpath` line in SIStreamSetup.m).
+2. First run only: confirm `imaging_pc_config` is correct for this machine
+   (msocket path + scope-PC IP). It adds msocket to the path automatically.
 3. In ScanImage, enable **ROI Integration** and draw ROIs around your target cells.
 4. Run:
    ```matlab
@@ -31,18 +43,26 @@ Port assignment:
 
 ### End of session (imaging PC)
 
+**Stop the Focus/Grab first** — ScanImage won't let user functions be modified
+during an active acquisition. Then:
+
 ```matlab
 SIStreamTeardown
 ```
 
-This closes the socket and disables the frame callback cleanly.
+This closes the socket and removes the frame callback cleanly. (Likewise, run
+`SIStreamSetup` while idle, *then* start Focus — both scripts now error early
+with a clear message if ScanImage is acquiring.)
 
 ## Files
 
 | File | Purpose |
 |------|---------|
+| `imaging_pc_config.m` | Central settings (msocket path, scope-PC IP, ports); adds msocket to path |
+| `imaging_pc_config_local.m.example` | Template for per-machine overrides (copy to `imaging_pc_config_local.m`) |
 | `SIStreamSetup.m` | Run once per session to connect and register the callback |
 | `si_frame_callback.m` | ScanImage `frameAcquired` callback — do not call directly |
+| `si_send_rois.m` | Send ROI centroids to the scope PC after drawing ROIs |
 | `SIStreamTeardown.m` | Run at end of session to disconnect cleanly |
 
 ## Prerequisites

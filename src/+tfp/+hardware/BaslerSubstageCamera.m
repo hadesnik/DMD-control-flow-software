@@ -37,6 +37,12 @@ classdef BaslerSubstageCamera < tfp.hardware.SubstageCamera
             exposureMs = configField(config, 'exposureMs', 10);
             gain       = configField(config, 'gain',       0);
 
+            % Release any stale videoinput objects (prevents "device in use" errors).
+            existingObjs = imaqfind;
+            if ~isempty(existingObjs)
+                delete(existingObjs);
+            end
+
             try
                 obj.vid_ = videoinput('gentl', deviceId, formatStr);
             catch ME
@@ -110,7 +116,11 @@ classdef BaslerSubstageCamera < tfp.hardware.SubstageCamera
 
         function frame = getFrame(obj)
             obj.assertInitialized();
-            raw   = peekdata(obj.vid_, 1);
+            raw = peekdata(obj.vid_, 1);
+            if isempty(raw)
+                frame = zeros(obj.nRows, obj.nCols);
+                return;
+            end
             frame = obj.toDouble(raw);
         end
 
@@ -135,8 +145,12 @@ classdef BaslerSubstageCamera < tfp.hardware.SubstageCamera
         end
 
         function frame = toDouble(~, raw)
-            raw   = raw(:,:,1,1);
-            frame = double(raw) / double(intmax(class(raw)));
+            raw = raw(:,:,1,1);
+            if isinteger(raw)
+                frame = double(raw) / double(intmax(class(raw)));
+            else
+                frame = double(raw);
+            end
         end
     end
 end

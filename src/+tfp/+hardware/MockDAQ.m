@@ -72,7 +72,7 @@ classdef MockDAQ < tfp.hardware.DAQ
             obj.logEvent('initialize', config);
         end
 
-        function configureAnalogInput(obj, channels, rangeV)
+        function configureAnalogInput(obj, channels, rangeV, ~)
             obj.requireInitialized('configureAnalogInput');
             if ~all(ismember(channels, obj.analogInChannels))
                 error('tfp:hardware:MockDAQ:badChannels', ...

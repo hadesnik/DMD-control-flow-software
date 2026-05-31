@@ -102,8 +102,11 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
             obj.sampleRate         = configField(config, 'sampleRate', 10000);
             obj.analogInChannels   = configField(config, 'analogInChannels',  []);
             obj.analogOutChannels  = configField(config, 'analogOutChannels', []);
-            obj.digitalInChannels  = configField(config, 'digitalInChannels',  {});
             obj.digitalOutChannels = configField(config, 'digitalOutChannels', {});
+            % digitalInChannels reflects only lines that have been actively
+            % configured via configureDigitalInput(). Do not pre-populate
+            % from config here — the Sequencer uses this to decide whether
+            % to attempt a frame-clock read, so it must reflect real state.
 
             try
                 s = daq.createSession('ni');  %LEGACY_API
@@ -139,9 +142,14 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
                 'deviceName', obj.deviceName_, 'sampleRate', obj.sampleRate));
         end
 
-        function configureAnalogInput(obj, channels, rangeV)
+        function configureAnalogInput(obj, channels, rangeV, singleEndedChannels)
             %configureAnalogInput Add AI voltage channels to the session.
+            %   singleEndedChannels (optional): list of channel numbers that
+            %   should use SingleEnded input type instead of the default
+            %   Differential. Use for 0-5V trigger monitor lines (e.g. ai3).
+            %   In NI-DAQmx legacy API this sets ch.InputType = 'SingleEnded'.
             obj.requireInitialized('configureAnalogInput');
+            if nargin < 4, singleEndedChannels = []; end
             for k = 1:numel(channels)
                 ch = obj.session_.addAnalogInputChannel( ...  %LEGACY_API
                     obj.deviceName_, channels(k), 'Voltage');
@@ -150,6 +158,13 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
                         ch.Range = rangeV;  %LEGACY_API
                     catch
                         % Range property not available on all channel subtypes.
+                    end
+                end
+                if ~isempty(singleEndedChannels) && any(channels(k) == singleEndedChannels)
+                    try
+                        ch.InputType = 'SingleEnded';  %LEGACY_API
+                    catch
+                        % InputType not settable on all NI-DAQmx versions.
                     end
                 end
             end
@@ -278,10 +293,55 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
         end
 
         function start(obj)
-            %start Queue AO data and start background output.
+            %start Build combined AO+DO output matrix and start background session.
+            %   Synthesizes DO pulse waveforms from stored digitalPulses_ specs
+            %   and assembles all output columns in outputOrder_ order, as
+            %   required by daq.createSession (legacy) mixed AO+DO sessions.
             obj.requireInitialized('start');
-            if ~isempty(obj.aoData_)
-                obj.session_.queueOutputData(obj.aoData_);  %LEGACY_API
+            nOut = numel(obj.outputOrder_);
+            if nOut > 0
+                if isempty(obj.aoData_)
+                    error('tfp:hardware:NI6323_DAQ:noOutputData', ...
+                        'queueAnalogOutput() must be called before start().');
+                end
+                nSamp   = size(obj.aoData_, 1);
+                outData = zeros(nSamp, nOut);
+
+                % Fill AO columns in outputOrder_ order.
+                aoCol = 0;
+                for i = 1:nOut
+                    if strcmp(obj.outputOrder_(i).kind, 'ao')
+                        aoCol = aoCol + 1;
+                        if aoCol <= size(obj.aoData_, 2)
+                            outData(:, i) = obj.aoData_(:, aoCol);
+                        end
+                    end
+                end
+
+                % Synthesize DO pulse waveforms from queued specs.
+                for p = 1:numel(obj.digitalPulses_)
+                    spec = obj.digitalPulses_(p);
+                    for j = 1:numel(spec.lineNames)
+                        slot    = obj.outputSlotForDOLine_(spec.lineNames{j});
+                        onSamp  = max(1, round(spec.times(j) * obj.sampleRate) + 1);
+                        offSamp = min(nSamp, ...
+                            onSamp + round(spec.durations(j) * obj.sampleRate) - 1);
+                        if onSamp <= offSamp
+                            outData(onSamp:offSamp, slot) = 1;
+                        end
+                    end
+                end
+
+                obj.session_.queueOutputData(outData);  %LEGACY_API
+            end
+            % NI legacy session requires a DataAvailable listener before
+            % startBackground() when the session has input channels.
+            if ~isempty(obj.configuredAiChannels_)
+                nAiChans = numel(obj.configuredAiChannels_);
+                obj.aiBuf_ = zeros(0, nAiChans);
+                obj.diBuf_ = zeros(0, numel(obj.configuredDiLines_));
+                obj.aiListener_ = obj.session_.addlistener( ...  %LEGACY_API
+                    'DataAvailable', @(src, evt) obj.onDataAvailable(evt, nAiChans));
             end
             obj.session_.startBackground();  %LEGACY_API
             obj.isRunning = true;
@@ -332,18 +392,14 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
                 raw  = obj.session_.inputSingleScan();  %LEGACY_API
                 data = reshape(raw(1:nChans), 1, nChans);
             elseif obj.isRunning
-                % Background AO is active — collect AI (and DI if configured) via listener.
-                obj.aiBuf_ = zeros(0, nChans);
-                obj.diBuf_ = zeros(0, numel(obj.configuredDiLines_));
-                obj.aiListener_ = obj.session_.addlistener( ...  %LEGACY_API
-                    'DataAvailable', @(src, evt) obj.onDataAvailable(evt, nChans));
-                timeout = nSamples / obj.sampleRate * 3;  % 3× headroom
+                % Listener was registered in start() and may have already
+                % filled aiBuf_ — do NOT reset it here or that data is lost.
+                % start() resets the buffer; stop() clears it between trials.
+                timeout = max(1.0, nSamples / obj.sampleRate * 3);  % ≥1 s
                 t0      = tic;
                 while size(obj.aiBuf_, 1) < nSamples && toc(t0) < timeout
                     pause(0.001);
                 end
-                delete(obj.aiListener_);
-                obj.aiListener_ = [];
                 if size(obj.aiBuf_, 1) < nSamples
                     error('tfp:hardware:NI6323_DAQ:readTimeout', ...
                         'readAnalogInput timed out after %.1f s (got %d/%d samples).', ...
@@ -670,6 +726,13 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
                     if ~isempty(obj.aiListener_)
                         delete(obj.aiListener_);
                         obj.aiListener_ = [];
+                    end
+                    if ~isempty(obj.outputOrder_)
+                        try
+                            obj.session_.outputSingleScan( ...
+                                zeros(1, numel(obj.outputOrder_)));  %LEGACY_API
+                        catch
+                        end
                     end
                     obj.session_.release();  %LEGACY_API
                 catch

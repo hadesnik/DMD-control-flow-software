@@ -24,7 +24,8 @@ tfp.io.sessionLog(sessionDir, 'session-start', struct( ...
 [dmd, daq] = makeHardware(config);
 cleanupHw = onCleanup(@() teardownHardware(dmd, daq)); %#ok<NASGU>
 
-daq.configureAnalogInput(config.daq.analogInChannels, config.daq.aiRangeV);
+aiSE = []; if isfield(config.daq,'aiSingleEndedChannels'), aiSE = config.daq.aiSingleEndedChannels; end
+daq.configureAnalogInput(config.daq.analogInChannels, config.daq.aiRangeV, aiSE);
 daq.configureAnalogOutput(config.daq.analogOutChannels);
 daq.configureDigitalOutput(config.daq.digitalOutChannels);
 
@@ -45,10 +46,17 @@ end
 offsetsUm = tfp.trial.TrialSequence.gaussianGrid2D(g.maxUm, g.nPointsPerHalfAxis, g.sigmaPsfUm);
 nReps     = g.nReps;
 powerMw   = 5;
-radiusPx  = 14;
+radiusPx  = 15;
 
 sequence = tfp.trial.TrialSequence.generatePPSF( ...
     targets, offsetsUm, nReps, powerMw);
+
+if isfield(config, 'bringupMode') && config.bringupMode
+    for k = 1:numel(sequence.trials)
+        sequence.trials(k).duration_s = 0.1;
+        sequence.trials(k).preStim_s  = 0.0;
+    end
+end
 
 % Attach patternRef per trial: spot at center + 2D offset.
 for k = 1:numel(sequence.trials)
@@ -125,14 +133,16 @@ switch lower(char(config.hardwareKind))
         dmd = tfp.hardware.MockDMD();
         daq = tfp.hardware.MockDAQ();
     case 'real'
-        error('tfp:experiments:exp_ppsf_2d:notImplemented', ...
-            'real hardware is Phase 2+.');
+        dmd = tfp.hardware.DLP650LNIR_DMD(config.dmd);
+        daq = tfp.hardware.NI6323_DAQ(config.daq);
     otherwise
         error('tfp:experiments:exp_ppsf_2d:badKind', ...
             'unknown hardwareKind: %s.', config.hardwareKind);
 end
-dmd.initialize(config.dmd);
-daq.initialize(config.daq);
+if strcmp(lower(char(config.hardwareKind)), 'mock')
+    dmd.initialize(config.dmd);
+    daq.initialize(config.daq);
+end
 end
 
 function teardownHardware(dmd, daq)
@@ -145,12 +155,16 @@ if isfield(config, 'calibration_file') && ~isempty(char(config.calibration_file)
     error('tfp:experiments:exp_ppsf_2d:notImplemented', ...
         'calibration_file loading is Phase 3.');
 end
+umPerPx = 1;
+if isfield(config, 'dmd') && isfield(config.dmd, 'umPerPixel')
+    umPerPx = double(config.dmd.umPerPixel);
+end
 calibration.dmdToSample_affine = eye(3);
 calibration.dmdToScan_affine   = eye(3);
-calibration.pixelsPerUm        = 1;
-calibration.umPerPixel         = 1;
+calibration.pixelsPerUm        = 1 / umPerPx;
+calibration.umPerPixel         = umPerPx;
 calibration.timestamp          = datetime('now');
-calibration.notes              = 'identity fallback (mock)';
+calibration.notes              = sprintf('pixel-scale only: %.4f um/px (no spatial calibration)', umPerPx);
 end
 
 function targets = resolveTargets(config, calibration)
@@ -160,6 +174,10 @@ if strcmpi(char(config.hardwareKind), 'mock')
     else
         targets = [400, 400; 500, 400; 600, 400];
     end
+    return
+end
+if isfield(config, 'testTargets') && ~isempty(config.testTargets)
+    targets = reshape(double(config.testTargets(:)), 2, [])';
     return
 end
 roiOpts = struct();

@@ -11,7 +11,7 @@
 %        Must contain .dmdToScan_affine (3x3).
 %     2. DMD initialised and pattern memory available (ALP-4.3, DLi4130 or
 %        DLP650LNIR).
-%     3. NI-6323 (Dev1) connected; ao1 wired to FS-50 power modulation input.
+%     3. NI-6323 (Dev1) connected; ao3 wired to FS-50 power modulation input.
 %     4. msocket library on the MATLAB path (or set MSOCKET_PATH below).
 %     5. Operator on the imaging PC ready to send ROI centroids via msocket.
 %
@@ -35,7 +35,7 @@ SESSION_DIR  = fullfile('data', ...
 % DAQ
 DAQ_DEVICE   = 'Dev1';
 DAQ_RATE     = 10000;
-AO_CHANNEL   = 'ao1';      % FS-50 power modulation input
+AO_CHANNEL   = 'ao3';      % FS-50 power modulation input (confirmed rig wiring)
 
 % DMD (ALP-4.1 DLi4130 until DLP650LNIR arrives)
 DMD_ROWS     = 768;
