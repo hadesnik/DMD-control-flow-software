@@ -48,6 +48,16 @@ function [patterns, pinfo] = makeTimingPatterns(dmd, cfg)
 %         cfg.pattern.radiusPx  scalar double > 0
 %             Radius of every spot (both on and off) in DMD pixels.
 %
+%         cfg.pattern.illuminatedRegion  [c0 c1 r0 r1] | []   (optional)
+%             Bounding box (DMD px) of the laser-illuminated footprint — the
+%             pi-Shaper flat-top.  When non-empty, every spot's disc is checked
+%             against this box and a warning is issued for any spot that
+%             extends outside it (a soft check, not an error — the patterns are
+%             still built).  [] (the default, or an absent field) skips the
+%             check.  Mirrors the illuminatedRegion hint used by the
+%             exp_ensemble_* experiments.  For the pi-Shaper 6 mm flat-top on a
+%             1280x800 DLP650LNIR (10.8 um pitch) the box is [362 918 122 678].
+%
 %   Outputs
 %   -------
 %   patterns : logical(nRows, nCols, 2)
@@ -69,6 +79,8 @@ function [patterns, pinfo] = makeTimingPatterns(dmd, cfg)
 %                       illumination symmetry or computing duty-cycle power.
 %         .nRows       scalar double — panel row count (from dmd).
 %         .nCols       scalar double — panel column count (from dmd).
+%         .illuminatedRegion  [c0 c1 r0 r1] or [] — the lit-footprint box that
+%                       was checked against (echoes cfg.pattern.illuminatedRegion).
 %
 %   Errors (error identifier format: tfp:timing:makeTimingPatterns:<reason>)
 %   ------
@@ -80,6 +92,9 @@ function [patterns, pinfo] = makeTimingPatterns(dmd, cfg)
 %       A spot centre coordinate is completely outside the panel array.
 %       (Partial clip — centre inside array, but some disk pixels fall
 %       outside — issues a warning with the same id and continues.)
+%   tfp:timing:makeTimingPatterns:badIlluminatedRegion
+%       cfg.pattern.illuminatedRegion is non-empty but is not a 4-element
+%       finite [c0 c1 r0 r1] vector with c0<=c1 and r0<=r1.
 %
 %   Warnings
 %   --------
@@ -87,6 +102,9 @@ function [patterns, pinfo] = makeTimingPatterns(dmd, cfg)
 %       Spot disc extends beyond the panel edge and will be clipped.
 %       The measurement is still valid but spot area (activePixels) will be
 %       smaller than pi*radiusPx^2.
+%   tfp:timing:makeTimingPatterns:spotOutsideIllumination
+%       cfg.pattern.illuminatedRegion is set and a spot disc extends outside
+%       the lit footprint, so that spot will be dim/dark on real hardware.
 %
 %   Example
 %   -------
@@ -132,6 +150,13 @@ offCoords = cfg.pattern.offCoords;
 offMode   = cfg.pattern.offMode;
 radiusPx  = cfg.pattern.radiusPx;
 
+% Optional illuminated-footprint box; absent field or [] => no check.
+if isfield(cfg.pattern, 'illuminatedRegion')
+    illuminatedRegion = cfg.pattern.illuminatedRegion;
+else
+    illuminatedRegion = [];
+end
+
 % Normalise offMode to char so strcmp works regardless of string/char input
 if isstring(offMode)
     offMode = char(offMode);
@@ -149,6 +174,15 @@ validateCoord(onCoords,  'onCoords',  nRows, nCols, radiusPx);
 
 if strcmp(offMode, 'spot')
     validateCoord(offCoords, 'offCoords', nRows, nCols, radiusPx);
+end
+
+% Optional soft check against the illuminated footprint (pi-Shaper flat-top).
+if ~isempty(illuminatedRegion)
+    illuminatedRegion = validateIlluminatedRegion(illuminatedRegion);
+    checkSpotInsideRegion(onCoords,  'onCoords',  radiusPx, illuminatedRegion);
+    if strcmp(offMode, 'spot')
+        checkSpotInsideRegion(offCoords, 'offCoords', radiusPx, illuminatedRegion);
+    end
 end
 
 % -------------------------------------------------------------------------
@@ -192,6 +226,11 @@ pinfo.radiusPx    = radiusPx;
 pinfo.activePixels = [nnz(patA)  nnz(patB)];
 pinfo.nRows       = nRows;
 pinfo.nCols       = nCols;
+if isempty(illuminatedRegion)
+    pinfo.illuminatedRegion = [];
+else
+    pinfo.illuminatedRegion = illuminatedRegion(:)';   % 1×4 [c0 c1 r0 r1]
+end
 
 end % makeTimingPatterns
 
@@ -234,3 +273,52 @@ if (col - radiusPx) < 1 || (col + radiusPx) > nCols || ...
 end
 
 end % validateCoord
+
+
+% =========================================================================
+% Local helper — illuminated-region validation
+% =========================================================================
+function region = validateIlluminatedRegion(region)
+%validateIlluminatedRegion Check a [c0 c1 r0 r1] lit-footprint box.
+%   Errors tfp:timing:makeTimingPatterns:badIlluminatedRegion if the input is
+%   not a 4-element finite vector with c0<=c1 and r0<=r1. Returns it as a row.
+
+if ~isnumeric(region) || numel(region) ~= 4 || ~all(isfinite(region(:)))
+    error('tfp:timing:makeTimingPatterns:badIlluminatedRegion', ...
+        ['cfg.pattern.illuminatedRegion must be a 4-element finite ' ...
+         '[c0 c1 r0 r1] vector or []; got %s.'], mat2str(region));
+end
+region = double(region(:)');
+if region(1) > region(2) || region(3) > region(4)
+    error('tfp:timing:makeTimingPatterns:badIlluminatedRegion', ...
+        ['cfg.pattern.illuminatedRegion must satisfy c0<=c1 and r0<=r1; ' ...
+         'got [%g %g %g %g].'], region(1), region(2), region(3), region(4));
+end
+
+end % validateIlluminatedRegion
+
+
+% =========================================================================
+% Local helper — soft check that a spot disc fits inside the lit footprint
+% =========================================================================
+function checkSpotInsideRegion(coords, coordName, radiusPx, region)
+%checkSpotInsideRegion Warn if a spot disc extends outside the lit footprint.
+%   Soft check only (no error): mirrors the exp_ensemble_* illuminatedRegion
+%   hint. Warns tfp:timing:makeTimingPatterns:spotOutsideIllumination.
+
+col = coords(1);
+row = coords(2);
+c0 = region(1); c1 = region(2);
+r0 = region(3); r1 = region(4);
+
+if (col - radiusPx) < c0 || (col + radiusPx) > c1 || ...
+   (row - radiusPx) < r0 || (row + radiusPx) > r1
+    warning('tfp:timing:makeTimingPatterns:spotOutsideIllumination', ...
+        ['cfg.pattern.%s spot (centre [col=%g row=%g], radius=%g px) ' ...
+         'extends outside the illuminated footprint [c0=%g c1=%g r0=%g r1=%g]; ' ...
+         'that spot will be dim/dark on real hardware. Move it inside the lit ' ...
+         'region or clear cfg.pattern.illuminatedRegion to silence this check.'], ...
+        coordName, col, row, radiusPx, c0, c1, r0, r1);
+end
+
+end % checkSpotInsideRegion

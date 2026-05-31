@@ -102,6 +102,42 @@ classdef test_timing_analysis < matlab.unittest.TestCase
         end
 
         % -----------------------------------------------------------------
+        % 2b. makeTimingPatterns illuminatedRegion soft-check (6 mm flat-top)
+        % -----------------------------------------------------------------
+        function testIlluminatedRegionCheck(testCase)
+            dmd = struct('nRows', 800, 'nCols', 1280);
+
+            % Default config: illuminatedRegion is [] -> no check, no warning.
+            cfg = defaultTimingConfig();
+            testCase.verifyEqual(cfg.pattern.illuminatedRegion, []);
+            testCase.verifyWarningFree(@() makeTimingPatterns(dmd, cfg));
+
+            % 6 mm flat-top box for a 1280x800 / 10.8 um chip (centre +/- 278 px).
+            box = [362 918 122 678];
+
+            % The default on/off spots both sit inside the 6 mm box -> no
+            % warning, and pinfo echoes the box. This also locks in the fix
+            % that the default offCoords is inside the lit footprint.
+            cfgIn = defaultTimingConfig(struct('pattern', ...
+                struct('illuminatedRegion', box)));
+            [~, pinfo] = testCase.verifyWarningFree( ...
+                @() makeTimingPatterns(dmd, cfgIn));
+            testCase.verifyEqual(pinfo.illuminatedRegion, box);
+
+            % An off-spot pushed outside the box must warn (soft check, no error).
+            cfgOut = defaultTimingConfig(struct('pattern', struct( ...
+                'illuminatedRegion', box, 'offCoords', [160 400])));
+            testCase.verifyWarning(@() makeTimingPatterns(dmd, cfgOut), ...
+                'tfp:timing:makeTimingPatterns:spotOutsideIllumination');
+
+            % A malformed region errors.
+            cfgBad = defaultTimingConfig(struct('pattern', struct( ...
+                'illuminatedRegion', [1 2 3])));
+            testCase.verifyError(@() makeTimingPatterns(dmd, cfgBad), ...
+                'tfp:timing:makeTimingPatterns:badIlluminatedRegion');
+        end
+
+        % -----------------------------------------------------------------
         % 3. CORE: synth -> analyze ground-truth recovery
         % -----------------------------------------------------------------
         function testSynthAnalyzeRecovery(testCase)

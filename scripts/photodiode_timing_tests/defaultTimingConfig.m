@@ -28,7 +28,8 @@ function cfg = defaultTimingConfig(override)
 %     .channels            Sub-struct: apdAI, trigDI, trigAO channel IDs.
 %     .trigger             Sub-struct: mode, voltage levels, pulseWidthFrac.
 %     .sweep               Sub-struct: ratesHz, transitionsPerRate.
-%     .pattern             Sub-struct: DMD pattern coords, radiusPx, stack.
+%     .pattern             Sub-struct: DMD pattern coords, radiusPx,
+%                          illuminatedRegion (optional lit-footprint check), stack.
 %     .dmd                 Sub-struct: array geometry, backend SDK params.
 %     .paths               Sub-struct: dataDir resolved relative to repo root.
 %     .makePlots           Logical.  Enable figure generation in sweep fns.
@@ -98,9 +99,18 @@ cfg.sweep.transitionsPerRate = 200;      % optical transitions captured per rate
 
 % --- pattern ---
 cfg.pattern.onCoords  = [640 400];  % [col row] spot A: on-axis, aligned to pinhole
-cfg.pattern.offCoords = [160 400];  % [col row] spot B: off-axis
+cfg.pattern.offCoords = [900 400];  % [col row] spot B: off-axis but kept INSIDE the
+                                    %   ~6 mm flat-top (260 px from centre = 2.8 mm), so B
+                                    %   represents LIT light steered away from the pinhole
+                                    %   rather than an unilluminated (dark) mirror region.
 cfg.pattern.offMode   = 'spot';     % 'spot' | 'alloff'
 cfg.pattern.radiusPx  = 14;
+% Optional illuminated-footprint box [c0 c1 r0 r1] (DMD px); [] = no check.
+%   The pi-Shaper puts a 6 mm flat-top on the DLP650LNIR (10.8 um pitch) => ~556 px
+%   diameter, i.e. centre +/- 278 px. Set this to enforce that both spots fall inside
+%   the lit disc; makeTimingPatterns then warns on any spot that extends outside it.
+%   For the default 1280x800 chip the 6 mm box is [362 918 122 678].
+cfg.pattern.illuminatedRegion = [];
 cfg.pattern.stack     = [];         % optional logical(nRows,nCols,2) cache filled by sweep
 
 % --- dmd ---

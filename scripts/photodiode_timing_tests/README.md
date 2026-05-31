@@ -93,8 +93,12 @@ The physical **pinhole is over the APD aperture**, not in software. Pattern A mu
 - **Pattern A** (`cfg.pattern.onCoords = [col row]`): a circular spot (radius `cfg.pattern.radiusPx` pixels) at the given DMD coordinate, aligned to the pinhole over the APD. Before running a sweep, iteratively adjust `onCoords` until the APD voltage is maximised.
 
 - **Pattern B** (`cfg.pattern.offCoords = [col row]`, or `cfg.pattern.offMode = 'alloff'`):
-  - `offMode = 'spot'` (default): a spot at `offCoords`, displaced laterally so it misses the pinhole. Produces a dark APD reading.
+  - `offMode = 'spot'` (default): a spot at `offCoords`, displaced laterally so it misses the pinhole. Produces a dark APD reading. The default `offCoords = [900 400]` is **inside** the 6 mm flat-top (260 px ≈ 2.8 mm from centre), so B represents *lit* light steered off the pinhole — not an unilluminated mirror region. Keep `offCoords` inside the lit disc for a representative switch.
   - `offMode = 'alloff'`: all DMD mirrors flipped to the "dark" state. Simpler, but exercises only mirror-park mechanics rather than an active switch to a second pattern.
+
+### Illuminated-footprint check (optional)
+
+The π-Shaper puts a **6 mm flat-top** on the DLP650LNIR (10.8 µm pitch) — only ~556 px (centre ± 278 px) of the 1280×800 chip is lit. A spot outside that disc is dark on real hardware regardless of mirror state. Set `cfg.pattern.illuminatedRegion = [c0 c1 r0 r1]` (DMD px) and `makeTimingPatterns` warns (`tfp:timing:makeTimingPatterns:spotOutsideIllumination`) for any spot whose disc extends outside it. Default is `[]` (no check), mirroring the optional `illuminatedRegion` hint in the `exp_ensemble_*` experiments. For the default chip the 6 mm box is `[362 918 122 678]`.
 
 Patterns are built once by `makeTimingPatterns` and cached in `cfg.pattern.stack` (a `logical(nRows, nCols, 2)` array) for reuse across all rates in the sweep.
 
@@ -188,9 +192,10 @@ Key fields in the config struct (all accessible via `defaultTimingConfig`):
 | `sweep.ratesHz` | `[50 100 200 500 1000 2000 5000 8000 10000 12500]` | Commanded rates to sweep |
 | `sweep.transitionsPerRate` | `200` | Optical transitions captured per rate |
 | `pattern.onCoords` | `[640 400]` | `[col row]` spot A: aligned to APD pinhole |
-| `pattern.offCoords` | `[160 400]` | `[col row]` spot B: off-axis |
+| `pattern.offCoords` | `[900 400]` | `[col row]` spot B: off-axis, inside the 6 mm lit disc |
 | `pattern.offMode` | `'spot'` | `'spot'` or `'alloff'` |
 | `pattern.radiusPx` | `14` | Spot radius in DMD pixels |
+| `pattern.illuminatedRegion` | `[]` | Optional `[c0 c1 r0 r1]` lit-footprint box; warns on spots outside it (6 mm box = `[362 918 122 678]`) |
 | `dmd.nRows` | `800` | DMD rows |
 | `dmd.nCols` | `1280` | DMD columns |
 | `dmd.maxPatternRate` | `12500` | Hard ceiling from DLPC410 spec (Hz) |
