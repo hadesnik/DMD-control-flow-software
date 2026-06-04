@@ -86,3 +86,34 @@ scanimage:
   streamLiveF: true          # enable real-time F packet polling in waitForCompletion
   nExpectedCells: 10         # pre-allocate liveF_ accumulator rows
   frameStreamPort: 3043      # same socket as control channel
+
+# SLM (spatial light modulator) configuration. Consumed by
+# tfp.hardware.RemoteSLM and tfp.patterns.threeDShot.defaultParams.
+slm:
+  connectionMode: msocket
+  dims: [1024, 1024]
+  pitch_um: 17
+  lutFile: ''                 # %VERIFY path to Meadowlark phase LUT file on SLM PC
+  slmPcIp: '192.168.1.100'   # %VERIFY IP address of the SLM PC on the rig network
+  slmPort: 3046
+  msocketPath: ''             # %VERIFY path to msocket DLL/toolbox on this PC
+  overdrive: false
+  lambda_nm: 1030
+  f_ft_um: 16800              # %VERIFY focal length of Fourier transform lens (µm)
+  mag: 1.0                    # %VERIFY relay magnification from SLM to objective BFP
+  NA_eff: 0.6                 # %VERIFY effective NA at sample with SLM path
+  n: 1.33
+  diskRadius_um: 5
+  gsIters: 20
+  gsWeighted: true
+  gsSeed: 0
+  maxCells: 20
+  addressableRadiusUm: 150
+  minSpacingUm: 15
+  slmScanCalib_file: ''       # %VERIFY path to SLM-to-ScanImage calibration .mat
+  efficiencyMap_file: ''      # %VERIFY path to SLM efficiency map .mat
+
+# Power-curve experiment parameters. Consumed by exp_power_curve_3dshot.
+powerCurve:
+  perCellPowersMw: [1, 2, 4]
+  nReps: 2

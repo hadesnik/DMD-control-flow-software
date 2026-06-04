@@ -83,3 +83,34 @@ trial:
   nReps: 5
   distancesUm: [0, 3, 6, 9, 12, 15, 20, 30, 40]
   shuffle: true
+
+# SLM (spatial light modulator) configuration. Consumed by
+# tfp.hardware.RemoteSLM and tfp.patterns.threeDShot.defaultParams.
+slm:
+  connectionMode: loopback
+  dims: [1024, 1024]
+  pitch_um: 17
+  lutFile: ""
+  slmPcIp: "127.0.0.1"
+  slmPort: 3046
+  msocketPath: ""
+  overdrive: false
+  lambda_nm: 1030
+  f_ft_um: 16800
+  mag: 1.0
+  NA_eff: 0.6
+  n: 1.33
+  diskRadius_um: 5
+  gsIters: 20
+  gsWeighted: true
+  gsSeed: 0
+  maxCells: 20
+  addressableRadiusUm: 150
+  minSpacingUm: 15
+  slmScanCalib_file: ""
+  efficiencyMap_file: ""
+
+# Power-curve experiment parameters. Consumed by exp_power_curve_3dshot.
+powerCurve:
+  perCellPowersMw: [1, 2, 4]
+  nReps: 2
