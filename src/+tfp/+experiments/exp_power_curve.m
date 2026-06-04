@@ -3,7 +3,7 @@ function result = exp_power_curve(configOrPath, sessionName)
 %
 %   Phase 1: 1 hardcoded target, 3 powers, 2 reps = 6 trials.
 
-config = loadOrUseConfig(configOrPath);
+config = tfp.util.loadOrUseConfig(configOrPath, 'exp_power_curve');
 
 sessionDir = fullfile(config.paths.dataDir, char(sessionName));
 if ~isfolder(sessionDir), mkdir(sessionDir); end
@@ -11,7 +11,7 @@ if ~isfolder(sessionDir), mkdir(sessionDir); end
 tfp.io.sessionLog(sessionDir, 'session-start', struct( ...
     'experiment', 'exp_power_curve', 'sessionName', char(sessionName)));
 
-[dmd, daq] = makeHardware(config);
+[dmd, daq] = tfp.util.makeHardware(config, 'exp_power_curve');
 cleanupHw = onCleanup(@() teardownHardware(dmd, daq)); %#ok<NASGU>
 
 aiSE = []; if isfield(config.daq,'aiSingleEndedChannels'), aiSE = config.daq.aiSingleEndedChannels; end
@@ -69,47 +69,9 @@ end
 
 % --- Local helpers ---
 
-function config = loadOrUseConfig(configOrPath)
-if isstruct(configOrPath)
-    config = configOrPath;
-elseif ischar(configOrPath) || (isstring(configOrPath) && isscalar(configOrPath))
-    config = tfp.io.loadConfig(char(configOrPath));
-else
-    error('tfp:experiments:exp_power_curve:badConfig', ...
-        'configOrPath must be a char/string path or a config struct.');
-end
-end
-
-function [dmd, daq] = makeHardware(config)
-switch lower(char(config.hardwareKind))
-    case 'mock'
-        dmd = tfp.hardware.MockDMD();
-        daq = tfp.hardware.MockDAQ();
-    case 'real'
-        dmd = tfp.hardware.DLP650LNIR_DMD(config.dmd);
-        daq = tfp.hardware.NI6323_DAQ(config.daq);
-    otherwise
-        error('tfp:experiments:exp_power_curve:badKind', ...
-            'unknown hardwareKind: %s.', config.hardwareKind);
-end
-if strcmp(lower(char(config.hardwareKind)), 'mock')
-    dmd.initialize(config.dmd);
-    daq.initialize(config.daq);
-end
-end
-
 function teardownHardware(dmd, daq)
 try, daq.cleanup(); catch, end %#ok<CTCH>
 try, dmd.cleanup(); catch, end %#ok<CTCH>
-end
-
-function r = tracePeakResponse(ai)
-[N, nChans] = size(ai);
-frames    = reshape(ai, [N, 1, nChans]);
-roi       = true(1, nChans);
-nBaseline = max(1, round(N / 4));
-trace     = tfp.analysis.onlineDFF(frames, roi, 1:nBaseline);
-r         = max(trace);
 end
 
 function summary = summarizeByPower(trials, powersMw)
@@ -122,7 +84,7 @@ for p = 1:numel(powersMw)
         if ~strcmp(tr.status, 'complete'), continue; end
         if ~isstruct(tr.data) || ~isfield(tr.data, 'aiData'), continue; end
         if abs(tr.powerMw - pw) > 1e-9, continue; end
-        responses(end+1) = tracePeakResponse(tr.data.aiData); %#ok<AGROW>
+        responses(end+1) = tfp.analysis.peakResponseFromAi(tr.data.aiData); %#ok<AGROW>
     end
     summary(p).powerMw = pw;
     if isempty(responses)

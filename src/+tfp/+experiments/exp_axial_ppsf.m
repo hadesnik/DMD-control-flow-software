@@ -19,7 +19,7 @@ function result = exp_axial_ppsf(configOrPath, sessionName)
 %     config.plm.sys           — struct passed to computeDefocusPattern.
 %     config.mockTargets        — Nx2 [col row] override for mock targets.
 
-config = loadOrUseConfig(configOrPath);
+config = tfp.util.loadOrUseConfig(configOrPath, 'exp_axial_ppsf');
 
 sessionDir = fullfile(config.paths.dataDir, char(sessionName));
 if ~isfolder(sessionDir), mkdir(sessionDir); end
@@ -27,7 +27,7 @@ if ~isfolder(sessionDir), mkdir(sessionDir); end
 tfp.io.sessionLog(sessionDir, 'session-start', struct( ...
     'experiment', 'exp_axial_ppsf', 'sessionName', char(sessionName)));
 
-[dmd, daq] = makeHardware(config);
+[dmd, daq] = tfp.util.makeHardware(config, 'exp_axial_ppsf');
 plm        = makePlm(config);
 cleanupHw  = onCleanup(@() teardownHardware(dmd, daq, plm)); %#ok<NASGU>
 
@@ -88,7 +88,7 @@ if isfield(config, 'fakeCells') && ~isempty(config.fakeCells)
     if isfield(config, 'imaging')
         siCfg = config.imaging;
     end
-    cells    = buildCells(config.fakeCells);
+    cells    = tfp.util.buildCells(config.fakeCells);
     siBridge = tfp.hardware.MockScanImageBridge(cells, siCfg);
 end
 
@@ -126,35 +126,6 @@ end
 end
 
 % --- Local helpers ---
-
-function config = loadOrUseConfig(configOrPath)
-if isstruct(configOrPath)
-    config = configOrPath;
-elseif ischar(configOrPath) || (isstring(configOrPath) && isscalar(configOrPath))
-    config = tfp.io.loadConfig(char(configOrPath));
-else
-    error('tfp:experiments:exp_axial_ppsf:badConfig', ...
-        'configOrPath must be a char/string path or a config struct.');
-end
-end
-
-function [dmd, daq] = makeHardware(config)
-switch lower(char(config.hardwareKind))
-    case 'mock'
-        dmd = tfp.hardware.MockDMD();
-        daq = tfp.hardware.MockDAQ();
-    case 'real'
-        dmd = tfp.hardware.DLP650LNIR_DMD(config.dmd);
-        daq = tfp.hardware.NI6323_DAQ(config.daq);
-    otherwise
-        error('tfp:experiments:exp_axial_ppsf:badKind', ...
-            'unknown hardwareKind: %s.', config.hardwareKind);
-end
-if strcmp(lower(char(config.hardwareKind)), 'mock')
-    dmd.initialize(config.dmd);
-    daq.initialize(config.daq);
-end
-end
 
 function plm = makePlm(config)
 switch lower(char(config.hardwareKind))
@@ -233,27 +204,6 @@ dmd_h = scanToDmd * pts_h;
 dmdCoords = dmd_h(1:2, :)';
 end
 
-function cells = buildCells(fakeCellsCfg)
-nCells = numel(fakeCellsCfg);
-cells  = cell(1, nCells);
-for k = 1:nCells
-    fc   = fakeCellsCfg(k);
-    args = {};
-    if isfield(fc, 'amplitude'),   args = [args, {'amplitude',   double(fc.amplitude)}]; end %#ok<AGROW>
-    if isfield(fc, 'sigma'),       args = [args, {'sigma',       double(fc.sigma)}]; end %#ok<AGROW>
-    if isfield(fc, 'aiChannel'),   args = [args, {'aiChannel',   double(fc.aiChannel)}]; end %#ok<AGROW>
-    if isfield(fc, 'tag'),         args = [args, {'responseTag', char(fc.tag)}]; end %#ok<AGROW>
-    cells{k} = tfp.sim.CellResponseModel( ...
-        [double(fc.dmdCol), double(fc.dmdRow)], double(fc.radiusDmd), args{:});
-end
-end
-
-function r = tracePeakResponse(F)
-BASELINE = 1000;
-dff = (double(F) - BASELINE) / BASELINE;
-r   = max(dff(:));
-end
-
 function summary = summarizeByDz(trials, dzUm)
 summary = struct('dzUm', {}, 'meanResponse', {}, 'nTrials', {});
 for d = 1:numel(dzUm)
@@ -268,7 +218,7 @@ for d = 1:numel(dzUm)
                 ~isfield(tr.data.imaging, 'F')
             continue;
         end
-        responses(end+1) = tracePeakResponse(tr.data.imaging.F); %#ok<AGROW>
+        responses(end+1) = tfp.analysis.peakResponseFromF(tr.data.imaging.F); %#ok<AGROW>
     end
     summary(d).dzUm = dz;
     if isempty(responses)

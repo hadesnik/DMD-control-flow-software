@@ -39,7 +39,7 @@ function result = exp_power_curve_3dshot(configOrPath, sessionName)
 %       summary                struct from summarizeByPowerPerCell
 %       runError               (optional) struct if the sequencer threw
 
-config = loadOrUseConfig(configOrPath);
+config = tfp.util.loadOrUseConfig(configOrPath, 'exp_power_curve_3dshot');
 
 sessionDir = fullfile(config.paths.dataDir, char(sessionName));
 if ~isfolder(sessionDir), mkdir(sessionDir); end
@@ -49,7 +49,7 @@ tfp.io.sessionLog(sessionDir, 'session-start', struct( ...
     'sessionName', char(sessionName)));
 
 % --- Hardware setup --------------------------------------------------------
-[dmd, daq] = makeHardware(config);
+[dmd, daq] = tfp.util.makeHardware(config, 'exp_power_curve_3dshot');
 slm        = tfp.hardware.RemoteSLM(config.slm);
 slm.initialize(config.slm);
 
@@ -148,7 +148,7 @@ siBridge = [];
 if isfield(config, 'fakeCells') && ~isempty(config.fakeCells)
     siCfg = struct('frameRate', 30, 'simulateLatency', false);
     if isfield(config, 'imaging'), siCfg = config.imaging; end
-    cells    = buildCells(config.fakeCells);
+    cells    = tfp.util.buildCells(config.fakeCells);
     siBridge = tfp.hardware.MockScanImageBridge(cells, siCfg);
 end
 
@@ -193,58 +193,12 @@ end
 % Local helpers
 % =========================================================================
 
-function config = loadOrUseConfig(configOrPath)
-if isstruct(configOrPath)
-    config = configOrPath;
-elseif ischar(configOrPath) || (isstring(configOrPath) && isscalar(configOrPath))
-    config = tfp.io.loadConfig(char(configOrPath));
-else
-    error('tfp:experiments:exp_power_curve_3dshot:badConfig', ...
-        'configOrPath must be a char/string path or a config struct.');
-end
-end
-
-function [dmd, daq] = makeHardware(config)
-switch lower(char(config.hardwareKind))
-    case 'mock'
-        dmd = tfp.hardware.MockDMD();
-        daq = tfp.hardware.MockDAQ();
-    case 'real'
-        dmd = tfp.hardware.DLP650LNIR_DMD(config.dmd);
-        daq = tfp.hardware.NI6323_DAQ(config.daq);
-    otherwise
-        error('tfp:experiments:exp_power_curve_3dshot:badKind', ...
-            'unknown hardwareKind: %s.', config.hardwareKind);
-end
-if strcmp(lower(char(config.hardwareKind)), 'mock')
-    dmd.initialize(config.dmd);
-    daq.initialize(config.daq);
-end
-end
-
 function teardownHardware(dmd, daq, slm)
 try, slm.blank();        catch, end %#ok<CTCH>
 try, slm.slmPower(false); catch, end %#ok<CTCH>
 try, slm.cleanup();      catch, end %#ok<CTCH>
 try, daq.cleanup();       catch, end %#ok<CTCH>
 try, dmd.cleanup();       catch, end %#ok<CTCH>
-end
-
-function cells = buildCells(fakeCellsCfg)
-%buildCells Build CellResponseModel cell array from the fakeCells config struct array.
-%   Returns 1×N cell array; callers index with cells{k}.
-nCells = numel(fakeCellsCfg);
-cells  = cell(1, nCells);
-for k = 1:nCells
-    fc   = fakeCellsCfg(k);
-    args = {};
-    if isfield(fc, 'amplitude'),   args = [args, {'amplitude',   double(fc.amplitude)}]; end %#ok<AGROW>
-    if isfield(fc, 'sigma'),       args = [args, {'sigma',       double(fc.sigma)}]; end %#ok<AGROW>
-    if isfield(fc, 'aiChannel'),   args = [args, {'aiChannel',   double(fc.aiChannel)}]; end %#ok<AGROW>
-    if isfield(fc, 'tag'),         args = [args, {'responseTag', char(fc.tag)}]; end %#ok<AGROW>
-    cells{k} = tfp.sim.CellResponseModel( ...
-        [double(fc.dmdCol), double(fc.dmdRow)], double(fc.radiusDmd), args{:});
-end
 end
 
 function r = tracePeakResponse(aiCol)

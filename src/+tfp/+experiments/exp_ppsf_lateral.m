@@ -10,7 +10,7 @@ function result = exp_ppsf_lateral(configOrPath, sessionName)
 %   when hardwareKind='real' (config.roi options control port/timeout).
 %   In mock mode, config.mockTargets overrides the built-in defaults.
 
-config = loadOrUseConfig(configOrPath);
+config = tfp.util.loadOrUseConfig(configOrPath, 'exp_ppsf_lateral');
 
 sessionDir = fullfile(config.paths.dataDir, char(sessionName));
 if ~isfolder(sessionDir), mkdir(sessionDir); end
@@ -18,7 +18,7 @@ if ~isfolder(sessionDir), mkdir(sessionDir); end
 tfp.io.sessionLog(sessionDir, 'session-start', struct( ...
     'experiment', 'exp_ppsf_lateral', 'sessionName', char(sessionName)));
 
-[dmd, daq] = makeHardware(config);
+[dmd, daq] = tfp.util.makeHardware(config, 'exp_ppsf_lateral');
 cleanupHw = onCleanup(@() teardownHardware(dmd, daq)); %#ok<NASGU>
 
 aiSE = []; if isfield(config.daq,'aiSingleEndedChannels'), aiSE = config.daq.aiSingleEndedChannels; end
@@ -62,7 +62,7 @@ if isfield(config, 'fakeCells') && ~isempty(config.fakeCells)
     if isfield(config, 'imaging')
         siCfg = config.imaging;
     end
-    cells    = buildCells(config.fakeCells);
+    cells    = tfp.util.buildCells(config.fakeCells);
     siBridge = tfp.hardware.MockScanImageBridge(cells, siCfg);
 end
 
@@ -101,35 +101,6 @@ end
 end
 
 % --- Local helpers ---
-
-function config = loadOrUseConfig(configOrPath)
-if isstruct(configOrPath)
-    config = configOrPath;
-elseif ischar(configOrPath) || (isstring(configOrPath) && isscalar(configOrPath))
-    config = tfp.io.loadConfig(char(configOrPath));
-else
-    error('tfp:experiments:exp_ppsf_lateral:badConfig', ...
-        'configOrPath must be a char/string path or a config struct.');
-end
-end
-
-function [dmd, daq] = makeHardware(config)
-switch lower(char(config.hardwareKind))
-    case 'mock'
-        dmd = tfp.hardware.MockDMD();
-        daq = tfp.hardware.MockDAQ();
-    case 'real'
-        dmd = tfp.hardware.DLP650LNIR_DMD(config.dmd);
-        daq = tfp.hardware.NI6323_DAQ(config.daq);
-    otherwise
-        error('tfp:experiments:exp_ppsf_lateral:badKind', ...
-            'unknown hardwareKind: %s.', config.hardwareKind);
-end
-if strcmp(lower(char(config.hardwareKind)), 'mock')
-    dmd.initialize(config.dmd);
-    daq.initialize(config.daq);
-end
-end
 
 function teardownHardware(dmd, daq)
 try, daq.cleanup(); catch, end %#ok<CTCH>
@@ -190,33 +161,6 @@ dmd_h = scanToDmd * pts_h;
 dmdCoords = dmd_h(1:2, :)';
 end
 
-function cells = buildCells(fakeCellsCfg)
-% Build CellResponseModel cell array from the fakeCells config struct array.
-% Returns 1×N cell array; callers index with cells{k}.
-% Typed-array pre-allocation (backward loop) requires a no-arg constructor,
-% which CellResponseModel intentionally omits — hence cell array here.
-nCells = numel(fakeCellsCfg);
-cells  = cell(1, nCells);
-for k = 1:nCells
-    fc   = fakeCellsCfg(k);
-    args = {};
-    if isfield(fc, 'amplitude'),   args = [args, {'amplitude',   double(fc.amplitude)}]; end %#ok<AGROW>
-    if isfield(fc, 'sigma'),       args = [args, {'sigma',       double(fc.sigma)}]; end %#ok<AGROW>
-    if isfield(fc, 'aiChannel'),   args = [args, {'aiChannel',   double(fc.aiChannel)}]; end %#ok<AGROW>
-    if isfield(fc, 'tag'),         args = [args, {'responseTag', char(fc.tag)}]; end %#ok<AGROW>
-    cells{k} = tfp.sim.CellResponseModel( ...
-        [double(fc.dmdCol), double(fc.dmdRow)], double(fc.radiusDmd), args{:});
-end
-end
-
-function r = tracePeakResponse(F)
-% F: nCells x T raw fluorescence from SyntheticImaging.
-%   Encoding: F = BASELINE + dFF * BASELINE, BASELINE = 1000.
-BASELINE = 1000;
-dff = (double(F) - BASELINE) / BASELINE;
-r   = max(dff(:));
-end
-
 function summary = summarizeByDistance(trials, distancesUm)
 %summarizeByDistance Bin trials by the SIGNED x-component of their offset.
 %
@@ -239,7 +183,7 @@ for d = 1:numel(distancesUm)
                 ~isfield(tr.data.imaging, 'F')
             continue;
         end
-        responses(end+1) = tracePeakResponse(tr.data.imaging.F); %#ok<AGROW>
+        responses(end+1) = tfp.analysis.peakResponseFromF(tr.data.imaging.F); %#ok<AGROW>
     end
     summary(d).distanceUm = dist;
     if isempty(responses)
