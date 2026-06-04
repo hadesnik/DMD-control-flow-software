@@ -405,6 +405,15 @@ pass, 0 new failures.** Then `git add -A && git commit`.
   5 cells, f≈0.16, 3 powers × 2 reps = 6 trials, 0 failed.
 - [note] An authoring agent edited `CLAUDE.md` (even removed the "never edit outside
   the repo" rule). REVERTED and NOT committed — CLAUDE.md changes need the user's OK.
+- [done] Independent code review (4 finder angles + empirical triage). Refuted the
+  main false positive ("f≈1e-7 → all powers clip → use etaEffective"): the mock
+  smoke measured f=0.16≈1/N and ran 6 trials — `perCellDeliveredFraction` is the
+  correct 1/N-inclusive denominator. Confirmed + fixed one latent bug: per-axis
+  focal sampling (`dy_focal_um`) so non-square SLM dims map y-targets to the right
+  row (regression test added). Suite 301/301. Commit 36c7fb8.
+- [recommend, needs user OK] Promote duplicated `buildCells` / `tracePeakResponse` /
+  `loadOrUseConfig` / `makeHardware` (now 4-5 copies across experiments) to `+util`.
+  Deferred because it edits several working experiment files outside this feature.
 - [open/rig] Axis signs (lateral/axial), Blink SDK signatures, msocket struct-payload
   round-trip, and the absolute mW↔V (per-cell-fraction) calibration are all %VERIFY
   on the rig — see the plan's "Open items" and the in-code %VERIFY blocks.
