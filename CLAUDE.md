@@ -42,11 +42,11 @@ The NIR DMD (TI DLP650LNIR) is not in hand yet; arrival expected second week of 
 - Pacific Optica Avocado objective (10×, 0.6 NA, f_obj = 16.8 mm, BFP = 20 mm) — for full build
 - For prelim experiments, an Olympus 20× 1.0 NA (XLUMPLFLN20XW) on the existing windowed-mouse rig
 
-**Control hardware (two PCs)**:
+**Control hardware (two PCs for the core DMD path; +1 for the 3D-SHOT SLM comparison)**:
 - **Ephys/control PC** ("the DAQ PC"): NI PCIe-6323, runs MATLAB, drives the DMD, generates all triggers and analog control, acquires ephys + any auxiliary signals. **DMD lives here.**
 - **Imaging PC**: runs ScanImage (MATLAB) for 2p GCaMP imaging. Triggered by TTL from the DAQ PC.
 - **Substage widefield camera**: Basler acA2500-14um (USB3 Vision, 2592×1944, 2.2 µm pixel pitch, serial 22016738). Connected to the DAQ PC. Used only for spatial calibration (DMD→camera affine and ScanImage scan-field→camera affine); not used during experiments. Driver: `tfp.hardware.BaslerSubstageCamera` via MATLAB Image Acquisition Toolbox `gentl` adaptor (requires Basler pylon 6+ with pylon GenTL Producer).
-- **No third PC.** The lab's existing LCoS SLM rig uses a separate PC; this project deliberately does not, to avoid socket-communication bugs.
+- **Third PC only for the 3D-SHOT comparison.** The core DMD path deliberately uses no third PC, to avoid the socket-coupling bugs of the lab's existing LCoS SLM rig. The **separate** 3D-SHOT photostim benchmark (an Aim-1 comparison; requires a manual flip-mirror swap, so it never shares a run with the DMD path) does add a third PC — the Meadowlark 1024×1024 SLM PC — reached from the DAQ PC over msocket. That arm is implemented under `tfp.hardware.RemoteSLM`, `tfp.patterns.threeDShot`, and `scripts/slm_pc_setup/` (the SLM PC runs a thin "fat" server that owns the holography); see `tasks_3D-SHOT.md`.
 
 **Trigger topology**:
 - DAQ PC is the timing master.
