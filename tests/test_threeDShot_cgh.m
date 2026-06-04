@@ -118,6 +118,27 @@ classdef test_threeDShot_cgh < matlab.unittest.TestCase
             testCase.verifyLessThan(abs(rec.centroid_um(1, 2)), dx_f, ...
                 'peak centroid_y must stay within one focal pixel for a pure-dx target');
         end
+
+        function nonsquare_dims_steer_y_correctly(testCase)
+            %Regression: on a non-square SLM (Nx~=Ny) a pure-dy target must
+            %land at the correct focal-plane row. Verifies the y/row pixel
+            %mapping uses dy_focal_um (= lambda*f/(Ny*pitch)), not dx_focal_um.
+            params = tfp.patterns.threeDShot.defaultParams( ...
+                struct('dims', [256, 128], 'gsIters', 12));   % Nx=256, Ny=128
+            testCase.verifyNotEqual(params.dy_focal_um, params.dx_focal_um, ...
+                'test requires non-square dims so dy_focal_um ~= dx_focal_um');
+            dy_f = params.dy_focal_um;
+            dy   = 3 * dy_f;
+
+            mask = tfp.patterns.threeDShot.composeHologram([0, dy, 0], params);
+            rec  = tfp.patterns.threeDShot.reconstructFocalField(mask, params);
+
+            testCase.verifyEqual(size(mask), [params.Ny, params.Nx], ...
+                'non-square mask must be [Ny x Nx]');
+            testCase.verifyEqual(abs(rec.centroid_um(1, 2)), abs(dy), ...
+                'AbsTol', dy_f, ...
+                'pure-dy target must steer to the correct row on a non-square SLM');
+        end
     end
 
     % ------------------------------------------------------------------ %

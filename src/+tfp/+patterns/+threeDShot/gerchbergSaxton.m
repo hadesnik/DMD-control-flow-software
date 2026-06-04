@@ -61,13 +61,14 @@ d = d / max(d);   % normalise so max desired amplitude = 1
 cx = (Nx + 1) / 2;
 cy = (Ny + 1) / 2;
 dx_f = params.dx_focal_um;
+dy_f = params.dy_focal_um;   % equals dx_f for square SLMs; differs if Nx~=Ny
 
 li = zeros(N, 1);
 for k = 1:N
     x_k  = targets_xyz_um(k, 1);
     y_k  = targets_xyz_um(k, 2);
     mcol = round(cx + x_k / dx_f);
-    nrow = round(cy + y_k / dx_f);
+    nrow = round(cy + y_k / dy_f);
     mcol = max(1, min(Nx, mcol));
     nrow = max(1, min(Ny, nrow));
     li(k) = sub2ind([Ny, Nx], nrow, mcol);

@@ -90,6 +90,11 @@ perCell     = double(config.powerCurve.perCellPowersMw(:))';   % 1×nP
 nReps       = double(config.powerCurve.nReps);
 totalPowers = perCell ./ max(f, eps);                          % 1×nP
 
+% NOTE (calibration TODO, %VERIFY on rig): totalPowers are in per-cell-derived
+% mW (perCell / f). On the rig these must pass through the laser mW->V power
+% calibration before comparison to modulation_voltage_max (volts). Until that
+% calibration exists, the Sequencer treats powerMw as a direct voltage, so this
+% ceiling is a nominal guard rather than a calibrated power limit.
 maxVoltage = configField(config.laser, 'modulation_voltage_max', 5);
 keep = totalPowers <= maxVoltage;
 if ~all(keep)

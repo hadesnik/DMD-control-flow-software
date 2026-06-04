@@ -46,6 +46,10 @@ params.gsWeighted    = logical(configField(slmConfig, 'gsWeighted', true));
 params.gsSeed        = double(configField(slmConfig, 'gsSeed', 0));
 
 params.dx_focal_um = params.lambda_um * params.f_ft_um / (params.Nx * params.pitch_um);
+% Row (y) focal-plane sample size. Equals dx_focal_um for a square SLM, but
+% differs when Nx ~= Ny; the per-axis values must be used for x/y pixel
+% indexing so non-square dims map targets to the correct focal-plane row.
+params.dy_focal_um = params.lambda_um * params.f_ft_um / (params.Ny * params.pitch_um);
 end
 
 % --- Local helper ---

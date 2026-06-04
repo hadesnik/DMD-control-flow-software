@@ -36,6 +36,7 @@ function info = reconstructFocalField(mask, params, targets_xyz_um)
 Nx   = params.Nx;
 Ny   = params.Ny;
 dx_f = params.dx_focal_um;
+dy_f = params.dy_focal_um;   % equals dx_f for square SLMs; differs if Nx~=Ny
 cx   = (Nx + 1) / 2;
 cy   = (Ny + 1) / 2;
 
@@ -59,7 +60,7 @@ if nargin >= 3 && ~isempty(targets_xyz_um)
         x_k  = targets_xyz_um(k, 1);
         y_k  = targets_xyz_um(k, 2);
         mcol = round(cx + x_k / dx_f);
-        nrow = round(cy + y_k / dx_f);
+        nrow = round(cy + y_k / dy_f);
         mcol = max(1, min(Nx, mcol));
         nrow = max(1, min(Ny, nrow));
         li(k)       = sub2ind([Ny, Nx], nrow, mcol);
@@ -68,12 +69,12 @@ if nargin >= 3 && ~isempty(targets_xyz_um)
     end
 
     info.cellIntensity = I(li);
-    info.centroid_um   = [(mcol_all - cx) * dx_f, (nrow_all - cy) * dx_f];
+    info.centroid_um   = [(mcol_all - cx) * dx_f, (nrow_all - cy) * dy_f];
 else
     % Global peak
     [~, peakIdx]  = max(I(:));
     [pr, pc]      = ind2sub([Ny, Nx], peakIdx);
     info.cellIntensity = I(peakIdx);
-    info.centroid_um   = [(pc - cx) * dx_f, (pr - cy) * dx_f];
+    info.centroid_um   = [(pc - cx) * dx_f, (pr - cy) * dy_f];
 end
 end
