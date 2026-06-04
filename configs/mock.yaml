@@ -111,6 +111,11 @@ slm:
   efficiencyMap_file: ""
 
 # Power-curve experiment parameters. Consumed by exp_power_curve_3dshot.
+# The experiment commands total ao3 power = perCell / f, where f is the SLM's
+# per-cell delivered fraction (~1/N for N cells). In this uncalibrated mock,
+# totals are clipped at laser.modulation_voltage_max (5), so per-cell values are
+# kept small enough that the default multi-cell run stays feasible. On the rig,
+# perCell is in true mW and the mW->V laser calibration sets the absolute scale.
 powerCurve:
-  perCellPowersMw: [1, 2, 4]
+  perCellPowersMw: [0.2, 0.4, 0.8]
   nReps: 2

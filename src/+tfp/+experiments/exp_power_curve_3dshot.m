@@ -65,7 +65,10 @@ if strcmpi(char(config.hardwareKind), 'mock')
     if isfield(config, 'mockTargets') && ~isempty(config.mockTargets)
         siCentroids = double(config.mockTargets);
     else
-        siCentroids = [0, 0; 5, 0; -5, 0];
+        % Well-separated default ensemble (>= typical minSpacingUm, within a
+        % typical addressableRadiusUm) so a no-mockTargets run still exercises
+        % the multi-cell path rather than collapsing to one survivor.
+        siCentroids = [0, 0; 40, 0; -40, 0; 0, 40; 0, -40];
     end
 else
     roiOpts = struct();

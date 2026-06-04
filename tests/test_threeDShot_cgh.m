@@ -68,12 +68,14 @@ classdef test_threeDShot_cgh < matlab.unittest.TestCase
 
             [mask, ~, ~] = tfp.patterns.threeDShot.composeHologram( ...
                 [dx, 0, 0], params);
-            rec = tfp.patterns.threeDShot.reconstructFocalField( ...
-                mask, params, [dx, 0, 0]);
+            % Reconstruct WITHOUT passing targets so centroid_um reflects the
+            % ACTUAL global-peak location — this genuinely verifies the grating
+            % steers the spot to dx, not just target->pixel->µm arithmetic.
+            rec = tfp.patterns.threeDShot.reconstructFocalField(mask, params);
 
-            cx_um = rec.centroid_um(1, 1);        % x-component of centroid
+            cx_um = rec.centroid_um(1, 1);        % x of the actual peak
             testCase.verifyEqual(abs(cx_um), abs(dx), 'AbsTol', dx_f, ...
-                'abs(centroid_x) must match abs(dx) within one focal pixel');
+                'abs(peak centroid_x) must match abs(dx) within one focal pixel');
         end
 
         function centroid_monotone_in_dx(testCase)
@@ -87,8 +89,8 @@ classdef test_threeDShot_cgh < matlab.unittest.TestCase
                 dx = shifts(k);
                 [mask, ~, ~] = tfp.patterns.threeDShot.composeHologram( ...
                     [dx, 0, 0], params);
-                rec = tfp.patterns.threeDShot.reconstructFocalField( ...
-                    mask, params, [dx, 0, 0]);
+                % Global-peak reconstruction (no targets) → actual spot location.
+                rec = tfp.patterns.threeDShot.reconstructFocalField(mask, params);
                 cx_vals(k) = abs(rec.centroid_um(1, 1));
             end
 
@@ -109,11 +111,12 @@ classdef test_threeDShot_cgh < matlab.unittest.TestCase
 
             [mask, ~, ~] = tfp.patterns.threeDShot.composeHologram( ...
                 [dx, 0, 0], params);
-            rec = tfp.patterns.threeDShot.reconstructFocalField( ...
-                mask, params, [dx, 0, 0]);
+            % Global-peak reconstruction (no targets): the actual peak's
+            % y-coordinate must stay near zero for a purely lateral-x target.
+            rec = tfp.patterns.threeDShot.reconstructFocalField(mask, params);
 
             testCase.verifyLessThan(abs(rec.centroid_um(1, 2)), dx_f, ...
-                'centroid_y must stay within one focal pixel for a pure-dx target');
+                'peak centroid_y must stay within one focal pixel for a pure-dx target');
         end
     end
 

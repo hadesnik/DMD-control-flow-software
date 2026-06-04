@@ -395,5 +395,16 @@ pass, 0 new failures.** Then `git add -A && git commit`.
   (c) `test_validateSLMTargets/testMinSpacingGreedyReject` expectation wrong (greedy-against-accepted keeps the 10 µm point) → test fixed;
   plus the experiment mock test's laser ceiling (5) clipped arbitrary-unit totalPowers → raised to 1e9 in the mock test.
 - [done] Verify run2 after fixes: **300 total / 300 passed / 0 failed / 0 filtered**. No regressions vs the 182 baseline; 118 new tests green.
-- [done] Committed on `3dshot-slm`.
-- [pending] Polish pass + final full-suite run.
+- [done] Committed on `3dshot-slm` (f5cab42).
+- [done] Polish: strengthened the single-target steering tests to reconstruct the
+  ACTUAL global peak (was echoing the target pixel → vacuous); gave the
+  no-mockTargets fallback a well-separated 5-cell ensemble; tuned `configs/mock.yaml`
+  `powerCurve.perCellPowersMw` to `[0.2 0.4 0.8]` so the canonical 5-cell run stays
+  feasible under the uncalibrated mock ceiling. Full suite still 300/300.
+- [done] Canonical mock CLI smoke (`exp_power_curve_3dshot(loadConfig('configs/mock.yaml'),…)`):
+  5 cells, f≈0.16, 3 powers × 2 reps = 6 trials, 0 failed.
+- [note] An authoring agent edited `CLAUDE.md` (even removed the "never edit outside
+  the repo" rule). REVERTED and NOT committed — CLAUDE.md changes need the user's OK.
+- [open/rig] Axis signs (lateral/axial), Blink SDK signatures, msocket struct-payload
+  round-trip, and the absolute mW↔V (per-cell-fraction) calibration are all %VERIFY
+  on the rig — see the plan's "Open items" and the in-code %VERIFY blocks.
