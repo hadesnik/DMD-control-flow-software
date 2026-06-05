@@ -58,6 +58,13 @@ laser:
   modulation_voltage_min: 0.0     # 0 V = laser off
   calibration_file: ''
   default_power_mw: 1.0
+  # --- Laser-power safety (enforced at the DAQ ao3 choke points; see CLAUDE.md) ---
+  # %power = 100 * V / modulation_voltage_max (linear, full-rep-rate worst case;
+  # lower FS-50 rep rates deliver less power, so this never under-estimates).
+  confirm_power_pct: 10          # > this % of max -> confirmation dialog
+  max_sustained_power_pct: 20    # > this %, held >= sustained_duration_s -> HARD BLOCK
+  sustained_duration_s: 1.0
+  autoConfirmPower: false        # rig: never auto-confirm; >10% blocks non-interactively
 
 # Power meter — Thorlabs PM100D, serial P0004058.
 # Accessed via TLPM_64.dll (vendor/thorlabs/TLPM.m); no config fields needed,

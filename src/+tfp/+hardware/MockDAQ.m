@@ -259,6 +259,8 @@ classdef MockDAQ < tfp.hardware.DAQ
                 error('tfp:hardware:MockDAQ:outputSingleAnalog:badVoltage', ...
                     'voltageV must be a finite scalar; got %s.', mat2str(voltageV));
             end
+            % Laser-power safety: a constant hold is a sustained request.
+            obj.checkLaserAO_(obj.parseAoChannel_(channelName), voltageV, Inf);
             obj.logEvent('outputSingleAnalog', struct( ...
                 'channel', char(channelName), 'voltageV', voltageV));
         end
@@ -454,6 +456,14 @@ classdef MockDAQ < tfp.hardware.DAQ
                     error('tfp:hardware:DAQ:badConfig', ...
                         'startTrigger must be ''immediate'' or ''sync''; got ''%s''.', ...
                         trigC);
+            end
+
+            % Laser-power safety: check the FS-50 column if it is in this session.
+            laserCol = find(snap.aoChannels == obj.laserChannel_, 1);
+            if ~isempty(laserCol)
+                col = samples(:, laserCol);
+                obj.checkLaserAO_(obj.laserChannel_, max(col), ...
+                    sum(col > obj.laserSafetyCfg_.offVoltage) / rate);
             end
 
             startSampleIdx = obj.currentSampleIndex();

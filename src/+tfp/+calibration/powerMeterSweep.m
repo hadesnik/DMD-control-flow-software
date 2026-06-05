@@ -78,6 +78,38 @@ sensorRelaxTimeS = configField(options, 'sensorRelaxTimeS', 20);
 voltageStepsDiv  = sort(voltageStepsDiv(:)');
 voltageStepsFull = sort(voltageStepsFull(:)');
 
+% --- Laser-power safety override (supervised calibration) ----------------
+% This calibration deliberately drives ao3 across 0-5 V, which the DAQ power
+% check would otherwise block. It is safe ONLY at a LOW rep rate: the FS-50
+% pulse-picker lowers real power (e.g. ~50 kHz ~= a few % of max), so the high
+% control voltage produces low actual power onto the thermal sensor. Confirm
+% the operator has set a low rep rate, then arm a logged override for the
+% duration of the sweep (auto-cleared on any exit).
+lowRepRateConfirmed = configField(options, 'lowRepRateConfirmed', false);
+if ~lowRepRateConfirmed
+    if batchStartupOptionUsed
+        error('tfp:calibration:powerMeterSweep:repRateNotConfirmed', ...
+            ['Non-interactive run: powerMeterSweep drives ao3 to 5 V, safe only at a ' ...
+             'low FS-50 rep rate (~%.0f kHz divided mode). Set the low rep rate and ' ...
+             'pass options.lowRepRateConfirmed=true.'], repRateDivKhz);
+    end
+    fprintf(2, ['\n*** LASER SAFETY: powerMeterSweep will drive ao3 across 0-5 V.\n' ...
+        '    Safe ONLY at a LOW rep rate (pulse-picking lowers real power;\n' ...
+        '    ~%.0f kHz divided mode). Set the FS-50 to its low rep rate NOW.\n'], ...
+        repRateDivKhz);
+    resp = '';
+    while ~any(strcmp(resp, {'y', 'n'}))
+        resp = strtrim(lower(input('    Is the FS-50 at a low (divided-mode) rep rate? [y/n]: ', 's')));
+    end
+    if ~strcmp(resp, 'y')
+        error('tfp:calibration:powerMeterSweep:repRateNotConfirmed', ...
+            'Aborted: set the FS-50 to a low rep rate before running powerMeterSweep.');
+    end
+end
+tfp.util.assertLaserPowerSafe('overrideOn', ...
+    sprintf('powerMeterSweep: supervised low-rep-rate 0-5 V calibration (~%.0f kHz)', repRateDivKhz));
+restoreLaserSafety = onCleanup(@() tfp.util.assertLaserPowerSafe('overrideOff')); %#ok<NASGU>
+
 % --- Connect to PM100D via Thorlabs TLPM driver ---
 % TLPM is a MATLAB class provided by the Optical Power Monitor installer.
 % findRsrc() returns a device count; getRsrcName(0) returns the USB resource

@@ -24,4 +24,10 @@ if strcmp(lower(char(config.hardwareKind)), 'mock')
     dmd.initialize(config.dmd);
     daq.initialize(config.daq);
 end
+
+% Laser-power safety: apply the FS-50 ao3 power policy from config.laser.
+% (Both DAQ backends carry conservative defaults even if this is skipped.)
+if isfield(config, 'laser') && ~isempty(config.laser)
+    daq.configureLaserSafety(config.laser);
+end
 end

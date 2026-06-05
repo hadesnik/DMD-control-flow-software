@@ -465,6 +465,8 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
                 error('tfp:hardware:NI6323_DAQ:outputSingleAnalog:voltageOutOfRange', ...
                     'voltageV %.4g V is outside [-10, 10] V.', voltageV);
             end
+            % Laser-power safety: a constant hold is a sustained request.
+            obj.checkLaserAO_(chNum, voltageV, Inf);
             idx = find(obj.configuredAoChannels_ == chNum, 1);
             if isempty(idx)
                 obj.session_.addAnalogOutputChannel( ...  %LEGACY_API
@@ -686,6 +688,14 @@ classdef NI6323_DAQ < tfp.hardware.DAQ
                 error('tfp:hardware:DAQ:badShape', ...
                     'samples must be nSamples × %d numeric; got size [%s].', ...
                     obj.contNAo_, num2str(size(samples)));
+            end
+
+            % Laser-power safety: check the FS-50 column if it is in this session.
+            laserCol = find(obj.contCfg_.aoChannels == obj.laserChannel_, 1);
+            if ~isempty(laserCol)
+                col = samples(:, laserCol);
+                obj.checkLaserAO_(obj.laserChannel_, max(col), ...
+                    sum(col > obj.laserSafetyCfg_.offVoltage) / rate);
             end
 
             % Anchor at the next clocked sample. With AO sharing the master

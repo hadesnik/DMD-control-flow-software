@@ -255,6 +255,21 @@ Phase 1 implementation pinned the following conventions; treat them as load-bear
 
 - **Never edit files outside this repository** (`c:\projects\DMD-control-flow-software`). Do not modify files in other directories on the system, regardless of what a task seems to require.
 
+## Laser-power safety (FS-50 via ao3) — load-bearing
+
+The NKT FS-50 (50 W) is power-controlled entirely by 0–5 V on **ao3**. A hard policy is enforced on **every** ao3 write, inside the DAQ (`tfp.hardware.DAQ.checkLaserAO_` → `tfp.util.assertLaserPowerSafe`), so it covers the Sequencer, calibration, scripts, and experiments — both `outputSingleAnalog` and clocked `queueClockedAO`. **Do not weaken or bypass this without the user's explicit say-so.**
+
+- **`%power = 100 · V / modulation_voltage_max`** (linear; 5 V = 100% = 50 W). This is the **full-rep-rate worst case**: lowering the FS-50 rep rate pulse-picks power down (≈50 kHz → ~4% of max), so a voltage-based check never *under*-estimates real power. Conservative by design; no calibration needed for the guard.
+- **Tiers** (on the *peak* commanded power; on-time = laser-on seconds in the request, or ∞ for a constant `outputSingleAnalog` hold):
+  - **≤ 10%** (`confirm_power_pct`): allowed silently.
+  - **> 10%**: requires confirmation — interactive dialog (`questdlg`/`input`), or in non-interactive runs (`matlab -batch`, tests) **blocked** unless `laser.autoConfirmPower = true`.
+  - **> 20%** (`max_sustained_power_pct`) held **≥ 1 s** (`sustained_duration_s`): **HARD BLOCK**, even after confirm/autoConfirm. (Intent: never sustain high power onto the optics.)
+  - **> 20% for < 1 s**: a brief burst — allowed after confirmation.
+- **Config** (`config.laser`): `fs50_ao_channel`, `modulation_voltage_max`/`_min` (full/off V), `confirm_power_pct` (10), `max_sustained_power_pct` (20), `sustained_duration_s` (1), `autoConfirmPower` (mock `true`, real `false`). Wired to the DAQ by `tfp.util.makeHardware`; both DAQ backends also carry these as defaults, so a directly-constructed DAQ is still protected.
+- **Calibration exception:** `tfp.calibration.powerMeterSweep` legitimately sweeps ao3 to 5 V — safe **only at a low rep rate**. It confirms the rep rate (or `options.lowRepRateConfirmed=true`) then arms a logged `assertLaserPowerSafe('overrideOn', …)` for the sweep, cleared on exit. This is the **only** sanctioned bypass.
+- **Rig wiring note:** for the stim power to actually drive ao3 (and be covered by the check), set `config.daq.aoChannelIdx: 3` on the rig — the Sequencer queues the stim waveform to that AO channel and it currently defaults to 1.
+- The older `tfp.util.safetyChecks` abort-flag interlock is separate and still used per-trial.
+
 ## What Claude should know when working on this codebase
 
 - This is a research instrument, not production software. Optimize for clarity and ease of modification, not absolute robustness. But: anything that touches the high-power laser path needs explicit safety interlocks (see `+util/safetyChecks.m`).
