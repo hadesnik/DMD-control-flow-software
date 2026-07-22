@@ -8,30 +8,30 @@
 %   Adjust the constants in the configuration block below for the board
 %   under test.  Two presets are provided; uncomment the appropriate one.
 %
-%   DLi4130 kit (ALP-4.1, DLP7000, 1024×768):
-%     Set ALP_VERSION = '4.1' and DMD_TYPE = 'DLP7000' (default below).
-%     Confirm ALP_DMDTYPE_XGA_07A (4) is returned by AlpDevInquire.
-%
-%   DLP650LNIR (ALP-4.3, 1280×800):
-%     Set ALP_VERSION = '4.3' and DMD_TYPE = 'DLP650LNIR'.
+%   DLP650LNIR (ALP-4.3, 1280×800) — NIR target board, active default below:
+%     ALP_VERSION = '4.3' and DMD_TYPE = 'DLP650LNIR'.
 %     Confirm ALP_DMDTYPE_WXGA_S450 (12) is returned by AlpDevInquire.
+%
+%   DLi4130 kit (ALP-4.1, DLP7000, 1024×768) — visible loaner, commented preset:
+%     ALP_VERSION = '4.1' and DMD_TYPE = 'DLP7000'.
+%     Confirm ALP_DMDTYPE_XGA_07A (4) is returned by AlpDevInquire.
 %
 %   CAUTION: Step 4 projects a checkerboard pattern for ~2 seconds.
 %   Ensure no sample or animal is in the beam path before running.
 
 % ---- Board-selection constants: edit here --------------------------------
 
-% Preset A — DLi4130 kit (ALP-4.1, DLP7000)
-ALP_VERSION = '4.1';
-DMD_TYPE    = 'DLP7000';
-DLL_PATH    = 'C:\Program Files\ALP-4.1\alp41.dll';
-PROTO_FILE  = '';   % fill in path to ALP-4.1 .m prototype when confirmed
+% Preset B — DLP650LNIR (ALP-4.3) — the NIR target board (default)
+ALP_VERSION = '4.3';
+DMD_TYPE    = 'DLP650LNIR';
+DLL_PATH    = 'C:\Program Files\ALP-4.3\ALP-4.3 high-speed API\x64\alp4395.dll';
+HEADER_PATH = fullfile('vendor', 'alp', 'official', 'alp.h');
 
-% Preset B — DLP650LNIR (ALP-4.3) — uncomment to switch
-% ALP_VERSION = '4.3';
-% DMD_TYPE    = 'DLP650LNIR';
-% DLL_PATH    = 'C:\Program Files\ALP-4.3\ALP-4.3 high-speed API\x64\alp4395.dll';
-% PROTO_FILE  = fullfile('vendor', 'alp', 'reference', 'parot-alptool', 'alpV43x64proto.m');
+% Preset A — DLi4130 kit (ALP-4.1, DLP7000) — visible loaner; uncomment to switch
+% ALP_VERSION = '4.1';
+% DMD_TYPE    = 'DLP7000';
+% DLL_PATH    = 'C:\Program Files\ALP-4.1\alp41.dll';
+% HEADER_PATH = fullfile('vendor', 'alp', 'official-4.1', 'alp.h');
 
 % --------------------------------------------------------------------------
 
@@ -50,7 +50,7 @@ try
         'alpVersion', ALP_VERSION, ...
         'dmdType',    DMD_TYPE, ...
         'dllPath',    DLL_PATH, ...
-        'protoFile',  PROTO_FILE);
+        'headerPath', HEADER_PATH);
     dmd = tfp.hardware.DLP650LNIR_DMD(cfg);
     assert(dmd.isInitialized, 'isInitialized should be true after constructor');
     printResult('PASS', '1', sprintf('DLL loaded + device allocated (%s v%s)', ...
@@ -148,7 +148,7 @@ end
 %% Summary
 fprintf('\n=== Result: %d/%d passed ===\n', passed, passed + failed);
 if failed > 0
-    fprintf('Check ALP driver installation, DLL_PATH, and PROTO_FILE at the top of this script.\n');
+    fprintf('Check ALP driver installation, DLL_PATH, and HEADER_PATH at the top of this script.\n');
 end
 
 % =========================================================================

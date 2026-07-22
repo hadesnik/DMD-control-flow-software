@@ -13,7 +13,7 @@ classdef DLP650LNIR_DMD < tfp.hardware.DMD
 %     cfg.alpVersion = '4.1';
 %     cfg.dmdType    = 'DLP7000';
 %     cfg.dllPath    = 'C:\Program Files\ALP-4.1\alp41.dll';
-%     cfg.protoFile  = 'vendor\alp\reference\<alp41-proto>.m';
+%     cfg.headerPath = 'vendor\alp\official-4.1\alp.h';
 %     dmd = tfp.hardware.DLP650LNIR_DMD(cfg);
 
     % ------------------------------------------------------------------ %
@@ -40,7 +40,7 @@ classdef DLP650LNIR_DMD < tfp.hardware.DMD
     methods
         function obj = DLP650LNIR_DMD(config)
             %DLP650LNIR_DMD Construct and initialize the DMD.
-            %   config fields: alpVersion, dmdType, dllPath, protoFile.
+            %   config fields: alpVersion, dmdType, dllPath, headerPath.
             obj.initialize(config);
         end
 

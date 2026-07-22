@@ -40,6 +40,9 @@ function curve = powerMeterSweep(daq, options)
 %       .repRateDivKhz     - divided-mode rep rate in kHz; default 10
 %       .repRateFullMhz    - full rep rate in MHz; default 1.25
 %       .sensorRelaxTimeS  - wait after zeroing AO before Phase 2 (s); default 20
+%       .dmdActivePx       - full-chip active pixel count recorded in the
+%                            output (informational); default 800*1280
+%                            (DLP650LNIR). Use 768*1024 for the DLP7000 loaner.
 %
 %   Output curve struct:
 %     .voltageV            - merged voltage axis (V), sorted ascending
@@ -74,6 +77,7 @@ wavelengthNm     = configField(options, 'wavelengthNm',  1040);
 repRateDivKhz    = configField(options, 'repRateDivKhz',   10);
 repRateFullMhz   = configField(options, 'repRateFullMhz',  1.25);
 sensorRelaxTimeS = configField(options, 'sensorRelaxTimeS', 20);
+dmdActivePx      = configField(options, 'dmdActivePx', 800 * 1280);  % DLP650LNIR full chip
 
 voltageStepsDiv  = sort(voltageStepsDiv(:)');
 voltageStepsFull = sort(voltageStepsFull(:)');
@@ -299,7 +303,7 @@ curve.notes        = sprintf( ...
     'PM100D+S350C, %s, div %.0f kHz + full %.2f MHz (overlap %.1f-%.1f V), deg2=[%.4f %.2e] rmse1=%.3f rmse2=%.3f mW, %d nm', ...
     aoChannel, repRateDivKhz, repRateFullMhz, min(voltageStepsFull), vBoundary, ...
     fitDeg2(1), fitDeg2(2), rmse1, rmse2, wavelengthNm);
-curve.dmdActivePx  = 768 * 1024;  % DLi4130; update to 800*1280 for DLP650LNIR
+curve.dmdActivePx  = dmdActivePx;  % full-chip pixel count (see options.dmdActivePx)
 
 % =========================================================
 % Fill post-sweep panels (diagnostic + merged + Phase 1 overlay)
