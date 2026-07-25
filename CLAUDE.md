@@ -25,7 +25,7 @@ The NIR DMD (TI DLP650LNIR) is not in hand yet; arrival expected second week of 
 ## Hardware architecture (target system)
 
 ** current optical path**
-- NKT FS-50 with internal fast power modulation, controllable via an analog output from the daq
+- **Light Conversion Carbide (40 W) femtosecond laser** — the photostim source. **Not in hand yet: arriving ~early September 2026 (~6 weeks out as of 2026-07-24).** The previous NKT FS-50 has been **removed from this rig** (moved to a different scope). The Carbide is a similar femtosecond source, so little code changes — but its **power-control interface is not yet confirmed** (analog voltage like the FS-50 vs. the Light Conversion software/TCP API). `%VERIFY` on arrival; see the Laser-power safety section.
 - DMD (may be TI or may be from Vialux, visible, coming from Laura Waller's lab, no specs yet)
 - temporal focusing grating 
 - fills back pupil of a Sutter MOM with Olympus 20x 1.0Na water immserion objective
@@ -34,7 +34,7 @@ The NIR DMD (TI DLP650LNIR) is not in hand yet; arrival expected second week of 
 
 
 ** Future Optical path - don't have this hardware yet** (see `docs/tf_photostim_bom.html` for full BOM):
-- Light Conversion CARBIDE CB3 femtosecond laser, 1030 nm, ~300 fs, 50 W, ~100 kHz rep rate
+- Light Conversion Carbide femtosecond laser, 1030 nm, ~300 fs (the incoming **40 W** unit above is the actual photostim laser; this "CB3, 50 W" line was the original spec)
 - AdlOptica π-Shaper → 6 mm flat-top onto DMD
 - TI DLP650LNIR NIR DMD, 1280×800, 10.8 µm pitch, ±12° tilt, controlled via DLPC410 + DisplayPort at 1.4–12.5 kHz
 - Reflective ruled grating for temporal focusing (1200 g/mm gold-coated, Newport 33010FL01-530R or Wasatch VPH 1700 g/mm — TBD)
@@ -50,7 +50,7 @@ The NIR DMD (TI DLP650LNIR) is not in hand yet; arrival expected second week of 
 
 **Trigger topology**:
 - DAQ PC is the timing master.
-- DAQ generates: (a) TTL to start ScanImage acquisition on imaging PC, (b) DMD pattern-advance triggers, (c) PLM phase-state triggers (when functional), (d) analog power control of NKT FS-50 via ao3, (e) sync line(s) recorded back into the ephys channels.
+- DAQ generates: (a) TTL to start ScanImage acquisition on imaging PC, (b) DMD pattern-advance triggers, (c) PLM phase-state triggers (when functional), (d) analog power control of the Carbide photostim laser via ao3 (**%VERIFY the Carbide's control interface on arrival — may be analog ao3 as with the FS-50, or the Light Conversion API**), (e) sync line(s) recorded back into the ephys channels.
 - ScanImage frame clock is fed back to the DAQ PC as a digital input for post-hoc frame-stim alignment.
 
 **Confirmed NI PCIe-6323 wiring (cross-referenced with Masato's DAQ code, 2026-05-29)**:
@@ -61,7 +61,7 @@ The NIR DMD (TI DLP650LNIR) is not in hand yet; arrival expected second week of 
 | ai3 | in | Stim trigger monitor | reads back stimulation trigger for post-hoc alignment |
 | ao0 | out | Multiclamp 700B ch1 command | postsynaptic cell current/voltage command |
 | ao2 | out | Multiclamp 700B ch2 command | presynaptic cell command — normally unused |
-| ao3 | out | NKT FS-50 power modulator | **photostim laser power control** — 0–5 V |
+| ao3 | out | Carbide photostim laser power modulator | **photostim laser power control** — 0–5 V. **%VERIFY** interface on Carbide arrival (was NKT FS-50, now removed from this rig) |
 | port0/line10 | out | ScanImage acquisition trigger | rising edge starts SI acquisition |
 | port0/line8 | out | SLM trigger out | Masato's SLM rig — spare for our DMD setup |
 | port0/line1 | in | ScanImage frame clock | rising edge = frame acquired |
@@ -180,6 +180,13 @@ YAML configs (parsed via MATLAB's `yamlread` in R2024b+, or `yaml.loadFile` via 
 8. Swap to `DLP650LNIR_DMD` on NIR DMD arrival.
 9. Run the two-step spatial calibration on a thin fluorescent film (see procedure below).
 10. Run `+calibration/measurePSF.m` on a fluorescent slab.
+10b. Run `+calibration/measureFocalPlaneTilt.m` on the thin film to characterize the
+    focal-plane tilt from the tilted temporal-focusing grating across the FOV. Sweeps
+    objective Z via `tfp.hardware.SutterZStage` (Sutter MP-285, direct serial on the DAQ
+    PC — replug the Sutter serial from the imaging PC and release it from ScanImage first;
+    replug back after). Each spot's 2p brightness peaks at the Z where the tilted plane
+    crosses the film; a plane fit of best-focus Z(x,y) gives the tilt angle. The tilt map
+    feeds later per-cell Z-targeting/compensation.
 11. Run experiments on windowed mice.
 
 #### Two-step spatial calibration procedure (Phase 3)
@@ -248,24 +255,26 @@ Phase 1 implementation pinned the following conventions; treat them as load-bear
 
 ## Development environment
 - Code is written on macOS (this machine)
-- **MATLAB is installed locally on this MacBook** — Claude can and should run unit tests here (e.g. `matlab -batch "runtests('tests')"`) before pushing. Mock-backed tests cover most of the codebase, so local pre-flight catches the majority of regressions.
+- **MATLAB is installed locally on this MacBook** — Claude can and should run unit tests here before pushing. Use the repo's **no-arg** runner: `matlab -batch "runtests"` (the repo's `runtests.m` shadows the built-in and takes no arguments; passing `runtests('tests')` errors with "Too many input arguments"). To run a single file, use the unittest API: `matlab -batch "addpath('src'); run(matlab.unittest.TestSuite.fromFile('tests/<file>.m'))"`. `matlab` is often not on `PATH`; invoke the app binary directly, e.g. `/Applications/MATLAB_R2023a.app/bin/matlab`. Mock-backed tests cover most of the codebase, so local pre-flight catches the majority of regressions.
 - Hardware-touching code (real DMD, NI DAQ, ALP DLL) still RUNS on the Windows scope PC; the ALP DLL cannot be loaded on macOS and hardware verification happens on the scope PC after git push/pull.
 
 ## Hard rules for Claude
 
 - **Never edit files outside this repository** (`c:\projects\DMD-control-flow-software`). Do not modify files in other directories on the system, regardless of what a task seems to require.
 
-## Laser-power safety (FS-50 via ao3) — load-bearing
+## Laser-power safety (photostim laser via ao3) — load-bearing
 
-The NKT FS-50 (50 W) is power-controlled entirely by 0–5 V on **ao3**. A hard policy is enforced on **every** ao3 write, inside the DAQ (`tfp.hardware.DAQ.checkLaserAO_` → `tfp.util.assertLaserPowerSafe`), so it covers the Sequencer, calibration, scripts, and experiments — both `outputSingleAnalog` and clocked `queueClockedAO`. **Do not weaken or bypass this without the user's explicit say-so.**
+> **Laser change (2026-07-24):** the NKT FS-50 has been **removed from this rig** (moved to another scope). The replacement is a **Light Conversion Carbide (40 W)**, arriving ~early September 2026. The safety model below still describes the **current working assumption: analog 0–5 V power control on ao3**. **%VERIFY the Carbide's actual control interface on arrival** — if it uses the Light Conversion software/TCP API instead of an analog input, this guard must move into a `tfp.hardware.Laser`/`CarbideLaser` driver (a deferred task). Until then the ao3 guard stays in force. Note the `config.laser.fs50_ao_channel` **key keeps its legacy name in code** to avoid a churny rename.
 
-- **`%power = 100 · V / modulation_voltage_max`** (linear; 5 V = 100% = 50 W). This is the **full-rep-rate worst case**: lowering the FS-50 rep rate pulse-picks power down (≈50 kHz → ~4% of max), so a voltage-based check never *under*-estimates real power. Conservative by design; no calibration needed for the guard.
+The photostim laser is (currently assumed) power-controlled entirely by 0–5 V on **ao3**. A hard policy is enforced on **every** ao3 write, inside the DAQ (`tfp.hardware.DAQ.checkLaserAO_` → `tfp.util.assertLaserPowerSafe`), so it covers the Sequencer, calibration, scripts, and experiments — both `outputSingleAnalog` and clocked `queueClockedAO`. **Do not weaken or bypass this without the user's explicit say-so.**
+
+- **`%power = 100 · V / modulation_voltage_max`** (linear; 5 V = 100% of max). This is the **full-rep-rate worst case**: lowering the laser's rep rate pulse-picks power down, so a voltage-based check never *under*-estimates real power. Conservative by design; no calibration needed for the guard. (Re-confirm the Carbide's V→power behaviour and rep-rate/pulse-pick model on arrival.)
 - **Tiers** (on the *peak* commanded power; on-time = laser-on seconds in the request, or ∞ for a constant `outputSingleAnalog` hold):
   - **≤ 10%** (`confirm_power_pct`): allowed silently.
   - **> 10%**: requires confirmation — interactive dialog (`questdlg`/`input`), or in non-interactive runs (`matlab -batch`, tests) **blocked** unless `laser.autoConfirmPower = true`.
   - **> 20%** (`max_sustained_power_pct`) held **≥ 1 s** (`sustained_duration_s`): **HARD BLOCK**, even after confirm/autoConfirm. (Intent: never sustain high power onto the optics.)
   - **> 20% for < 1 s**: a brief burst — allowed after confirmation.
-- **Config** (`config.laser`): `fs50_ao_channel`, `modulation_voltage_max`/`_min` (full/off V), `confirm_power_pct` (10), `max_sustained_power_pct` (20), `sustained_duration_s` (1), `autoConfirmPower` (mock `true`, real `false`). Wired to the DAQ by `tfp.util.makeHardware`; both DAQ backends also carry these as defaults, so a directly-constructed DAQ is still protected.
+- **Config** (`config.laser`): `fs50_ao_channel` (legacy key name; it selects the photostim-laser AO channel regardless of laser make), `modulation_voltage_max`/`_min` (full/off V), `confirm_power_pct` (10), `max_sustained_power_pct` (20), `sustained_duration_s` (1), `autoConfirmPower` (mock `true`, real `false`). Wired to the DAQ by `tfp.util.makeHardware`; both DAQ backends also carry these as defaults, so a directly-constructed DAQ is still protected.
 - **Calibration exception:** `tfp.calibration.powerMeterSweep` legitimately sweeps ao3 to 5 V — safe **only at a low rep rate**. It confirms the rep rate (or `options.lowRepRateConfirmed=true`) then arms a logged `assertLaserPowerSafe('overrideOn', …)` for the sweep, cleared on exit. This is the **only** sanctioned bypass.
 - **Rig wiring note:** for the stim power to actually drive ao3 (and be covered by the check), set `config.daq.aoChannelIdx: 3` on the rig — the Sequencer queues the stim waveform to that AO channel and it currently defaults to 1.
 - The older `tfp.util.safetyChecks` abort-flag interlock is separate and still used per-trial.
@@ -285,9 +294,10 @@ The NKT FS-50 (50 W) is power-controlled entirely by 0–5 V on **ao3**. A hard 
 
   Two viable routes for DMD↔sample spatial calibration exist:
   - **Substage camera (preferred, implemented):** A widefield camera viewing the sample from below images fluorescence on a thin film. Two affines are fitted against the same camera frame: (A) DMD spots → camera (`alignDMDtoCamera`), and (B) ScanImage scan field → camera (`crossRegisterScanImage`). Composing them gives DMD → ScanImage scan-field coords with no data transfer between PCs. No ScanImage TIFF is needed — ScanImage just runs in Focus mode with a non-square pixel count (e.g. 256×512) so the camera sees an asymmetric rectangle that unambiguously identifies the fast (resonant) vs slow (galvo) scan axis. Axis signs are resolved by a verify step; see the Phase 3 calibration procedure above.
-  - **Photobleach holes (backup):** Project DMD spots onto a fluorescent film at sufficient power density to bleach dark holes. Image the holes with ScanImage (they appear as dark spots against the fluorescent background). This gives a direct DMD → ScanImage pixel mapping with no substage camera required. Feasibility depends on achieving enough intensity at the sample with the NKT FS-50; may not be practical at low duty-cycle.
+  - **Photobleach holes (backup):** Project DMD spots onto a fluorescent film at sufficient power density to bleach dark holes. Image the holes with ScanImage (they appear as dark spots against the fluorescent background). This gives a direct DMD → ScanImage pixel mapping with no substage camera required. Feasibility depends on achieving enough intensity at the sample with the Carbide photostim laser; may not be practical at low duty-cycle.
 
-- **MATLAB R2025b (and 2024+) require macOS 13.3+**; R2023a works on Monterey 12.x and is the current dev pin. Don't upgrade the dev machine's MATLAB until macOS is upgraded.
+- **Dev machine (Hillel's MacBook Pro) is on macOS 26 "Tahoe" as of 2026-07-24.** MATLAB R2023a and R2023b are installed; R2023a is the dev pin and still runs the full test suite cleanly on Tahoe (320/320 verified post-upgrade). The old "don't upgrade MATLAB past R2023a because the machine is on Monterey 12.x" constraint is **retired** — Tahoe removes the macOS-version ceiling, so a newer MATLAB (2024b+/R2025b, which need macOS 13.3+) can be installed whenever convenient. No urgency; R2023a works.
+- **Every major macOS upgrade wipes the Command Line Tools** (Tahoe left an empty `/Library/Developer/CommandLineTools` and removed `git`). Symptom: `git` prompts "No developer tools were found" and `xcode-select -p` errors. Fix: `sudo softwareupdate -i "Command Line Tools for Xcode <ver>"` (or the GUI install dialog). Until reinstalled, git is dead for **every** repo on the Mac — no commit/push/pull anywhere.
 - **When cloning vendor repos into `vendor/`, strip `.git/` before `git add`** to avoid embedded-repo gitlinks (which break clone-and-go for collaborators).
 - **`data/` is gitignored** — session outputs don't belong in the repo.
 - **`vendor/alp/reference/parot-alptool/` ships Windows `.dll`/`.obj`/`.lib` binaries.** Harmless privately, but consider stripping before any public release.

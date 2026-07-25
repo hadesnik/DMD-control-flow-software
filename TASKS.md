@@ -590,6 +590,10 @@ NI session if not yet configured, so no pre-configuration is needed.
 
 **Pre-run checklist (do these before running on scope PC):**
 
+> Laser note (2026-07-24): the NKT FS-50 referenced below was removed from this
+> rig; the incoming laser is a Light Conversion Carbide (40 W), ~early Sept 2026.
+> Re-confirm the AO channel/wiring and the Carbide's V→power behaviour before use.
+
   [ ] Physical setup
         PM100D connected via USB; S350C sensor attached.
         FS-50 analog modulation BNC → Dev1/ao1 on NI-6323.

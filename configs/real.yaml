@@ -26,7 +26,9 @@ dmd:
 #   ai3: SLM/stim trigger monitor — reads back the stimulation trigger line
 #   ao0: Multiclamp 700B ch1 command (postsynaptic cell)
 #   ao2: Multiclamp 700B ch2 command (presynaptic cell, normally unused)
-#   ao3: NKT FS-50 power modulator (photostim laser power control)
+#   ao3: photostim laser power modulator (control). Laser change 2026-07-24:
+#        FS-50 removed; incoming Light Conversion Carbide (40 W). %VERIFY the
+#        Carbide control interface (analog ao3 vs. Light Conversion API).
 #   port0/line10 (DO): ScanImage acquisition trigger
 #   port0/line8  (DO): SLM trigger out (Masato's SLM; spare for our DMD rig)
 #   port0/line1  (DI): ScanImage frame clock (rising edge = frame acquired)
@@ -53,7 +55,11 @@ session:
   dataDir: 'C:\data'
   calibration_file: ''   # fill in after first alignDMDtoCamera run
 
-# Laser modulation (NKT FS-50). Analog output ao3 on the NI PCIe-6323.
+# Laser modulation. Analog output ao3 on the NI PCIe-6323.
+# Laser: Light Conversion Carbide (40 W) incoming (~early Sept 2026); the NKT
+# FS-50 was removed from this rig. %VERIFY the Carbide's power-control interface
+# on arrival. The `fs50_ao_channel` key keeps its legacy name (it just selects
+# the photostim-laser AO channel; read by DAQ.configureLaserSafety).
 laser:
   fs50_ao_channel: 'ao3'
   modulation_voltage_max: 5.0
@@ -62,7 +68,8 @@ laser:
   default_power_mw: 1.0
   # --- Laser-power safety (enforced at the DAQ ao3 choke points; see CLAUDE.md) ---
   # %power = 100 * V / modulation_voltage_max (linear, full-rep-rate worst case;
-  # lower FS-50 rep rates deliver less power, so this never under-estimates).
+  # lower rep rates deliver less power, so this never under-estimates).
+  # Re-confirm the Carbide's V->power / rep-rate behaviour on arrival.
   confirm_power_pct: 10          # > this % of max -> confirmation dialog
   max_sustained_power_pct: 20    # > this %, held >= sustained_duration_s -> HARD BLOCK
   sustained_duration_s: 1.0
@@ -83,6 +90,19 @@ camera:
   exposureMs: 10        # ms; increase if spots are underexposed
   gain: 0               # dB; 0 = minimum noise
   umPerPixel: 1.56      # µm per camera pixel at the sample; remeasure after mounting
+
+# Axial (focus) stage — Sutter MP-285/MP-285A objective Z, direct serial on the
+# DAQ PC. Consumed by tfp.calibration.measureFocalPlaneTilt via tfp.hardware.SutterZStage.
+# For the tilt calibration, replug the Sutter serial from the imaging PC to the DAQ
+# PC (release it from ScanImage first); replug back afterward. See CLAUDE.md runbook.
+zstage:
+  class: 'tfp.hardware.SutterZStage'
+  serialPort: 'COM5'          # %VERIFY — DAQ-PC COM port for the Sutter controller
+  baud: 9600                  # MP-285 default, 8-N-1
+  umPerMicrostep: 0.04        # %VERIFY — firmware-dependent (some units 0.2 µm)
+  focusAxis: 'z'              # which MP-285 axis is objective focus
+  moveTimeoutS: 30
+  rangeUm: [-1000, 1000]      # %VERIFY soft travel limits
 
 # No fake cells for real hardware — live cells identified by suite2p.
 fakeCells: []

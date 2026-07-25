@@ -93,9 +93,12 @@ end
 #### Stimulation timing architecture
 
 The DMD is purely spatial — it defines which pixels are illuminated.
-Stimulation timing and power are controlled entirely by the NKT FS-50
-laser's analog power modulation input (DAQ AO channel). The FS-50
-modulation input accepts 0–5 V (verify with NKT manual); 0 V = laser
+Stimulation timing and power are controlled by the photostim laser's
+power modulation (DAQ AO channel). **Laser change (2026-07-24): the NKT
+FS-50 was removed from this rig; the incoming laser is a Light Conversion
+Carbide (40 W), ~early Sept 2026. %VERIFY its control interface — analog
+0–5 V on ao3 as assumed here, or the Light Conversion API.** Under the
+analog assumption the modulation input accepts 0–5 V; 0 V = laser
 off, max V = max power. The DAQ queues an AO waveform that is 0 V
 during baseline, ramps to the target voltage at stim onset, holds for
 stimDuration_s, then returns to 0 V. The DMD pattern is loaded before
@@ -400,6 +403,8 @@ Every test runs in <30 s. The full suite is the gate before any real-hardware se
 - [ ] `+hardware/DLP650LNIR_DMD.m`
 - [ ] `+calibration/alignDMDtoCamera.m` real-hardware version
 - [ ] `+calibration/measurePSF.m` on fluorescent slab
+- [ ] `+calibration/measureFocalPlaneTilt.m` — focal-plane tilt (tilted TF grating) via
+      objective-Z sweep (`tfp.hardware.SutterZStage`, MP-285 serial on the DAQ PC)
 - [ ] First in-vivo PPSF data
 - [ ] Rapid sequential targeting data
 - [ ] Power curve data

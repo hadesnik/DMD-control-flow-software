@@ -10,7 +10,7 @@ Bottom line: **do not run on the real rig until the CRITICAL items below are res
 - [x] **C1. Fire the ScanImage start-acquisition TTL.** *(Resolved by T-EP-3c, commit `2f04661`. Sequencer.runOne now calls `daq.sendDigitalPulse(startAcqLine, startAcqPulseS)` per trial.)*
 
 - [ ] **C2. Wire `powerLUT` through Sequencer AO queueing.**
-  [Sequencer.m](src/+tfp/+trial/Sequencer.m) `buildStimWaveform` (line ~782) uses `trial.powerMw` as a raw voltage. [powerLUT.m](src/+tfp/+patterns/powerLUT.m) is only called by `tests/test_patterns.m`. The FS-50 modulation input will sit at the wrong voltage for any power curve. Mock tests pass because `MockDAQ` synthesizes responses regardless of AO.
+  [Sequencer.m](src/+tfp/+trial/Sequencer.m) `buildStimWaveform` (line ~782) uses `trial.powerMw` as a raw voltage. [powerLUT.m](src/+tfp/+patterns/powerLUT.m) is only called by `tests/test_patterns.m`. The photostim laser's modulation input will sit at the wrong voltage for any power curve. Mock tests pass because `MockDAQ` synthesizes responses regardless of AO. **Deferred to laser arrival:** the FS-50 was removed (2026-07-24); wire this once the Light Conversion Carbide's V→power curve is measured (`powerMeterSweep`, whose two-phase pulse-picker model may need revisiting for the Carbide).
   *Next: T-EP-3d.*
 
 - [x] **C3. Pick one execution path (per-trial vs continuous-session) and unify.** *(Resolved by T-EP-3c, commit `2f04661`. Sequencer now uses `startContinuousSession`/`queueClockedAO` and arms ScanImage episodically per trial — same path as the ensemble experiments.)*

@@ -66,8 +66,9 @@ fakeCells:
     sigma: 10
     aiChannel: 2
 
-# Laser modulation (NKT FS-50). Ignored in mock mode — included for
-# config schema parity with real.yaml.
+# Laser modulation (photostim laser). Ignored in mock mode — included for
+# config schema parity with real.yaml. Rig laser is a Light Conversion Carbide
+# (the NKT FS-50 was removed); the fs50_ao_channel key keeps its legacy name.
 laser:
   fs50_ao_channel: 'ao3'
   modulation_voltage_max: 5.0
@@ -80,6 +81,12 @@ laser:
   max_sustained_power_pct: 20    # > this %, held >= sustained_duration_s -> hard block
   sustained_duration_s: 1.0
   autoConfirmPower: true         # mock/dev: don't block headless >10% requests
+
+# Axial (focus) stage. Consumed by tfp.calibration.measureFocalPlaneTilt.
+zstage:
+  class: 'tfp.hardware.MockZStage'
+  rangeUm: [-500, 500]
+  startUm: 0
 
 # Trial timing defaults.
 trial:

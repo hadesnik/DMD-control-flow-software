@@ -133,7 +133,7 @@ State your quoted latency/settle values with the ±4 µs digitiser floor when re
 This toolset drives pattern projection through the high-power laser path.
 
 - **Ensure no sample or animal is in the beam** before running any rate sweep.
-- Use the **lowest laser power that gives adequate APD contrast** (a few milliwatts at the sample is sufficient for a Thorlabs APD; the NKT FS-50 should be attenuated accordingly).
+- Use the **lowest laser power that gives adequate APD contrast** (a few milliwatts at the sample is sufficient for a Thorlabs APD; the Carbide photostim laser should be attenuated accordingly). *(Laser note 2026-07-24: the NKT FS-50 was removed from this rig; the incoming laser is a Light Conversion Carbide, ~early Sept 2026.)*
 - Follow the interlocks in `src/+tfp/+util/safetyChecks.m`. Any experiment script that calls the photostimulation laser must call `tfp.util.safetyChecks.assertBeamSafe(cfg)` before arming the DAQ.
 - Never leave pattern projection running with the beam uncovered when the scope is unattended.
 

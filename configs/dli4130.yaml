@@ -32,7 +32,7 @@ dmd:
 #   ai3: SLM/stim trigger monitor — reads back the stimulation trigger line
 #   ao0: Multiclamp 700B ch1 command (postsynaptic cell)
 #   ao2: Multiclamp 700B ch2 command (presynaptic cell, normally unused)
-#   ao3: NKT FS-50 power modulator (photostim laser power control)
+#   ao3: photostim laser power modulator (Carbide incoming; FS-50 removed 2026-07-24)
 #   port0/line10 (DO): ScanImage acquisition trigger
 #   port0/line8  (DO): SLM trigger out (Masato's SLM; spare for our DMD rig)
 #   port0/line1  (DI): ScanImage frame clock (rising edge = frame acquired)
@@ -59,7 +59,8 @@ paths:
   dataDir: 'C:\data'
   calibration_file: ''
 
-# Laser modulation — NKT FS-50 analog control on ao3.
+# Laser modulation — photostim laser analog control on ao3. (Laser change
+# 2026-07-24: FS-50 removed; Light Conversion Carbide incoming. Legacy key name.)
 laser:
   fs50_ao_channel: 'ao3'
   modulation_voltage_max: 5.0

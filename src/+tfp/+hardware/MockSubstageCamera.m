@@ -13,8 +13,15 @@ classdef MockSubstageCamera < tfp.hardware.SubstageCamera
     %     .dmd            — tfp.hardware.MockDMD handle (optional)
     %     .truthAffine    — 3x3 affine, DMD [col,row] → camera [x,y] (optional;
     %                       required if dmd is set)
+    %     .zStage         — tfp.hardware.ZStage handle (optional; enables Z-aware
+    %                       rendering for focal-plane-tilt testing)
+    %     .truthTiltPlane — [a b z0]: best-focus Z (µm) = z0 + a*(col-cx) + b*(row-cy)
+    %                       in DMD coords. When set with zStage, the rendered spot's
+    %                       brightness peaks and sigma minimises on this tilted plane.
+    %     .focusWaistZUm  — axial brightness falloff (µm, default 5)
+    %     .zRayleighUm    — axial sigma-broadening scale (µm, default 8)
     %
-    %   See also tfp.calibration.alignDMDtoCamera.
+    %   See also tfp.calibration.alignDMDtoCamera, tfp.calibration.measureFocalPlaneTilt.
 
     properties (SetAccess = protected)
         nRows         = []
@@ -23,13 +30,17 @@ classdef MockSubstageCamera < tfp.hardware.SubstageCamera
     end
 
     properties (Access = private)
-        dmd_          = []
-        truthAffine_  = []
-        noiseLevel_   = 0.05
-        spotSigmaPx_  = 4
-        scanRect_     = []   % [x1 y1 width height] 1-indexed px; renders scan rectangle
-        lastFrame_    = []
-        log_          = struct('timestamp', {}, 'eventType', {}, 'payload', {})
+        dmd_            = []
+        truthAffine_    = []
+        noiseLevel_     = 0.05
+        spotSigmaPx_    = 4
+        scanRect_       = []   % [x1 y1 width height] 1-indexed px; renders scan rectangle
+        lastFrame_      = []
+        zStage_         = []   % optional tfp.hardware.ZStage handle (Z-aware rendering)
+        truthTiltPlane_ = []   % [a b z0]: best-focus Z (µm) = z0 + a*(col-cx) + b*(row-cy)
+        focusWaistZUm_  = 5    % axial brightness falloff (µm)
+        zRayleighUm_    = 8    % axial sigma-broadening scale (µm)
+        log_            = struct('timestamp', {}, 'eventType', {}, 'payload', {})
     end
 
     methods
@@ -63,6 +74,19 @@ classdef MockSubstageCamera < tfp.hardware.SubstageCamera
                 end
                 obj.truthAffine_ = A;
             end
+            if isfield(config, 'zStage')
+                obj.zStage_ = config.zStage;
+            end
+            if isfield(config, 'truthTiltPlane')
+                p = config.truthTiltPlane;
+                if ~isnumeric(p) || numel(p) ~= 3
+                    error('tfp:hardware:MockSubstageCamera:badTiltPlane', ...
+                        'truthTiltPlane must be [a b z0].');
+                end
+                obj.truthTiltPlane_ = p(:)';
+            end
+            obj.focusWaistZUm_ = configField(config, 'focusWaistZUm', 5);
+            obj.zRayleighUm_   = configField(config, 'zRayleighUm',   8);
 
             obj.isInitialized = true;
             obj.lastFrame_    = [];
@@ -93,7 +117,24 @@ classdef MockSubstageCamera < tfp.hardware.SubstageCamera
                         p = obj.truthAffine_ * [dmdCol; dmdRow; 1];
                         camX = p(1);   % camera column (x)
                         camY = p(2);   % camera row (y)
-                        frame = frame + obj.gaussianSpot(camX, camY);
+
+                        % Z-aware rendering: if a ZStage + tilt plane are set,
+                        % modulate brightness/sigma by the defocus dz = stage Z
+                        % minus the best-focus Z at this spot (tilted plane).
+                        amp        = 1;
+                        sigmaScale = 1;
+                        if ~isempty(obj.zStage_) && ~isempty(obj.truthTiltPlane_)
+                            cx = size(pattern, 2) / 2;   % DMD centre (col)
+                            cy = size(pattern, 1) / 2;   % DMD centre (row)
+                            a  = obj.truthTiltPlane_(1);
+                            b  = obj.truthTiltPlane_(2);
+                            z0 = obj.truthTiltPlane_(3);
+                            zFocus = z0 + a*(dmdCol - cx) + b*(dmdRow - cy);
+                            dz = obj.zStage_.getPosition() - zFocus;
+                            amp        = exp(-dz^2 / (2 * obj.focusWaistZUm_^2));
+                            sigmaScale = sqrt(1 + (dz / obj.zRayleighUm_)^2);
+                        end
+                        frame = frame + obj.gaussianSpot(camX, camY, amp, sigmaScale);
                     end
                 end
             end
@@ -130,11 +171,13 @@ classdef MockSubstageCamera < tfp.hardware.SubstageCamera
         end
 
         function cleanup(obj)
-            obj.isInitialized = false;
-            obj.dmd_          = [];
-            obj.truthAffine_  = [];
-            obj.scanRect_     = [];
-            obj.lastFrame_    = [];
+            obj.isInitialized   = false;
+            obj.dmd_            = [];
+            obj.truthAffine_    = [];
+            obj.scanRect_       = [];
+            obj.lastFrame_      = [];
+            obj.zStage_         = [];
+            obj.truthTiltPlane_ = [];
             obj.logEvent('cleanup', []);
         end
 
@@ -144,10 +187,12 @@ classdef MockSubstageCamera < tfp.hardware.SubstageCamera
     end
 
     methods (Access = private)
-        function spot = gaussianSpot(obj, cx, cy)
+        function spot = gaussianSpot(obj, cx, cy, amp, sigmaScale)
+            if nargin < 4 || isempty(amp),        amp = 1;        end
+            if nargin < 5 || isempty(sigmaScale), sigmaScale = 1; end
             [cols, rows] = meshgrid(1:obj.nCols, 1:obj.nRows);
-            s   = obj.spotSigmaPx_;
-            spot = exp(-((cols - cx).^2 + (rows - cy).^2) / (2 * s^2));
+            s   = obj.spotSigmaPx_ * sigmaScale;
+            spot = amp * exp(-((cols - cx).^2 + (rows - cy).^2) / (2 * s^2));
         end
 
         function logEvent(obj, eventType, payload)
