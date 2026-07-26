@@ -1740,6 +1740,658 @@ Depends on Rounds 3–4.
 
 ---
 
+## TASK-BU: Bring-up optical path — align the control code with the real optics
+
+**Tracking prefix:** `T-BU-`.
+**Source of truth:** [docs/dmd_control_handoff.md](docs/dmd_control_handoff.md),
+generated from the `TF optics simulator` repo for build
+`33010FL01-530R 6.0mm 80/300 150/80`. Regenerate that doc rather than editing it.
+
+**What this task family is for.** The bring-up arm is now specified:
+CARBIDE 1030 nm → DMD → 4f (80/300) → 1200 g/mm grating → 4f (150/80) →
+existing periscope / PBS / Olympus 180 mm tube / Nikon CFI75 LWD 16×/0.8 W.
+No PLM, no πShaper. An audit of the repo against that spec (2026-07-26) found
+the control code still encodes the *pre-optics guesses*: an isotropic
+0.270 µm/px sample scale, no knowledge of the chip's 45° clocking, no
+enforcement of the illuminated patch, and a laser interlock that cannot see
+the pattern at all. These tasks close those gaps.
+
+**Three facts drive almost every task below:**
+1. **The chip is clocked 45°.** The optical axes are the chip *diagonals*, not
+   its rows and columns. Every sample↔DMD transform carries that rotation.
+2. **The sample scale is anisotropic and ~4× larger than configured.**
+   1.1250 µm/px along the grooves, 1.4162 µm/px along the dispersion axis
+   (ratio 1.2588). `configs/real.yaml` currently says 0.270 µm/px, isotropic.
+3. **Pattern fill fraction is a laser-safety parameter.** Each 4f relay forms a
+   real focus in air at its pupil; a uniform ON patch puts the whole pulse into
+   one ~27 µm spot there.
+
+**Corollary — a soma is now ~80 DMD pixels, not ~900** (Hillel, 2026-07-26).
+This falls straight out of fact 2 and is worth stating separately because it
+invalidates a default that appears in a dozen files. A round spot of radius
+`R` µm at the sample needs an ellipse on the DMD with semi-axes
+`R/1.1250` px (groove) and `R/1.4162` px (dispersion), so its area is
+`π·R²/1.5932` pixels:
+
+| Sample spot diameter | DMD semi-axes (px) | DMD pixels |
+|---|---|---|
+| 10 µm | 4.4 × 3.5 | ~49 |
+| **12.7 µm (soma-sized)** | **5.7 × 4.5** | **~80** |
+| 15 µm | 6.7 × 5.3 | ~111 |
+
+Two consequences, one good and one bad:
+  - **Good:** `fillFactorEnsemble` gets **~80 discrete power levels per neuron**
+    (1.25% steps), set by how many of the ~80 pixels in that neuron's patch are
+    ON. That is ample, but it is >10× coarser than the ~900 levels the pilot
+    assumed, and the code should say so rather than let a caller silently
+    request 500 levels. See T-BU-1e.
+  - **There is a hard rasterization floor at soma scale** (measured 2026-07-26
+    against the completed T-BU-1a + T-BU-1b, sweeping groove semi-axis and
+    mapping the ON pixels back to the sample plane):
+
+    | groove semi-axis (px) | ON px | sample aspect, anisotropic | isotropic |
+    |---|---|---|---|
+    | 2.8   | 21     | **1.2588** | 1.2588 |
+    | 5.644 (soma) | 81 | 1.079 | 1.2588 |
+    | 11.3  | 319    | 1.007 | 1.2588 |
+    | 28    | 1969   | 1.0006 | 1.2588 |
+    | 113   | 31849  | 0.998 | 1.2588 |
+
+    The anisotropic correction is exact in the continuum — the residual converges
+    to 1.000 — but on the pixel lattice it cannot be fully expressed at small
+    radii. At soma scale ~8% aspect error remains, and **below ~4 px semi-axis
+    the ellipse rasterizes to the same pixel set as the circle, so the
+    correction buys nothing at all.** This is physics, not a defect: you cannot
+    make a perfectly round 12.7 µm spot out of ~80 mirrors. Relevant to T-BU-3e
+    (`measurePSF` deliberately wants a near-minimal spot and is at the floor)
+    and worth stating in any figure caption that claims round targets.
+
+  - **Bad:** every spot-radius default in the repo is **3–4× too large**. They
+    were chosen against the old 0.270 µm/px guess. `radiusPx = 15`, drawn as an
+    isotropic pixel circle, is a **34 × 42 µm ellipse** at the sample — not a
+    ~12 µm round spot. Left unfixed this destroys single-cell resolution, which
+    is the central claim of the hero figure. The defaults are spread across
+    experiment and calibration files; each owning task fixes its own
+    (T-BU-1e, 2b, 2c, 3b, 3e).
+
+**%CORRECTION to the generated handoff doc (confirmed with Hillel 2026-07-26):**
+§7 states the CARBIDE delivers 800 µJ at 100 kHz and quotes "80 W available".
+**The laser is 40 W, not 80 W** — the 80 W figure is an error in the generator
+and should be fixed upstream in the `TF optics simulator` repo. Consequences:
+  - Max pulse energy at 100 kHz is **400 µJ**, not 800 µJ.
+  - The **~68 µJ interlock threshold is UNCHANGED** — it is an air-ionization
+    limit at the pupil, a property of the optics and the 230 fs pulse, not a
+    laser spec. Full-field ON still exceeds it by ~5.9× (rather than ~12×).
+  - The routine-operation headroom quote becomes ~2.83 W of laser output out of
+    40 W available (~7%), not 10.8% of 80 W.
+Any task that hardcodes a laser number takes it from `configs/real.yaml`, never
+from §7 of the handoff doc.
+
+---
+
+### Round 0 — Constants and single source of truth [1 agent, sequential prereq]
+
+- [x] T-BU-0  Optical constants config block + `opticalModel` accessor. **[DONE
+              2026-07-26]** — `configs/real.yaml` dmd + laser blocks rewritten,
+              `tfp.util.opticalModel` added as the single source of truth,
+              23 new tests green (332 → 355 baseline).
+              Everything downstream reads its constants from here; no other
+              task may hardcode 1.1250, 1.4162, 45, 278, or 68.
+                - `configs/real.yaml`: rewrite the `dmd` block for the bring-up
+                  path. New keys (all `%VERIFY` — they are design intent, not
+                  calibration):
+                    `clockingDeg: 45`
+                    `umPerPixelGroove: 1.1250`
+                    `umPerPixelDispersion: 1.4162`
+                    `anisotropy: 1.2588`
+                    `patchCenterPx: [640, 400]`   # illumination centroid, NOT
+                                                  # necessarily the chip centre
+                    `patchRadiusPx: 278`          # design Ø6.0 mm
+                    `patchMaxRadiusPx: 329`       # hard clip limit, Ø7.12 mm
+                    `gaussianWaistPx: 555.6`      # I(r)=exp(-2r²/w²)
+                    `depthGradientUmPerUm: 0.02174`
+                    `fieldExtentUm: [625, 787]`
+                  Retain the scalar `umPerPixel` ONLY as a deprecated key with
+                  a comment pointing at the two axis-specific values; T-BU-2b
+                  removes its last consumer.
+                - `configs/real.yaml` `laser` block: add
+                  `rep_rate_hz: 100000`, `max_power_w: 40`,
+                  `max_pulse_energy_uj_pupil: 68`,
+                  `pupil_interlock_fill_fraction: 0.2` (fill above which the
+                  pupil check applies), all `%VERIFY` on CARBIDE arrival.
+                - NEW `src/+tfp/+util/opticalModel.m`: reads a config struct and
+                  returns a validated constants struct, applying documented
+                  defaults via `configField`. This is the ONLY place the design
+                  numbers appear in code.
+                - NEW `tests/test_opticalModel.m`: defaults, validation errors,
+                  and a consistency check that
+                  `umPerPixelDispersion/umPerPixelGroove ≈ anisotropy`.
+              Files: MODIFY `configs/real.yaml`;
+                     NEW `src/+tfp/+util/opticalModel.m`,
+                     NEW `tests/test_opticalModel.m`.
+
+---
+
+### Round 1 — Independent primitives [4 parallel agents]
+
+All four are new-file-dominant and share no files. Each depends only on T-BU-0.
+
+- [x] T-BU-1a  Anisotropic sample↔DMD coordinate mapping. **[DONE 2026-07-26]**
+                22 tests green. Sample column order is [dispersion groove];
+                DMD offsets are [dCol dRow] to match `multiSpot`/`singleSpot`.
+                A supplied matrix is always interpreted DMD→sample, and
+                supersedes `dispersionAxisSign` (a fit already carries its signs).
+                **Units trap found during implementation — see T-BU-2b(ii):**
+                the functions deliberately do NOT auto-read
+                `calibration.dmdToSample_affine`, because in this repo that field
+                maps DMD px → substage CAMERA px, not µm. Wiring it in directly
+                would reintroduce exactly the units bug T-BU-2b exists to remove.
+                Callers must pass an explicit µm-valued map. Any later task that
+                wants to feed calibration output straight in needs a µm-valued
+                fit first.
+                The replacement for the scalar `pixelsPerUm`. Builds the
+                forward and inverse linear maps from §5 of the handoff:
+                  `d_disp = (dc + dr)/sqrt(2)`, `d_groove = (dc - dr)/sqrt(2)`
+                  `x_disp = d_disp * 1.4162`, `y_groove = d_groove * 1.1250`
+                Must accept EITHER the design constants (from `opticalModel`)
+                OR the linear part of a fitted affine, so the same call site
+                works pre- and post-calibration. Sign conventions are NOT
+                specified by the optics doc — expose `dispersionAxisSign` and
+                resolve it on the bench; default +1 with a `%VERIFY`.
+              Files: NEW `src/+tfp/+patterns/sampleToDmdOffset.m`,
+                     NEW `src/+tfp/+patterns/dmdToSampleOffset.m`,
+                     NEW `tests/test_sampleDmdMapping.m`.
+
+- [x] T-BU-1b  Anisotropic spot shapes. **[DONE 2026-07-26]** 14/14 green
+                (6 pre-existing untouched + 8 new). Opt-in via a trailing
+                `options` struct (`.anisotropic`, `.model`, `.config`); the
+                default path returns early through the verbatim original
+                expression, so it is bit-identical.
+                **Direction (derived, then mutation-tested):** the SHORT
+                semi-axis is on the (1,1) dispersion diagonal, the LONG one on
+                (1,-1) groove. A pixel step along dispersion buys more sample µm
+                (1.4162 vs 1.1250), so fewer pixels span the same distance.
+                **INTEGRATION CONTRACT — T-BU-2b/2c/3e must honour this:** in
+                anisotropic mode `radiusPx` means the **groove-axis (long)
+                semi-axis**, so the sample spot is a disc of radius
+                `radiusPx * umPerPixelGroove` µm. If a caller hands it the
+                DISPERSION semi-axis from `somaSpotGeometry` (T-BU-1e) instead,
+                every spot comes out 1.2588× too small with no error. Cross-check
+                the two APIs before wiring.
+                Also added: a degenerate-radius guard (anisotropic mode only) that
+                forces the rounded target pixel ON when the coarsely-rasterized
+                ellipse contains no lattice point — at ~5 px semi-axes a
+                sub-pixel offset could otherwise rasterize to an all-OFF pattern,
+                i.e. a silently skipped stimulus.
+                `dispersionAxisSign` is read but the mask is provably invariant
+                to it (the ellipse is centrosymmetric, the sign enters only
+                squared); a test pins that so an orientation change cannot later
+                be smuggled in through the sign. This matches T-BU-1a's
+                convention, where the sign flips DIRECTION along the always-(1,1)
+                dispersion diagonal rather than selecting which diagonal is
+                dispersion.
+                Caveat: `multiSpot` carries verbatim copies of three local
+                helpers (MATLAB cannot share locals across files and the task
+                owned only these two sources). A union test
+                (`anisotropic_multiSpot_matches_singleSpot_union`) is the
+                anti-drift lock — keep it if these are ever refactored.
+                A circle drawn in DMD pixels lands as a 1.26× ellipse at the
+                sample. Add an optional anisotropy mode to `singleSpot` and
+                `multiSpot` that draws an ellipse compressed by 1.2588 along
+                the `(1,1)` diagonal, so the SAMPLE spot is round. Default
+                behaviour (isotropic pixel circle) must be unchanged so the
+                existing tests stay green; the new mode is opt-in via an
+                options struct.
+              Files: MODIFY `src/+tfp/+patterns/singleSpot.m`,
+                     MODIFY `src/+tfp/+patterns/multiSpot.m`,
+                     MODIFY `tests/test_patterns.m` (add cases only).
+
+- [x] T-BU-1c  Patch-containment guard (pure function, no wiring).
+                **[DONE 2026-07-26]** 27 tests green.
+                API for T-BU-2a to wire:
+                  `info = tfp.util.assertPatternInPatch(patterns, config, options)`
+                accepting logical H×W or H×W×N (numeric = nonzero means ON), any
+                config `opticalModel` accepts, and `options.context` for a caller
+                tag such as `[DLP650LNIR_DMD.loadPatternSequence]`.
+                Decisions pinned by tests: boundary is inclusive
+                (`r <= patchRadiusPx` passes, matching `singleSpot`'s inclusive
+                radius — otherwise a spot generated at the patch edge would
+                self-reject); the hard-limit error outranks the soft one when
+                both are breached; `info` is returned only on success, since an
+                MException carries no custom payload, so failing-case diagnostics
+                live in the message text.
+                Cost is ~1.5 ms per full-chip pattern, so it is cheap enough to
+                sit on every load. It avoids a meshgrid via separable row/column
+                squared-radius lookups plus an independent-max bounding-box
+                upper bound per slice; exact enumeration runs only for slices
+                that fail the bound. The bound can only over-estimate, so it
+                never wrongly accepts — and a random-stack brute-force
+                cross-check against a meshgrid is in the tests.
+                §4: "Write nothing outside the patch — mirrors outside it must
+                be OFF." Nothing in the repo enforces this today;
+                `roiHalfWidthPx` is used only to lay out calibration grids.
+                Signature mirrors `assertLaserPowerSafe`: given a logical
+                pattern (or H×W×N stack) and the patch geometry, throw if any
+                ON pixel lies outside `patchRadiusPx` of `patchCenterPx`.
+                Error must name the offending pattern index and the worst-case
+                radius, and say what to do (re-pick a more central target).
+                Separate, harder error above `patchMaxRadiusPx` — beyond that
+                the beam clips lens La and the grating ruling.
+              Files: NEW `src/+tfp/+util/assertPatternInPatch.m`,
+                     NEW `tests/test_assertPatternInPatch.m`.
+
+- [x] T-BU-1d  Pupil pulse-energy interlock (pure function, no wiring).
+                **[DONE 2026-07-26]** 42 tests green.
+                `info = tfp.util.assertPulseEnergySafe(patternOrFill, voltageV, cfg)`
+                — pure, no state, and deliberately **no override form** (the
+                `powerMeterSweep` low-rep-rate exception is safe for average
+                power and makes THIS hazard worse, so it must not bypass here).
+                **Safety hole found and closed — the governing fill is
+                PATCH-relative, not chip-relative.** The literal reading (mean
+                over the whole pattern) is wrong on this chip: the design patch
+                is only ~24% of a 1280×800 array, so an all-ON *patch* scores
+                just 0.237 chip-wide and would scrape past a 0.2 gate, while a
+                half-ON patch would be exempt outright despite being 50% of the
+                illuminated area — which is the physically dangerous quantity.
+                The function computes both and takes the LARGER, falling back to
+                array-fill when the patch disc does not land on the supplied
+                array (also the conservative direction).
+                Does NOT discount energy by fill² above the gate — the 68 µJ
+                figure is quoted for the near-uniform case, so applying it
+                undiscounted is the conservative reading. fill² is reported as a
+                diagnostic only, with an explicit "do not 'improve' this by
+                scaling the limit with 1/fill²" warning.
+                **For T-BU-2a:** the headless opt-in key is
+                `autoConfirmPulseEnergy`, deliberately SEPARATE from
+                `autoConfirmPower` and defaulting false even in mock configs, so
+                the mock rig's `autoConfirmPower: true` cannot accidentally opt
+                past the pupil confirmation band. Keep them separate.
+                A NEW class of check the existing ao3 guard cannot express.
+                Given (pattern fill fraction, commanded ao3 voltage, config),
+                compute pulse energy = P/f and block when a high-fill pattern
+                is paired with pulse energy above
+                `max_pulse_energy_uj_pupil`. Pupil peak scales with the SQUARE
+                of the pattern mean, so the check is written in terms of fill
+                fraction, and sparse patterns must pass easily.
+                **Document the rep-rate inversion prominently in the header.**
+                `assertLaserPowerSafe` justifies its voltage-only model with
+                "lower rep rate → less real power, so this never
+                under-estimates." That is true for average power and BACKWARDS
+                here: at fixed average power, lowering the rep rate RAISES
+                pulse energy. The two guards are conservative in opposite
+                directions and both must run.
+              Files: NEW `src/+tfp/+util/assertPulseEnergySafe.m`,
+                     NEW `tests/test_assertPulseEnergySafe.m`.
+
+- [x] T-BU-1e  Soma-sized spot geometry + per-neuron power quantization.
+                **[DONE 2026-07-26]** 25 new tests + 4 added blocks, green.
+                `geom = tfp.patterns.somaSpotGeometry(diameterUm, config)`, taking
+                a SAMPLE-plane diameter (default 12.7 µm). Confirms the corollary
+                by rasterization: 10 µm → 47 px, 12.7 µm → **81 px**, 15 µm → 111
+                px (analytic 49.3 / 79.5 / 110.9), giving **81 power levels at
+                1.23% steps**.
+                Three hand-off routes for downstream callers, and they are NOT
+                interchangeable — see T-BU-1f:
+                  `.spotOptions`   → pass to singleSpot/multiSpot (preferred)
+                  `.offsetsPx` / `.localMask` → stamp directly at a centroid
+                  `.radiusPx`      → AREA-MATCHED isotropic fallback for
+                                     circle-only call sites. It preserves the
+                                     pixel budget (so power levels and delivered
+                                     energy stay right) while the sample spot is
+                                     1.2588× elongated; `.isotropicExtentUm`
+                                     reports that distortion so a caller can
+                                     quote it honestly.
+                `fillFactorEnsemble` docstring table rewritten against sample
+                diameters (legacy `radiusPx = 14` is a 31.5 × 39.7 µm ellipse,
+                2.8× a soma); `info` gains `.nPowerLevels` / `.powerStepPct`, and
+                a new `options.requestedFillLevels` warns via
+                `:fillQuantization` when a requested ladder is finer than the
+                coarsest neuron patch can resolve. Nested-subset permutation
+                behaviour untouched.
+
+- [x] T-BU-1f  **Round-1 reconciliation — API mismatch found and fixed
+                (2026-07-26).** Not originally planned; added after an
+                integration cross-check of the completed T-BU-1b and T-BU-1e.
+                The two were built to DIFFERENT contracts and the *intended*
+                hand-off was the broken path: `somaSpotGeometry.spotOptions`
+                carries `.semiAxisGroovePx`, but `singleSpot`/`multiSpot` only
+                understood `.anisotropic` / `.model` / `.config` and took the
+                geometry from the positional `radiusPx`. Unknown option fields
+                were not rejected, so the documented call
+                `singleSpot(dmd, ctr, geom.radiusPx, geom.spotOptions)`
+                silently painted **67 pixels instead of 81** — a 17% pixel
+                deficit, i.e. 17% less delivered power and 67 rather than 81
+                power levels, with no error anywhere.
+                Fix: `resolveSpotOptions` in both files now returns an explicit
+                `semiAxisGroovePx` which OVERRIDES the positional radius in
+                anisotropic mode, validated with a new `:badSemiAxis` error.
+                Verified: the hand-off now yields 81 px, matching
+                `somaSpotGeometry.nPixels`, and `.offsetsPx` stamps to a
+                bit-identical mask.
+                **Lesson for Round 2+:** two agents can each pass their own
+                tests and still not compose. Cross-check every new API pairing
+                at the seam before wiring it.
+              Files: MODIFY `src/+tfp/+patterns/singleSpot.m`,
+                     MODIFY `src/+tfp/+patterns/multiSpot.m`.
+                See the "~80 DMD pixels per soma" corollary above.
+                - NEW `somaSpotGeometry.m`: given a desired sample-plane spot
+                  DIAMETER in µm, return the DMD semi-axes (groove,
+                  dispersion), the expected in-patch pixel count, and hence the
+                  number of achievable power levels. This is the function every
+                  caller should use instead of picking a `radiusPx` by hand.
+                - MODIFY `fillFactorEnsemble.m`: its docstring table
+                  ("radiusPx = 17 → ~925 pixels, closest to the 900-px pilot
+                  target") is correct as pixel geometry but wrong as biology —
+                  radius 17 is a ~38 × 48 µm sample spot. Rewrite the table
+                  against sample-plane diameters, and have `info` report
+                  `nPowerLevels` (= `nPatchPixels`) plus a warning when the
+                  requested fill fractions are spaced finer than `1/nPatchPixels`
+                  and therefore quantize to the same pattern.
+                - Note for the implementer: at ~80 px the disk is coarsely
+                  rasterized, so prefer selecting an EXACT pixel count over
+                  relying on the rounded disk area, and keep the existing
+                  nested-subset permutation behaviour (it matters more now that
+                  low fill fractions are only a few pixels).
+              Files: NEW `src/+tfp/+patterns/somaSpotGeometry.m`,
+                     MODIFY `src/+tfp/+patterns/fillFactorEnsemble.m`,
+                     NEW `tests/test_somaSpotGeometry.m`,
+                     MODIFY `tests/test_ensemble_fill_factor_mock.m` (add cases only).
+
+---
+
+### Round 2 — Wiring [3 parallel agents]
+
+- [ ] T-BU-2a  Wire both guards into the DMD load choke point.
+                Depends on T-BU-1c + T-BU-1d. `loadPatternSequence` is the one
+                path every pattern crosses — same argument that put the laser
+                check inside the DAQ rather than in each experiment. Add a
+                protected validation hook on the `DMD` base class, call it from
+                both backends, and configure it from `makeHardware`. Must cover
+                `scripts/alpCheckerboard.m`-style all-ON alignment frames,
+                which are precisely the dangerous case.
+              Files: MODIFY `src/+tfp/+hardware/DMD.m`,
+                     MODIFY `src/+tfp/+hardware/MockDMD.m`,
+                     MODIFY `src/+tfp/+hardware/DLP650LNIR_DMD.m`,
+                     MODIFY `src/+tfp/+util/makeHardware.m`,
+                     MODIFY `tests/test_MockDMD.m` (add cases only).
+
+- [ ] T-BU-2b  Retire the scalar `pixelsPerUm`; fix the field-name collision.
+                Depends on T-BU-1a. Two separate defects:
+                (i) `ppsfPattern` converts µm offsets with a single scalar
+                applied to both row/column axes — wrong magnitude, wrong
+                anisotropy, wrong axes. This directly corrupts the distance
+                axis of the lateral-PPSF hero figure. Route it through
+                `sampleToDmdOffset` instead.
+                (ii) `calibration.pixelsPerUm` means CAMERA px per µm when it
+                comes from `alignDMDtoCamera` (1/1.56) but is read as DMD px
+                per µm by `ppsfPattern` — a ~5.8× error waiting for Phase 3 to
+                wire `calibration_file` loading (which currently throws
+                `notImplemented`). Rename the SCALAR to `cameraPixelsPerUm` /
+                `dmdPixelsPerUm` so the two can never be confused. This part is
+                in scope now and does not depend on the deferred decision below.
+                **Instead of resolving the affine question, DEFEND against it**
+                (see T-BU-2e): any call site that needs a µm-valued map must
+                fail loudly when handed a camera-valued one, rather than
+                silently scaling every target by ~5.8×.
+                Also update `validatePPSFTarget`: replace the hardcoded 80 px
+                from the GEOMETRIC centre with "target plus the largest
+                requested sweep offset stays inside the calibrated patch",
+                measured from `patchCenterPx`.
+                (iii) Fix the `radiusPx = 15` defaults in the four experiment
+                files owned here (~34 × 42 µm spots) and the `spotRadius = 8`
+                default in `alignDMDtoCamera`, using `somaSpotGeometry` from
+                T-BU-1e. Calibration spots need not be soma-sized, but they do
+                need a stated sample-plane size rather than a stale pixel count.
+              Files: MODIFY `src/+tfp/+patterns/ppsfPattern.m`,
+                     MODIFY `src/+tfp/+util/validatePPSFTarget.m`,
+                     MODIFY `src/+tfp/+calibration/alignDMDtoCamera.m`,
+                     MODIFY `src/+tfp/+calibration/alignDMDtoCamera_mock.m`,
+                     MODIFY `src/+tfp/+experiments/exp_ppsf_lateral.m`,
+                     MODIFY `src/+tfp/+experiments/exp_ppsf_2d.m`,
+                     MODIFY `src/+tfp/+experiments/exp_rapid_sequential.m`,
+                     MODIFY `src/+tfp/+experiments/exp_axial_ppsf.m`.
+
+- [ ] T-BU-2c  Spot-radius defaults in the remaining experiment scripts.
+                Depends on T-BU-1e. Same defect as T-BU-2b(iii) in the files
+                T-BU-2b does not own: `radiusPx = 15` in `exp_power_curve` and
+                `exp_power_curve_3dshot`, `spotRadiusPx = 14` in
+                `exp_ensemble_activation` and `exp_ensemble_fill_factor_power`
+                (whose docstring also claims "~28 px ≈ cell-sized"). Replace
+                with a sample-plane diameter routed through `somaSpotGeometry`.
+                Note `exp_power_curve_3dshot` is the SLM arm — it does not go
+                through the DMD/grating path, so its spot sizing is governed by
+                the CGH model, not by §5. Fix the comment, and confirm before
+                changing the number.
+              Files: MODIFY `src/+tfp/+experiments/exp_power_curve.m`,
+                     MODIFY `src/+tfp/+experiments/exp_power_curve_3dshot.m`,
+                     MODIFY `src/+tfp/+experiments/exp_ensemble_activation.m`,
+                     MODIFY `src/+tfp/+experiments/exp_ensemble_fill_factor_power.m`.
+
+---
+
+- [ ] T-BU-2e  Units guard on the DMD→sample map (defensive; replaces the
+                deferred schema decision).
+                Depends on T-BU-1a. Small but load-bearing.
+                `calibration.dmdToSample_affine` is misleadingly named: it maps
+                DMD px → substage CAMERA px, not µm. `sampleToDmdOffset` /
+                `dmdToSampleOffset` already refuse to consume it implicitly
+                (T-BU-1a), which is correct but passive — a future caller can
+                still pass it in explicitly and get every target scaled by
+                ~5.8× with no complaint.
+                Add an explicit units tag to the map a caller supplies, and
+                throw `tfp:patterns:sampleToDmdOffset:wrongUnits` when a
+                camera-valued map reaches a µm-valued call site. A cheap
+                plausibility check is a good backstop even without a tag: on
+                this rig a genuine µm-valued DMD→sample linear part has
+                singular values near 1.125 / 1.416, whereas a camera-valued one
+                is near 0.72 / 0.91 (µm/px over the 1.56 µm camera pixel), so
+                anything off by more than ~2× from the optical model is almost
+                certainly the wrong map. Warn loudly, name both hypotheses.
+              Files: MODIFY `src/+tfp/+patterns/sampleToDmdOffset.m`,
+                     MODIFY `src/+tfp/+patterns/dmdToSampleOffset.m`,
+                     MODIFY `tests/test_sampleDmdMapping.m` (add cases only).
+
+---
+
+### Round 3 — Calibration and reporting [5 parallel agents]
+
+- [ ] T-BU-3a  Affine sanity check + periscope-reversal diagnostic.
+                §9 asks the control code to fit its own affine and use §5 only
+                as an expected starting point. The fit is already 6-DOF
+                (`fitgeotrans(...,'affine')`), so it absorbs the 45° rotation
+                and the anisotropy for free — what's missing is the check.
+                Take an SVD of the fitted linear part: the two singular values
+                are the principal scales, their ratio should be 1.2588, and the
+                rotation should be ≈45°. Convert to camera px (divide by
+                `camera.umPerPixel`) before comparing.
+                Make it a DIAGNOSTIC, not just a warning: the periscope's
+                unconfirmed lens order is a clean **1.778×** hypothesis, so if
+                the fitted scale is off by that factor the routine should say
+                "the periscope is installed reversed relative to the handoff
+                doc" rather than "calibration looks wrong."
+              Files: MODIFY `src/+tfp/+calibration/private/fitAffineCalib.m`,
+                     NEW `tests/test_affineScaleCheck.m`.
+
+- [ ] T-BU-3b  Focal-plane-tilt defaults and expectation check.
+                The routine already exists and has the right shape; it just
+                carries stale constants. Replace the `umPerPixel` default of
+                0.270 with the `opticalModel` values, and compare the measured
+                tilt against the design expectation: 1.245° entirely along the
+                DISPERSION axis, 0.03079 µm per pixel along the `(1,1)`
+                diagonal, 17.1 µm across the patch. A measured groove-axis
+                component is a red flag (the design has none) — surface it.
+              Files: MODIFY `src/+tfp/+calibration/measureFocalPlaneTilt.m`,
+                     MODIFY `src/+tfp/+calibration/measureFocalPlaneTilt_mock.m`,
+                     MODIFY `tests/test_focalPlaneTilt_mock.m` (add cases only).
+
+- [ ] T-BU-3c  Per-target depth offset helper (pure function, no wiring).
+                17.1 µm of depth walk across the patch against a 17.7 µm axial
+                FWHM means two targets at opposite field edges are NOT in the
+                same plane. The handoff says to surface this rather than hide
+                it. Compute `z_um ≈ x_disp * 0.02174` per target and flag when
+                a multi-target ensemble spans more than one axial FWHM.
+                Helper + tests ONLY — Sequencer wiring is T-BU-4b, because
+                `Sequencer.m` is owned by the in-progress TASK-EP work.
+              Files: NEW `src/+tfp/+util/targetDepthOffset.m`,
+                     NEW `tests/test_targetDepthOffset.m`.
+
+- [ ] T-BU-3d  Gaussian-uniformity dwell correction.
+                §8: no πShaper, so the patch sits inside a Gaussian —
+                `I(r)/I0 = exp(-2r²/555.6²)`, falling to 0.61 at the patch
+                edge, needing a 1.65× dwell correction there. The flat-field
+                map already comes out of `measureIlluminationUniformity` but
+                nothing consumes it. Convert a per-target relative intensity
+                into a per-target dwell in 80 µs binary frames.
+                **Correct in time, not in fill fraction** — and note WHY in the
+                header, because we already own a fill-fraction knob
+                (`fillFactorEnsemble`) and reusing it here would be wrong:
+                raising an edge target's fill to compensate for dimming raises
+                the pupil peak quadratically (see T-BU-1d), whereas raising its
+                dwell leaves the peak untouched.
+              Files: NEW `src/+tfp/+patterns/dwellCorrection.m`,
+                     NEW `tests/test_dwellCorrection.m`.
+
+- [ ] T-BU-3e  Spot-radius defaults in the calibration routines.
+                Depends on T-BU-1e. `spotRadius = 15` in
+                `measureIlluminationUniformity` (whose comment says
+                "≈ cell-sized" — it is ~34 × 42 µm), `spotRadiusPx = 5` in
+                `verifyScanFieldComposition`, `spotRadiusPx = 3` in
+                `measurePSF`, `spotRadius = 8` in `calibrationGUI`.
+                These do not all need to be soma-sized — `measurePSF`
+                deliberately wants a near-minimal spot — but every one should
+                state its intended SAMPLE-plane size and derive the pixel
+                geometry, so the next optics change updates them automatically.
+                `measurePSF` in particular should note that its minimum useful
+                spot is now a few pixels across, near the rasterization floor.
+              Files: MODIFY `src/+tfp/+calibration/measureIlluminationUniformity.m`,
+                     MODIFY `src/+tfp/+calibration/verifyScanFieldComposition.m`,
+                     MODIFY `src/+tfp/+calibration/measurePSF.m`,
+                     MODIFY `src/+tfp/+calibration/calibrationGUI.m`.
+
+---
+
+### Round 4 — Integration and docs [serialized]
+
+- [ ] T-BU-4a  CLAUDE.md sync. Single-file task, serialized because every
+                agent reads it. Stale for the bring-up path: the objective is a
+                Nikon CFI75 LWD 16×/0.8 W (not the Olympus 20×/1.0), the
+                addressable field is a 625×787 µm ellipse (not 3×3 mm), the
+                pixel scale is the anisotropic pair (not ~40× demag /
+                0.270 µm/px), and the laser-safety section needs the pupil
+                interlock and the rep-rate inversion added alongside the
+                existing ao3 policy.
+              Files: MODIFY `CLAUDE.md`.
+
+- [ ] T-BU-4b  Sequencer wiring for depth reporting and dwell correction.
+                Depends on T-BU-3c + T-BU-3d **and on TASK-EP landing** —
+                `Sequencer.m` is owned by T-EP-3c/3d until then. Attach the
+                per-target z estimate to trial metadata and apply the dwell
+                correction when a uniformity map is present in the config.
+              Files: MODIFY `src/+tfp/+trial/Sequencer.m`.
+
+- [ ] T-BU-4c  `slm.NA_eff` follow-up. `configs/real.yaml` carries
+                `NA_eff: 0.6` for the 3D-SHOT arm, which no longer matches an
+                0.8 NA objective. Small, but it feeds the CGH model.
+                Sequenced AFTER T-BU-0 to avoid two agents editing
+                `configs/real.yaml`.
+              Files: MODIFY `configs/real.yaml`.
+
+---
+
+### MANUAL — operator at the rig, not for agents
+
+- [DEFERRED] T-BU-M0  **Decide what `dmdToSample_affine` should be** — raise
+                this at the FIRST CALIBRATION RUN, not before (Hillel,
+                2026-07-26: "hold that question for when I actually get to
+                running the calibration"). The field maps DMD px → substage
+                CAMERA px despite its name. Two options: rename it
+                `dmdToCam_affine` (which is already what `composeCalibration`
+                calls it downstream), or compose it with `camera.umPerPixel` to
+                produce a genuinely µm-valued fit. It is a saved-calibration
+                schema question, so it wants real calibration data in hand
+                rather than a guess.
+                Until then T-BU-2e guards the hazard defensively, so nothing is
+                blocked. Whoever runs the first calibration: read T-BU-2e first,
+                then decide.
+
+- [MANUAL] T-BU-M1  Resolve the periscope lens order. §9 flags this as the
+                largest single risk in the numbers: the 200/150 pair's order is
+                unconfirmed, and reversing it changes every µm/px figure by
+                1.778×. T-BU-3a will diagnose it from a calibration grid;
+                confirming it optically is faster.
+- [MANUAL] T-BU-M2  Re-confirm the Olympus 180 mm tube lens focal length.
+- [MANUAL] T-BU-M3  Measure the illumination centroid on the chip and write it
+                into `dmd.patchCenterPx`. The patch centre is where the
+                Gaussian actually lands, which is not necessarily the chip
+                centre; both the containment guard and the dwell correction key
+                off it.
+- [MANUAL] T-BU-M4  Determine the two unresolved signs on the bench:
+                which chip diagonal is `+disp`, and which way depth runs.
+                Two-point calibration, per §5.
+- [MANUAL] T-BU-M5  `%VERIFY` the CARBIDE power-control interface on arrival
+                (~early Sept 2026): analog ao3 as assumed, or the Light
+                Conversion software/TCP API. If the latter, both the existing
+                ao3 guard and the new pupil interlock move into a
+                `tfp.hardware.Laser` driver.
+- [MANUAL] T-BU-M6  Fix the 80 W → 40 W error upstream in the
+                `TF optics simulator` repo and regenerate
+                `docs/dmd_control_handoff.md`. Cannot be done from this repo.
+
+---
+
+**STATUS 2026-07-26:** Round 0 and Round 1 complete (T-BU-0, 1a–1e, plus the
+unplanned reconciliation T-BU-1f). Full suite **479/479 green**, up from a
+332 baseline. Round 2 is unblocked.
+The `dmdToSample_affine` units/naming question is **DEFERRED to the first
+calibration run** (T-BU-M0) — it is a saved-calibration schema decision that
+wants real data in hand. T-BU-2e guards the hazard defensively in the meantime,
+so no task waits on it.
+
+**Parallelism summary (bring-up optical path):**
+  Round 0: 1 agent  (T-BU-0, sequential prereq — everything reads its constants)
+  Round 1: 5 agents (T-BU-1a/1b/1c/1d/1e) + 1f reconciliation at the seam
+  Round 2: 4 agents (T-BU-2a/2b/2c/2e)
+  Round 3: 5 agents (T-BU-3a/3b/3c/3d/3e)
+  Round 4: serialized (T-BU-4a; 4b blocked on TASK-EP; 4c after 0)
+
+**Dependency edges that force the rounds:**
+  everything            → T-BU-0   (constants)
+  T-BU-2b               → T-BU-1a  (needs the coordinate map)
+  T-BU-2a               → T-BU-1c + T-BU-1d  (wires both guards)
+  T-BU-2b/2c, T-BU-3b/3e → T-BU-1e (needs somaSpotGeometry)
+  T-BU-4b               → T-BU-3c + T-BU-3d + TASK-EP
+
+**File-conflict map (bring-up optical path):**
+  configs/real.yaml            — T-BU-0, then T-BU-4c (sequence)
+  opticalModel.m               — T-BU-0 only
+  sampleToDmdOffset.m / dmdToSampleOffset.m — T-BU-1a (new), T-BU-2b (consumer)
+  singleSpot.m / multiSpot.m   — T-BU-1b only
+  tests/test_patterns.m        — T-BU-1b only
+  assertPatternInPatch.m       — T-BU-1c (new) + T-BU-2a (consumer)
+  assertPulseEnergySafe.m      — T-BU-1d (new) + T-BU-2a (consumer)
+  somaSpotGeometry.m           — T-BU-1e (new); consumed by 2b/2c/3b/3e
+  fillFactorEnsemble.m         — T-BU-1e only
+  tests/test_ensemble_fill_factor_mock.m — T-BU-1e only
+  DMD.m / MockDMD.m / DLP650LNIR_DMD.m / makeHardware.m — T-BU-2a only
+  tests/test_MockDMD.m         — T-BU-2a only
+  ppsfPattern.m                — T-BU-2b only
+  validatePPSFTarget.m         — T-BU-2b only
+  alignDMDtoCamera.m / _mock.m — T-BU-2b only
+  exp_ppsf_lateral / _2d / rapid_sequential / axial_ppsf — T-BU-2b only
+  exp_power_curve / _3dshot / ensemble_activation / ensemble_fill_factor_power
+                               — T-BU-2c only
+  fitAffineCalib.m             — T-BU-3a only
+  measureFocalPlaneTilt.m / _mock.m — T-BU-3b only
+  tests/test_focalPlaneTilt_mock.m  — T-BU-3b only
+  targetDepthOffset.m          — T-BU-3c (new) + T-BU-4b (consumer)
+  dwellCorrection.m            — T-BU-3d (new) + T-BU-4b (consumer)
+  measureIlluminationUniformity / verifyScanFieldComposition / measurePSF /
+    calibrationGUI             — T-BU-3e only
+  CLAUDE.md                    — T-BU-4a only
+  Sequencer.m                  — TASK-EP (T-EP-3c/3d) first, then T-BU-4b
+
+---
+
 ## COMPLETED TASKS
 
 TASK-15-01 through TASK-15-05: Phase 1.5 all-optical simulator

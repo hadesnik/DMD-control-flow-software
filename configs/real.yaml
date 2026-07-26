@@ -14,11 +14,70 @@ dmd:
   headerPath: 'vendor\alp\official\alp.h'
   loadLatencyMsPerPattern: 10
   debugFigure: false
-  # Pixel scale: 10.8 µm pitch / ~40x optical demag → 0.270 µm/px.
-  # Central 6×6 mm active region: 6 mm / 10.8 µm/px = 556 px → roiHalfWidthPx = 278.
-  # Both values need re-verification once the optical path is measured on the rig.
+
+  # --- Bring-up optical path geometry (TASK-BU) --------------------------------
+  # Source: docs/dmd_control_handoff.md, build 33010FL01-530R 6.0mm 80/300 150/80.
+  # Read these through tfp.util.opticalModel, not directly.
+  #
+  # ALL VALUES BELOW ARE DESIGN INTENT, NOT CALIBRATION.  %VERIFY every one.
+  # Per §9 of the handoff, the control code fits its own affine from a measured
+  # grid and uses these only as a starting point and a sanity check. The single
+  # largest risk is the periscope: its 200/150 pair's lens order is unconfirmed,
+  # and reversing it changes every µm/px figure below by 1.778x.
+
+  # The chip is mounted clocked 45 deg about its own normal, so the optical axes
+  # are the chip DIAGONALS, not its rows and columns. Every sample<->DMD
+  # transform carries this rotation.
+  clockingDeg: 45
+
+  # Sample-plane scale is ANISOTROPIC: the grating disperses along one chip
+  # diagonal only. A circle drawn in DMD pixels lands as an ellipse at the
+  # sample. Supersedes the old isotropic 0.270 um/px guess (which assumed ~40x
+  # demag and was ~4x too small).
+  umPerPixelGroove: 1.1250        # pitch * M1 / M_gs = 10.8 * 3.75 / 36
+  umPerPixelDispersion: 1.4162    # that * cos(beta)/cos(alpha)
+  anisotropy: 1.2588              # = umPerPixelDispersion / umPerPixelGroove
+
+  # Illuminated patch. The beam is a raw Gaussian (no piShaper), so only the
+  # middle of the chip is usable and mirrors outside the patch must be OFF.
+  # patchCenterPx is the ILLUMINATION CENTROID, which is not necessarily the
+  # chip centre (chip centre is [640, 400]) — measure it on the rig (T-BU-M3).
+  patchCenterPx: [640, 400]       # [col row], %VERIFY on rig
+  patchRadiusPx: 278              # design patch, 6.0 mm diameter = 556 px
+  patchMaxRadiusPx: 329           # HARD limit, 7.12 mm dia; beyond this the
+                                  # beam clips lens La and the grating ruling
+  roiHalfWidthPx: 278             # legacy alias of patchRadiusPx
+
+  # Gaussian illumination profile: I(r)/I0 = exp(-2 * r_px^2 / gaussianWaistPx^2).
+  # Falls to 0.61 at the patch edge, so an edge target needs 1.65x the dwell of
+  # a centre target for the same dose. Corrected in TIME, not fill fraction —
+  # see tfp.patterns.dwellCorrection.
+  gaussianWaistPx: 555.6
+
+  # The excitation surface is a tilted plane (1.245 deg), entirely along the
+  # dispersion axis; there is no PLM in this build to correct it. Depth walks
+  # 17.1 um across the patch against a 17.7 um axial FWHM, so targets at
+  # opposite field edges are NOT in the same plane.
+  depthGradientUmPerUm: 0.02174   # z_um ~= x_disp * this
+  focalPlaneTiltDeg: 1.245
+  axialFwhmUm: 17.7               # [LOW +/-40%] per the handoff
+
+  # Addressable field at the sample: an ellipse, not the 3x3 mm full-build goal.
+  fieldExtentUm: [625, 787]       # [groove, dispersion]
+
+  # Sign conventions are NOT specified by the optics doc — which chip diagonal
+  # is +dispersion, and which way depth runs, both depend on how the grating and
+  # folds were actually installed. Resolve by two-point calibration (T-BU-M4).
+  dispersionAxisSign: 1           # %VERIFY, +/-1
+  depthGradientSign: 1            # %VERIFY, +/-1
+
+  # Chip and timing constants (datasheet, not calibration).
+  pitchUm: 10.8
+  binaryFrameRateHz: 12500        # 80 us per binary frame
+
+  # DEPRECATED: isotropic scalar scale. Retained only until the last consumer is
+  # removed (TASK-BU T-BU-2b). Use umPerPixelGroove / umPerPixelDispersion.
   umPerPixel: 0.270
-  roiHalfWidthPx: 278
 
 # DAQ configuration. Consumed by tfp.hardware.NI6323_DAQ.initialize.
 # Confirmed wiring (cross-referenced with Masato's DAQ code, 2026-05-29):
@@ -74,6 +133,30 @@ laser:
   max_sustained_power_pct: 20    # > this %, held >= sustained_duration_s -> HARD BLOCK
   sustained_duration_s: 1.0
   autoConfirmPower: false        # rig: never auto-confirm; >10% blocks non-interactively
+
+  # --- Pupil pulse-energy interlock (TASK-BU T-BU-1d) --------------------------
+  # A SECOND, independent hazard from the one above. Every 4f relay of a
+  # collimated DMD forms a real focus in air at its pupil; with a high-fill
+  # pattern the whole pulse lands in one ~27 um spot there and can ionise air.
+  # The pupil peak scales with the SQUARE of the pattern's mean, so sparse
+  # patterns are orders of magnitude safer and the dangerous case is precisely
+  # the all-ON alignment frame.
+  #
+  # NOTE THE INVERSION: the ao3 policy above is conservative because lowering
+  # the rep rate lowers real power. That is BACKWARDS here — at fixed average
+  # power, lowering the rep rate RAISES pulse energy. The two guards are
+  # conservative in opposite directions and BOTH must run.
+  # Mitigation is always "raise the rep rate", never "raise the pulse energy".
+  rep_rate_hz: 100000               # %VERIFY on CARBIDE arrival
+  max_power_w: 40                   # CARBIDE rated output. NB: docs/dmd_control_handoff.md
+                                    # §7 says 80 W — that is an error in the
+                                    # generator (see the banner at the top of
+                                    # that doc). 40 W is correct.
+  max_pulse_energy_uj_pupil: 68     # air-ionisation limit at the pupil focus for
+                                    # a 230 fs pulse. A property of the OPTICS,
+                                    # not of the laser — unchanged by the 80->40 W
+                                    # correction. Full-field ON exceeds it ~5.9x.
+  pupil_interlock_fill_fraction: 0.2  # fill above which the pupil check applies
 
 # Power meter — Thorlabs PM100D, serial P0004058.
 # Accessed via TLPM_64.dll (vendor/thorlabs/TLPM.m); no config fields needed,

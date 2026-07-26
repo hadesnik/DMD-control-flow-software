@@ -31,10 +31,45 @@ function result = exp_ensemble_fill_factor_power(dmd, daq, roiCentroids_scan, ca
 %                         scan-field coordinates.
 %     calib             - Calibration struct with .dmdToScan_affine (3x3).
 %
+%   PER-NEURON POWER RESOLUTION IS THE SPOT'S PIXEL COUNT. Fill-factor
+%   control turns ON n of the K mirrors in a neuron's disk, so K IS the number
+%   of distinct power levels. At the real (anisotropic, ~4× larger than the
+%   pilot assumed) sample scale a soma-sized disk is ~80 mirrors, giving ~80
+%   levels in ~1.25% steps — ample, but >10× coarser than the ~900 the pilot
+%   assumed. This experiment declares its FULL fill-fraction ladder (both
+%   conditions) to `tfp.patterns.fillFactorEnsemble` via
+%   `options.requestedFillLevels`, so a ladder finer than the coarsest neuron
+%   patch can resolve raises
+%   `tfp:patterns:fillFactorEnsemble:fillQuantization` at build time instead
+%   of silently delivering duplicate frames. `result.nPowerLevels` /
+%   `result.powerStepPct` report what was actually available.
+%
 %   options (all optional):
 %     Shared:
-%       .radiusPx              - Disk radius per neuron in DMD px (default 14,
-%                                ~28 px diameter ~ 10 µm cell at the sample).
+%       .spotDiameterUm        - PREFERRED. Per-neuron disk DIAMETER at the
+%                                SAMPLE, in µm. Converted to a DMD pixel
+%                                radius by tfp.patterns.somaSpotGeometry.
+%                                Default [] -> the 12.7 µm soma (~5.03 px,
+%                                ~81 mirrors, ~81 power levels).
+%                                fillFactorEnsemble is circle-only, so this
+%                                uses the geometry's AREA-MATCHED isotropic
+%                                `.radiusPx`: the mirror budget — hence the
+%                                power resolution and the delivered energy —
+%                                is exactly right, while the sample spot is
+%                                1.2588× elongated along the dispersion axis
+%                                (reported as `result.spotExtentUm`).
+%       .opticalConfig         - Config struct forwarded to
+%                                tfp.util.opticalModel (full config or a bare
+%                                `dmd` sub-struct). Default struct() -> the
+%                                documented design constants.
+%       .radiusPx              - LEGACY, still honoured. Explicit disk radius
+%                                per neuron in DMD px. Overrides
+%                                .spotDiameterUm and warns
+%                                (:legacyRadiusPx) with the sample-plane size
+%                                it really delivers — the old default of 14 px
+%                                is a 31.5 × 39.7 µm ellipse (~2.8 somas) with
+%                                ~613 power levels, not the "~28 px ≈ 10 µm
+%                                cell" the docstring used to claim.
 %       .stimDurationS         - Laser ON per trial (default 0.5 s).
 %       .interStimS            - ISI between trials (default 3.0 s).
 %       .aoChannel             - AO channel for laser (default 'ao1').
@@ -126,7 +161,10 @@ if nargin < 5 || isempty(options)
 end
 
 % --- Shared options ---
-radiusPx       = configField(options, 'radiusPx',       14);
+% Spot size (TASK-BU T-BU-2c): asked for in SAMPLE microns and converted by
+% tfp.patterns.somaSpotGeometry. The old `radiusPx = 14` default was a
+% pre-optics pixel guess; see resolveDiskSizing below.
+[spotGeom, radiusPx, spotExtentUm] = resolveDiskSizing(options);
 stimDurationS  = configField(options, 'stimDurationS',  0.5);
 interStimS     = configField(options, 'interStimS',     3.0);
 aoChannel      = configField(options, 'aoChannel',      'ao1');
@@ -315,15 +353,30 @@ end
 % =========================================================================
 fprintf('[fill_factor_power] Building %d DMD patterns (cond1=%d, cond2=%d) ', ...
     nTotal, c1.nTrials, c2.nTrials);
-fprintf('for %d ROIs, disk r=%g px (~%d px/neuron)...\n', ...
-    nROIs, radiusPx, round(pi * radiusPx^2));
+fprintf('for %d ROIs, disk r=%.2f px (~%d px/neuron = ~%d power levels)...\n', ...
+    nROIs, radiusPx, round(pi * radiusPx^2), round(pi * radiusPx^2));
 
 patternStack = false(dmd.nRows, dmd.nCols, nTotal);
-ffOpts = struct('permutations', {{}}, 'rngSeed', []);   % use already-seeded RNG
+% Declare the FULL ladder this session will sweep (both conditions), not just
+% the one fraction per neuron each call sees, so the quantization check covers
+% the whole sweep. Warn on the first call only — the advisory is about the
+% ladder, and it is identical for all ~130 frames.
+requestedFillLevels = [];
+if runUniform
+    requestedFillLevels = [requestedFillLevels, uniformFillFractions(:)']; %#ok<AGROW>
+end
+if runDifferential
+    requestedFillLevels = [requestedFillLevels, diffFillSet(:)'];
+end
+ffOpts = struct('permutations', {{}}, 'rngSeed', [], ...   % use already-seeded RNG
+                'requestedFillLevels', requestedFillLevels, ...
+                'warnOnQuantization',  true);
 
 c1.nOnPixels = zeros(nROIs, c1.nTrials);
 c2.nOnPixels = zeros(nROIs, c2.nTrials);
 nPatchPixels = [];
+nPowerLevels = [];
+powerStepPct = [];
 
 patIdx = 0;
 % Condition 1 patterns: build in (level, repeat) order; pattern index t in
@@ -335,7 +388,8 @@ for t = 1:c1.nTrials
     patternStack(:, :, patIdx) = pat;
     c1.nOnPixels(:, t) = info.nOnPixels;
     if isempty(nPatchPixels)
-        nPatchPixels = info.nPatchPixels;
+        [nPatchPixels, nPowerLevels, powerStepPct, ffOpts] = ...
+            recordPowerResolution(info, ffOpts);
     end
 end
 
@@ -347,7 +401,8 @@ for t = 1:c2.nTrials
     patternStack(:, :, patIdx) = pat;
     c2.nOnPixels(:, t) = info.nOnPixels;
     if isempty(nPatchPixels)
-        nPatchPixels = info.nPatchPixels;
+        [nPatchPixels, nPowerLevels, powerStepPct, ffOpts] = ...
+            recordPowerResolution(info, ffOpts);
     end
 end
 
@@ -781,6 +836,8 @@ end
 if ~isempty(sessionDir) && isfolder(sessionDir)
     tfp.io.sessionLog(sessionDir, 'fill-factor-power-complete', struct( ...
         'nROIs', nROIs, 'radiusPx', radiusPx, ...
+        'spotExtentUm', spotExtentUm, ...
+        'nPowerLevels', nPowerLevels(:)', ...
         'cond1Trials', c1.nTrials, 'cond2Trials', c2.nTrials, ...
         'powerV', powerV, ...
         'stimDurationS', stimDurationS, 'interStimS', interStimS, ...
@@ -794,6 +851,19 @@ result.nROIs               = nROIs;
 result.radiusPx            = radiusPx;
 result.dmdCentroids        = dmdCentroids;
 result.nPatchPixels        = nPatchPixels;
+% Power resolution actually available per neuron: n of K mirrors ON gives K
+% levels. ~80 for a soma-sized disk, not the ~900 the pilot assumed.
+result.nPowerLevels        = nPowerLevels;
+result.powerStepPct        = powerStepPct;
+result.spotGeometry        = spotGeom;
+if isempty(spotGeom)
+    result.spotDiameterUm  = NaN;    % legacy pixel-radius path
+else
+    result.spotDiameterUm  = spotGeom.diameterUm;
+end
+% [groove dispersion] sample-plane diameters this circular disk really spans;
+% the isotropic pixel disk is 1.2588x elongated along the dispersion axis.
+result.spotExtentUm        = spotExtentUm;
 result.powerV              = powerV;
 result.stimDurationS       = stimDurationS;
 result.interStimS          = interStimS;
@@ -812,6 +882,80 @@ result.completedAt         = datetime('now');
 
 fprintf('\n[fill_factor_power] Complete: cond1=%d trials, cond2=%d trials.\n', ...
     c1.nTrials, c2.nTrials);
+end
+
+% =========================================================================
+% Spot sizing + power-resolution bookkeeping
+% =========================================================================
+
+function [geom, radiusPx, extentUm] = resolveDiskSizing(options)
+%resolveDiskSizing Turn the disk-size options into a pixel radius.
+%
+%   tfp.patterns.fillFactorEnsemble is circle-only — it rasterizes a
+%   Euclidean disk of `radiusPx` mirrors — so this is exactly the call site
+%   somaSpotGeometry's AREA-MATCHED isotropic `.radiusPx` exists for. It is
+%   NOT interchangeable with the `.spotOptions` / `.offsetsPx` routes:
+%   `.radiusPx` preserves the mirror BUDGET (so the power quantization and
+%   the delivered energy are right) while accepting a sample spot elongated
+%   by `anisotropy` along the dispersion axis. Feeding `.radiusPx` into an
+%   ANISOTROPIC singleSpot/multiSpot call instead would be the T-BU-1f bug
+%   (67 mirrors where 81 are meant); here there is no anisotropic mode to
+%   confuse it with, and `extentUm` reports the elongation honestly.
+
+legacyRadiusPx = configField(options, 'radiusPx',       []);
+diameterUm     = configField(options, 'spotDiameterUm', []);
+opticalConfig  = configField(options, 'opticalConfig',  struct());
+model          = tfp.util.opticalModel(opticalConfig);
+
+if ~isempty(legacyRadiusPx)
+    if ~isnumeric(legacyRadiusPx) || ~isscalar(legacyRadiusPx) ...
+            || ~isfinite(legacyRadiusPx) || legacyRadiusPx <= 0
+        error('tfp:experiments:exp_ensemble_fill_factor_power:badRadius', ...
+            'options.radiusPx must be a positive finite scalar.');
+    end
+    if ~isempty(diameterUm)
+        error('tfp:experiments:exp_ensemble_fill_factor_power:conflictingSpotSize', ...
+            ['options.radiusPx (%g px) and options.spotDiameterUm (%g um) were ' ...
+             'both supplied and specify the disk twice. Pass only one — prefer ' ...
+             '.spotDiameterUm.'], legacyRadiusPx, diameterUm);
+    end
+    geom     = [];
+    radiusPx = double(legacyRadiusPx);
+    extentUm = 2 * radiusPx * [model.umPerPixelGroove, model.umPerPixelDispersion];
+    somaUm   = tfp.patterns.somaSpotGeometry([], opticalConfig).diameterUm;
+    warning('tfp:experiments:exp_ensemble_fill_factor_power:legacyRadiusPx', ...
+        ['options.radiusPx = %g px is a raw mirror count. At the current ' ...
+         'optical constants that disk is a %.1f x %.1f um ellipse at the ' ...
+         'sample (groove x dispersion), i.e. %.1fx a %.3g um soma, and it ' ...
+         'gives ~%d fill-factor power levels rather than ~%d. Prefer ' ...
+         'options.spotDiameterUm.'], ...
+        radiusPx, extentUm(1), extentUm(2), mean(extentUm) / somaUm, somaUm, ...
+        round(pi * radiusPx^2), ...
+        tfp.patterns.somaSpotGeometry([], opticalConfig).nPixels);
+    return
+end
+
+geom     = tfp.patterns.somaSpotGeometry(diameterUm, opticalConfig);
+radiusPx = geom.radiusPx;               % area-matched isotropic fallback
+extentUm = geom.isotropicExtentUm;      % what that circle really spans, in um
+end
+
+function [nPatchPixels, nPowerLevels, powerStepPct, ffOpts] = ...
+        recordPowerResolution(info, ffOpts)
+%recordPowerResolution Capture the per-neuron power resolution once per run.
+%   The fill ladder is identical for every frame, so the quantization
+%   advisory only needs to fire on the first build; silence it afterwards so
+%   a 130-trial session does not print the same warning 130 times.
+nPatchPixels = info.nPatchPixels;
+nPowerLevels = info.nPowerLevels;
+powerStepPct = info.powerStepPct;
+ffOpts.warnOnQuantization = false;
+
+fprintf(['  [fill_factor_power] per-neuron power resolution: %d..%d mirrors ' ...
+         '=> %d..%d levels (%.2f%%..%.2f%% steps).\n'], ...
+    min(nPatchPixels), max(nPatchPixels), ...
+    min(nPowerLevels), max(nPowerLevels), ...
+    min(powerStepPct), max(powerStepPct));
 end
 
 % =========================================================================

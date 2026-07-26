@@ -14,6 +14,19 @@ function result = exp_power_curve_3dshot(configOrPath, sessionName)
 %   Any total-power value that would exceed config.laser.modulation_voltage_max
 %   is dropped with a warning.  If all values are dropped the function errors.
 %
+%   SPOT SIZE IN THIS ARM IS SET BY THE CGH MODEL, NOT BY THE DMD.
+%   This is the SLM comparison arm. The photostim spot the sample actually
+%   sees is the 3D-SHOT temporal-focusing disk, sized by
+%   `config.slm.diskRadius_um` (see tfp.patterns.threeDShot.defaultParams and
+%   the `slm` block of configs/real.yaml) — the grating anisotropy of
+%   docs/dmd_control_handoff.md §5 does not apply to it. The DMD frame built
+%   below is only a placeholder: the 3D-SHOT benchmark runs behind a manual
+%   flip-mirror swap (CLAUDE.md; tasks_3D-SHOT.md Task 6), so the DMD is out
+%   of the beam path here and the frame exists purely because
+%   tfp.trial.Sequencer requires a `targetSpec.patternRef` to load and
+%   advance. See the comment at the `placeholder` block below for why its
+%   pixel count was still updated by TASK-BU T-BU-2c.
+%
 %   In mock mode (config.hardwareKind = 'mock'):
 %     - MockDMD + MockDAQ are used for the trial pipeline.
 %     - RemoteSLM in 'loopback' connectionMode wraps a MockSLM internally.
@@ -37,6 +50,9 @@ function result = exp_power_curve_3dshot(configOrPath, sessionName)
 %       nCells                 number of SLM-accepted target cells
 %       perCellDeliveredFraction  SLM hologram efficiency (scalar)
 %       summary                struct from summarizeByPowerPerCell
+%       slmDiskDiameterUm      the CGH disk DIAMETER at the sample (um) —
+%                              THIS is the spot size of this arm
+%       placeholderSpotGeometry  geometry of the inert DMD placeholder frame
 %       runError               (optional) struct if the sequencer threw
 
 config = tfp.util.loadOrUseConfig(configOrPath, 'exp_power_curve_3dshot');
@@ -123,14 +139,40 @@ sequence = tfp.trial.TrialSequence.generatePowerCurve( ...
 % Annotate each trial: attach pattern + per-cell metadata.
 % generatePowerCurve uses rep-outer / power-inner order.
 nP     = numel(perCell);
-radiusPx = 15;
+
+% --- DMD placeholder frame (NOT this arm's stimulation spot) -------------
+% INVESTIGATED for TASK-BU T-BU-2c. The old `radiusPx = 15` here was copied
+% verbatim from exp_power_curve (tasks_3D-SHOT.md Task 6 spells out the copy),
+% and exp_power_curve's own 15 was the pre-optics 0.270 um/px guess. So it is
+% NOT an SLM/CGH number that happens to live here — the CGH spot size is
+% config.slm.diskRadius_um, consumed by tfp.patterns.threeDShot.defaultParams
+% and never by this line. It is a DMD-pixel count that really is written to
+% the chip by the Sequencer, so it is sized from somaSpotGeometry like every
+% other DMD spot in the repo.
+%
+% What this does and does not change:
+%   - It does NOT change this arm's optical spot size. The flip mirror takes
+%     the DMD out of the path for the 3D-SHOT benchmark (%VERIFY on the rig
+%     before a combined run), so the frame is optically inert.
+%   - It DOES keep the placeholder honest: the frame the DMD holds during an
+%     SLM run is now the same soma-sized spot the DMD arm uses, rather than a
+%     34 x 42 um relic, and it is smaller (81 vs 709 ON pixels) — the safe
+%     direction for the T-BU-1d pupil fill interlock if the mirror is ever
+%     left in.
+placeholderGeom = tfp.patterns.somaSpotGeometry( ...
+    configField(config.dmd, 'spotDiameterUm', []), config);   % [] -> 12.7 um
+% Anisotropic hand-off via .spotOptions (T-BU-1f): .semiAxisGroovePx in that
+% struct overrides the positional radius. Passing .radiusPx positionally in
+% anisotropic mode would silently paint 67 px instead of 81.
+placeholderPattern = tfp.patterns.singleSpot( ...
+    dmd, dummyTarget, placeholderGeom.semiAxisGroovePx, placeholderGeom.spotOptions);
 
 for k = 1:numel(sequence.trials)
     tr      = sequence.trials(k);
     % Compute which power index this trial corresponds to.
     % Trial k is at (rep-1)*nP + p, so p = mod(k-1, nP) + 1.
     pIdx = mod(k - 1, nP) + 1;
-    tr.targetSpec.patternRef = tfp.patterns.singleSpot(dmd, dummyTarget, radiusPx);
+    tr.targetSpec.patternRef = placeholderPattern;
     tr.metadata.perCellMw   = perCell(pIdx);
     tr.metadata.slmTargets  = siCentroids;
 end
@@ -183,6 +225,9 @@ result.perCellPowersMw          = perCell;
 result.nCells                   = N;
 result.perCellDeliveredFraction = f;
 result.summary                  = summary;
+% The spot size that matters in this arm is the CGH disk, not the DMD frame.
+result.slmDiskDiameterUm        = 2 * double(configField(config.slm, 'diskRadius_um', 5));
+result.placeholderSpotGeometry  = placeholderGeom;
 if ~isempty(runError)
     result.runError = struct('identifier', runError.identifier, ...
                              'message',    runError.message);
@@ -274,7 +319,11 @@ end
 % --- Local helper ---
 
 function value = configField(cfg, name, default)
-if isstruct(cfg) && isfield(cfg, name)
+%configField Read cfg.(name) with a fallback (repo-wide convention).
+%   An empty stored value counts as "absent" so that a YAML key left blank
+%   (e.g. `spotDiameterUm:`) falls through to the documented default rather
+%   than propagating [] into arithmetic.
+if isstruct(cfg) && isfield(cfg, name) && ~isempty(cfg.(name))
     value = cfg.(name);
 else
     value = default;

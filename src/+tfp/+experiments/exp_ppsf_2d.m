@@ -33,8 +33,6 @@ calibration = loadCalibrationOrIdentity(config);
 
 % Target cells and 2D offset grid (overridable via config.ppsf2d for tests).
 targets = resolveTargets(config, calibration);
-target  = tfp.util.validatePPSFTarget(targets, dmd, 'exp_ppsf_2d');
-targets = target;     % single-target sequence
 g = struct('maxUm', 40, 'nPointsPerHalfAxis', 4, 'sigmaPsfUm', 8, 'nReps', 2);
 if isfield(config, 'ppsf2d')
     ov = config.ppsf2d;
@@ -46,7 +44,20 @@ end
 offsetsUm = tfp.trial.TrialSequence.gaussianGrid2D(g.maxUm, g.nPointsPerHalfAxis, g.sigmaPsfUm);
 nReps     = g.nReps;
 powerMw   = 5;
-radiusPx  = 15;
+
+% Spot size is stated at the SAMPLE plane and converted by somaSpotGeometry.
+% The old `radiusPx = 15` came from a pre-optics 0.270 um/px guess; at the real
+% anisotropic scale it is a 34 x 42 um blob, three to four cells wide.
+spotDiameterUm = spotDiameterFromConfig(config, 12.7);   %ASSUMED soma; %VERIFY per prep
+spotGeom       = tfp.patterns.somaSpotGeometry(spotDiameterUm, config);
+
+% The target must leave room for the WHOLE 2D grid inside the illuminated
+% patch, measured from the illumination centroid (not the chip centre).
+target  = tfp.util.validatePPSFTarget(targets, dmd, 'exp_ppsf_2d', struct( ...
+    'offsetsUm',    offsetsUm, ...
+    'spotRadiusPx', spotGeom.semiAxisGroovePx, ...
+    'model',        calibration.model));
+targets = target;     % single-target sequence
 
 sequence = tfp.trial.TrialSequence.generatePPSF( ...
     targets, offsetsUm, nReps, powerMw);
@@ -58,13 +69,18 @@ if isfield(config, 'bringupMode') && config.bringupMode
     end
 end
 
-% Attach patternRef per trial: spot at center + 2D offset.
+% Attach patternRef per trial: spot at center + 2D offset. The um -> DMD-px
+% conversion is anisotropic and runs along the chip DIAGONALS (45 deg
+% clocking), so it must go through sampleToDmdOffset; a scalar would skew the
+% 2D response map, not just scale it. Per T-BU-1f the positional radius is the
+% GROOVE-axis (long) semi-axis, never spotGeom.radiusPx.
 for k = 1:numel(sequence.trials)
     tr         = sequence.trials(k);
     center     = tr.targetSpec.dmdCoords;
-    offsetPx   = tr.metadata.offsetUm * calibration.pixelsPerUm;
+    offsetPx   = tfp.patterns.sampleToDmdOffset(tr.metadata.offsetUm, calibration.model);
     stimTarget = center + offsetPx;
-    tr.targetSpec.patternRef = tfp.patterns.singleSpot(dmd, stimTarget, radiusPx);
+    tr.targetSpec.patternRef = tfp.patterns.singleSpot( ...
+        dmd, stimTarget, spotGeom.semiAxisGroovePx, spotGeom.spotOptions);
 end
 
 % Build mock ScanImage bridge from fakeCells if defined in config.
@@ -122,20 +138,37 @@ try, dmd.cleanup(); catch, end %#ok<CTCH>
 end
 
 function calibration = loadCalibrationOrIdentity(config)
+%loadCalibrationOrIdentity Design-constant "calibration" until Phase 3 fits one.
+%   The scalar pixelsPerUm this used to carry is retired (T-BU-2b): isotropic,
+%   axis-unaware, and colliding by name with the CAMERA-plane scalar that
+%   tfp.calibration.alignDMDtoCamera writes. Callers get the optical model and
+%   let tfp.patterns.sampleToDmdOffset do the arithmetic. config.dmd.umPerPixel
+%   is deliberately NOT read — it is the deprecated isotropic key.
 if isfield(config, 'calibration_file') && ~isempty(char(config.calibration_file))
     error('tfp:experiments:exp_ppsf_2d:notImplemented', ...
         'calibration_file loading is Phase 3.');
 end
-umPerPx = 1;
-if isfield(config, 'dmd') && isfield(config.dmd, 'umPerPixel')
-    umPerPx = double(config.dmd.umPerPixel);
+model = tfp.util.opticalModel(config);
+% DMD px -> substage CAMERA px; NOT um-valued (TASKS.md T-BU-M0).
+calibration.dmdToSample_affine   = eye(3);
+calibration.dmdToScan_affine     = eye(3);
+calibration.model                = model;
+calibration.umPerPixelGroove     = model.umPerPixelGroove;
+calibration.umPerPixelDispersion = model.umPerPixelDispersion;
+calibration.timestamp            = datetime('now');
+calibration.notes                = sprintf( ...
+    ['design optical model only (no fitted spatial calibration): ' ...
+     '%.4f um/px groove, %.4f um/px dispersion, chip clocked %g deg'], ...
+    model.umPerPixelGroove, model.umPerPixelDispersion, model.clockingDeg);
 end
-calibration.dmdToSample_affine = eye(3);
-calibration.dmdToScan_affine   = eye(3);
-calibration.pixelsPerUm        = 1 / umPerPx;
-calibration.umPerPixel         = umPerPx;
-calibration.timestamp          = datetime('now');
-calibration.notes              = sprintf('pixel-scale only: %.4f um/px (no spatial calibration)', umPerPx);
+
+function d = spotDiameterFromConfig(config, defaultUm)
+%spotDiameterFromConfig Sample-plane stim-spot diameter in um (key stim.spotDiameterUm).
+d = defaultUm;
+if isfield(config, 'stim') && isstruct(config.stim) ...
+        && isfield(config.stim, 'spotDiameterUm') && ~isempty(config.stim.spotDiameterUm)
+    d = double(config.stim.spotDiameterUm);
+end
 end
 
 function targets = resolveTargets(config, calibration)

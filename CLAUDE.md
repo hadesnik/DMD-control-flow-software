@@ -255,7 +255,10 @@ Phase 1 implementation pinned the following conventions; treat them as load-bear
 
 ## Development environment
 - Code is written on macOS (this machine)
-- **MATLAB is installed locally on this MacBook** — Claude can and should run unit tests here before pushing. Use the repo's **no-arg** runner: `matlab -batch "runtests"` (the repo's `runtests.m` shadows the built-in and takes no arguments; passing `runtests('tests')` errors with "Too many input arguments"). To run a single file, use the unittest API: `matlab -batch "addpath('src'); run(matlab.unittest.TestSuite.fromFile('tests/<file>.m'))"`. `matlab` is often not on `PATH`; invoke the app binary directly, e.g. `/Applications/MATLAB_R2023a.app/bin/matlab`. Mock-backed tests cover most of the codebase, so local pre-flight catches the majority of regressions.
+- **MATLAB is installed locally on this MacBook** — Claude can and should run unit tests here before pushing. Use the repo's **no-arg** runner (the repo's `runtests.m` shadows the built-in and takes no arguments; passing `runtests('tests')` errors with "Too many input arguments"). `matlab` is often not on `PATH`; invoke the app binary directly. Mock-backed tests cover most of the codebase, so local pre-flight catches the majority of regressions.
+  - **Always pass `-nodisplay`.** `-batch` alone still lets figures render on macOS, so a test run pops MATLAB windows onto Hillel's screen while he is working — he has asked that this not happen. `-nodisplay` suppresses them and does **not** change results (verified 2026-07-26: full suite identical with and without). Figures are still created invisibly, so tests that build and save them still pass.
+  - Full suite: `/Applications/MATLAB_R2023a.app/bin/matlab -nodisplay -batch "runtests"`
+  - Single file: `/Applications/MATLAB_R2023a.app/bin/matlab -nodisplay -batch "addpath('src'); r = run(matlab.unittest.TestSuite.fromFile('tests/<file>.m')); disp(table(r))"`
 - Hardware-touching code (real DMD, NI DAQ, ALP DLL) still RUNS on the Windows scope PC; the ALP DLL cannot be loaded on macOS and hardware verification happens on the scope PC after git push/pull.
 
 ## Hard rules for Claude

@@ -51,12 +51,34 @@ function result = exp_ensemble_activation(dmd, daq, roiCentroids_scan, calib, op
 %                          Useful for tests to set
 %                          .startAcqNumOverride / .logFileStemOverride etc.
 %                          Default struct().
-%       .spotRadiusPx    - DMD spot radius in pixels (default 14, i.e. ~28 px
-%                          diameter ~ 10 µm cell at the sample).
+%       .spotDiameterUm  - PREFERRED. Stim spot DIAMETER at the SAMPLE, in µm.
+%                          Converted to DMD geometry by
+%                          tfp.patterns.somaSpotGeometry, so a future optics
+%                          change (or a fitted rig scale supplied via
+%                          .opticalConfig) updates the pixel geometry by
+%                          itself. Default [] -> the 12.7 µm soma. At the
+%                          design constants that is a 5.64 × 4.48 px ellipse
+%                          on the chip = 81 mirrors.
+%       .opticalConfig   - Config struct forwarded to tfp.util.opticalModel
+%                          (full loaded config or a bare `dmd` sub-struct).
+%                          Default struct() -> the documented design
+%                          constants. Ignored when .spotRadiusPx is set.
+%       .spotRadiusPx    - LEGACY, still honoured. An explicit DMD spot radius
+%                          in PIXELS, drawn as the historical isotropic
+%                          circle. Setting it overrides .spotDiameterUm and
+%                          raises
+%                          tfp:experiments:exp_ensemble_activation:legacySpotRadiusPx
+%                          quoting the sample-plane size you actually get:
+%                          a pixel circle lands as an ellipse 1.2588× longer
+%                          along the dispersion axis, and the old default of
+%                          14 px is a 31.5 × 39.7 µm blob — ~2.8 somas, not
+%                          the "~28 px ≈ 10 µm cell" the docstring used to
+%                          claim. Prefer .spotDiameterUm.
 %       .illuminatedRegion - [c0 c1 r0 r1] bounding box (DMD px) of the
 %                          flat-top illuminated region. If set, a warning is
-%                          emitted when any ROI disk (centroid +/- spotRadiusPx)
-%                          extends outside this region. Default [] (no check).
+%                          emitted when any ROI spot (centroid +/- the spot's
+%                          largest semi-axis in px) extends outside this
+%                          region. Default [] (no check).
 %       .stimDurationS   - Stim pulse duration in seconds (default 0.5).
 %       .interStimS      - Gap between sequential pulses in seconds (default 0.5).
 %       .aoChannel       - AO channel for laser modulation (default 'ao1').
@@ -110,6 +132,18 @@ function result = exp_ensemble_activation(dmd, daq, roiCentroids_scan, calib, op
 %
 %   Output result struct:
 %     .nROIs                       - Number of ROIs targeted.
+%     .spotDiameterUm              - Sample-plane spot diameter actually used
+%                                    (µm). NaN on the legacy pixel-radius path.
+%     .spotGeometry                - tfp.patterns.somaSpotGeometry struct, or
+%                                    [] on the legacy pixel-radius path.
+%     .spotRadiusPx                - The scalar radius handed to the pattern
+%                                    builder: the circle radius on the legacy
+%                                    path, the GROOVE-axis (long) semi-axis on
+%                                    the µm path.
+%     .spotOnPixels                - N×1 count of mirrors actually ON in each
+%                                    single-ROI pattern. This IS the delivered
+%                                    per-cell pixel budget; compare against
+%                                    .spotGeometry.nPixels.
 %     .nSequentialTrials           - Number of sequential pulses delivered (= nROIs).
 %     .nEnsembleTrials             - 1.
 %     .nPowerSeriesTrials          - Number of power-series pulses.
@@ -160,7 +194,6 @@ end
 
 siBridge       = configField(options, 'siBridge',       []);
 beginSessionOpts = configField(options, 'siBridgeBeginSessionOpts', struct());
-spotRadiusPx   = configField(options, 'spotRadiusPx',   14);
 illuminatedRegion = configField(options, 'illuminatedRegion', []);
 stimDurationS  = configField(options, 'stimDurationS',  0.5);
 interStimS     = configField(options, 'interStimS',     0.5);
@@ -183,6 +216,16 @@ sessionStartPulseS = configField(options, 'sessionStartPulseS', 0.100);
 bufferFrames       = configField(options, 'bufferFrames',       2);
 waitTimeoutFactor  = configField(options, 'waitTimeoutFactor',  1.5);
 imagingFrameRate   = configField(options, 'imagingFrameRate',   30);   % Hz, for framesPerTrial
+
+% --- Spot size (TASK-BU T-BU-2c) -----------------------------------------
+% The old default was `spotRadiusPx = 14`, documented as "~28 px diameter ~
+% 10 µm cell at the sample". The pixel arithmetic was right for the
+% pre-optics 0.270 µm/px guess and wrong for the real optics: at
+% 1.1250/1.4162 µm/px along the chip diagonals it is a 31.5 × 39.7 µm
+% ellipse, roughly 2.8 somas wide. Sizing is therefore requested in SAMPLE
+% MICRONS and converted by tfp.patterns.somaSpotGeometry; an explicit
+% .spotRadiusPx is still honoured for rig configs that set it, but it warns.
+[spotGeom, spotOpts, spotRadiusPx, spotExtentPx] = resolveSpotSizing(options);
 
 % --- Validate inputs ---
 if ~isnumeric(roiCentroids_scan) || ndims(roiCentroids_scan) ~= 2 ...
@@ -221,25 +264,34 @@ dmdCentroids = clampToDMD(dmdCentroids, dmd, roiCentroids_scan);
 if ~isempty(illuminatedRegion)
     c0 = illuminatedRegion(1); c1 = illuminatedRegion(2);
     r0 = illuminatedRegion(3); r1 = illuminatedRegion(4);
-    outside = (dmdCentroids(:,1) - spotRadiusPx) < c0 ...
-            | (dmdCentroids(:,1) + spotRadiusPx) > c1 ...
-            | (dmdCentroids(:,2) - spotRadiusPx) < r0 ...
-            | (dmdCentroids(:,2) + spotRadiusPx) > r1;
+    % spotExtentPx is the spot's largest half-extent in pixels: the circle
+    % radius on the legacy path, the GROOVE (long) semi-axis on the µm path.
+    outside = (dmdCentroids(:,1) - spotExtentPx) < c0 ...
+            | (dmdCentroids(:,1) + spotExtentPx) > c1 ...
+            | (dmdCentroids(:,2) - spotExtentPx) < r0 ...
+            | (dmdCentroids(:,2) + spotExtentPx) > r1;
     if any(outside)
         warning('tfp:experiments:exp_ensemble_activation:roiOutsideIllumination', ...
-            ['%d of %d ROI spots (r=%g px) extend outside the illuminated DMD ' ...
-             'region [c=%g..%g, r=%g..%g]. Pixels outside this region will not ' ...
-             'receive laser light. ROIs: %s'], ...
-            sum(outside), size(dmdCentroids, 1), spotRadiusPx, c0, c1, r0, r1, ...
+            ['%d of %d ROI spots (max half-extent %g px) extend outside the ' ...
+             'illuminated DMD region [c=%g..%g, r=%g..%g]. Pixels outside this ' ...
+             'region will not receive laser light. ROIs: %s'], ...
+            sum(outside), size(dmdCentroids, 1), spotExtentPx, c0, c1, r0, r1, ...
             mat2str(find(outside(:))'));
     end
 end
 
 % --- Build patterns ---
-fprintf('[ensemble_activation] Generating %d spot patterns + 1 ensemble...\n', nROIs);
+fprintf('[ensemble_activation] Generating %d spot patterns + 1 ensemble (%s)...\n', ...
+    nROIs, spotSummaryStr(spotGeom, spotRadiusPx));
 individualPatterns = cell(nROIs, 1);
+spotOnPixels       = zeros(nROIs, 1);
 for i = 1:nROIs
-    individualPatterns{i} = tfp.patterns.singleSpot(dmd, dmdCentroids(i,:), spotRadiusPx);
+    % `spotRadiusPx` is the positional radius and `spotOpts` may override it
+    % with the groove-axis semi-axis (T-BU-1f). On the legacy path spotOpts
+    % is an empty struct, so this is exactly the historical isotropic call.
+    individualPatterns{i} = tfp.patterns.singleSpot( ...
+        dmd, dmdCentroids(i,:), spotRadiusPx, spotOpts);
+    spotOnPixels(i) = nnz(individualPatterns{i});
 end
 ensemblePattern = individualPatterns{1};
 for i = 2:nROIs
@@ -558,6 +610,14 @@ end
 
 % --- Result ---
 result.nROIs                    = nROIs;
+if isempty(spotGeom)
+    result.spotDiameterUm       = NaN;   % legacy pixel-radius path
+else
+    result.spotDiameterUm       = spotGeom.diameterUm;
+end
+result.spotGeometry             = spotGeom;
+result.spotRadiusPx             = spotRadiusPx;
+result.spotOnPixels             = spotOnPixels;
 result.nSequentialTrials        = nROIs;
 result.nEnsembleTrials          = 1;
 result.nPowerSeriesTrials       = nPowerLevels;
@@ -832,6 +892,82 @@ function ensureBridgeDisconnected(bridge)
 try
     bridge.disconnect();
 catch
+end
+end
+
+% =========================================================================
+% Spot sizing
+% =========================================================================
+
+function [geom, spotOpts, radiusPx, extentPx] = resolveSpotSizing(options)
+%resolveSpotSizing Turn the spot options into pattern-builder arguments.
+%
+%   Two mutually exclusive routes:
+%     µm path (preferred) - .spotDiameterUm (default: soma) is converted by
+%       tfp.patterns.somaSpotGeometry. The returned `spotOpts` is that
+%       struct's `.spotOptions`, which carries `.semiAxisGroovePx` and
+%       OVERRIDES singleSpot's positional radius (T-BU-1f). `radiusPx` is set
+%       to the same groove semi-axis so the positional and override values
+%       agree — handing singleSpot the AREA-MATCHED `.radiusPx` here instead
+%       would paint 67 mirrors where 81 are intended, a silent 17% power
+%       deficit with no error anywhere.
+%     legacy path - an explicit `.spotRadiusPx` in pixels reproduces the
+%       historical isotropic circle bit-for-bit (empty options struct), and
+%       warns with the sample-plane size it really delivers.
+%
+%   `extentPx` is the largest half-extent in pixels, used for the
+%   illuminated-region containment check.
+
+legacyRadiusPx = configField(options, 'spotRadiusPx', []);
+diameterUm     = configField(options, 'spotDiameterUm', []);
+opticalConfig  = configField(options, 'opticalConfig', struct());
+
+if ~isempty(legacyRadiusPx)
+    if ~isnumeric(legacyRadiusPx) || ~isscalar(legacyRadiusPx) ...
+            || ~isfinite(legacyRadiusPx) || legacyRadiusPx <= 0
+        error('tfp:experiments:exp_ensemble_activation:badSpotRadius', ...
+            'options.spotRadiusPx must be a positive finite scalar.');
+    end
+    if ~isempty(diameterUm)
+        error('tfp:experiments:exp_ensemble_activation:conflictingSpotSize', ...
+            ['options.spotRadiusPx (%g px) and options.spotDiameterUm (%g um) ' ...
+             'were both supplied and specify the spot twice. Pass only one — ' ...
+             'prefer .spotDiameterUm.'], legacyRadiusPx, diameterUm);
+    end
+    geom     = [];
+    spotOpts = struct();                 % isotropic, historical behaviour
+    radiusPx = double(legacyRadiusPx);
+    extentPx = radiusPx;
+
+    % Quote the size the sample actually sees: a pixel circle maps to an
+    % ellipse whose axes are the chip diagonals. The soma reference diameter
+    % is read back from somaSpotGeometry rather than restated, so the two
+    % cannot drift apart.
+    model    = tfp.util.opticalModel(opticalConfig);
+    somaUm   = tfp.patterns.somaSpotGeometry([], opticalConfig).diameterUm;
+    extentUm = 2 * radiusPx * [model.umPerPixelGroove, model.umPerPixelDispersion];
+    warning('tfp:experiments:exp_ensemble_activation:legacySpotRadiusPx', ...
+        ['options.spotRadiusPx = %g px is a raw mirror count. At the current ' ...
+         'optical constants that is a %.1f x %.1f um ellipse at the sample ' ...
+         '(groove x dispersion), i.e. %.1fx a %.3g um soma. Prefer ' ...
+         'options.spotDiameterUm, which is converted by ' ...
+         'tfp.patterns.somaSpotGeometry and tracks any optics change.'], ...
+        radiusPx, extentUm(1), extentUm(2), mean(extentUm) / somaUm, somaUm);
+    return
+end
+
+geom     = tfp.patterns.somaSpotGeometry(diameterUm, opticalConfig);
+spotOpts = geom.spotOptions;
+radiusPx = geom.semiAxisGroovePx;
+extentPx = ceil(geom.semiAxisGroovePx);
+end
+
+function s = spotSummaryStr(geom, radiusPx)
+%spotSummaryStr One-line description of the spot, for the console banner.
+if isempty(geom)
+    s = sprintf('legacy isotropic r = %g px', radiusPx);
+else
+    s = geom.description;
 end
 end
 

@@ -20,18 +20,49 @@ function calib = alignDMDtoCamera(dmd, camera, options)
 %     camera - tfp.hardware.SubstageCamera-derived object. Must already be
 %              initialised.
 %     options - optional struct:
-%       .nGridPoints  — grid points per axis, must be odd (default 5)
-%       .gridSpacing  — spacing in DMD pixels (default 100)
-%       .spotRadius   — spot radius in DMD pixels (default 8)
-%       .exposureS    — pause after each advanceToPattern before snap (default 0.1)
-%       .showFigure   — show diagnostic figure after fit (default true)
-%       .umPerPixel   — imaging pixel size at sample plane in µm (default 1.56)
-%       .notes        — char note appended to calib.notes
+%       .nGridPoints     — grid points per axis, must be odd (default 5)
+%       .gridSpacing     — spacing in DMD pixels (default 100)
+%       .spotDiameterUm  — calibration-spot DIAMETER at the SAMPLE plane, µm
+%                          (default 20). See "spot sizing" below.
+%       .spotRadius      — DEPRECATED. Spot radius in DMD pixels. When given it
+%                          overrides .spotDiameterUm and draws the historical
+%                          isotropic pixel circle, so old callers are
+%                          unchanged. Prefer .spotDiameterUm.
+%       .exposureS       — pause after each advanceToPattern before snap (default 0.1)
+%       .showFigure      — show diagnostic figure after fit (default true)
+%       .cameraUmPerPixel — camera pixel size at the sample plane in µm
+%                          (default 1.56). Legacy alias: .umPerPixel.
+%       .notes           — char note appended to calib.notes
+%
+%   SPOT SIZING. The old default was a bare `spotRadius = 8` DMD pixels,
+%   picked against a pre-optics guess of 0.270 µm/px. At the real bring-up
+%   scale (1.1250 µm/px along the grooves, 1.4162 µm/px along dispersion, chip
+%   clocked 45°) that is a ~18 × 23 µm ellipse at the sample, not the ~4 µm
+%   dot it reads as. Calibration spots do NOT have to be soma-sized — they
+%   want to be bright and cleanly centroidable — but they DO have to state
+%   what size they are, so the size is now given in sample µm and converted by
+%   tfp.patterns.somaSpotGeometry. The default 20 µm keeps the historical
+%   ~8 px pixel budget while making the intent explicit, and the spot is drawn
+%   anisotropically so the camera sees a ROUND spot.
 %
 %   Output calibration struct:
-%     .dmdToSample_affine  — 3×3: [x;y;1] = A * [u;v;1], DMD→camera px
-%     .umPerPixel          — passed through from options
-%     .pixelsPerUm         — 1/umPerPixel
+%     .dmdToSample_affine  — 3×3: [x;y;1] = A * [u;v;1], DMD→camera px.
+%                            NOTE the name is a misnomer: the right-hand side
+%                            is CAMERA pixels, not sample µm. Renaming it is
+%                            deferred to the first calibration run
+%                            (TASKS.md T-BU-M0); do not feed it to
+%                            tfp.patterns.sampleToDmdOffset.
+%     .cameraUmPerPixel    — passed through from options
+%     .cameraPixelsPerUm   — 1/cameraUmPerPixel, in CAMERA pixels per µm
+%     .umPerPixel          — DEPRECATED alias of .cameraUmPerPixel
+%     .pixelsPerUm         — DEPRECATED alias of .cameraPixelsPerUm. It was
+%                            read elsewhere in the repo as DMD px per µm
+%                            (a ~5.8× error); the camera-prefixed names exist
+%                            so the two can never be confused again. See
+%                            tfp.patterns.ppsfPattern.
+%     .spotDiameterUm      — sample-plane diameter actually used, or NaN when a
+%                            deprecated .spotRadius was supplied
+%     .spotGeometry        — the tfp.patterns.somaSpotGeometry struct, or []
 %     .powerCurve          — empty struct (filled by powerMeterSweep)
 %     .timestamp           — datetime('now')
 %     .notes               — string
@@ -46,11 +77,23 @@ end
 
 nGridPoints = configField(options, 'nGridPoints', 5);
 gridSpacing = configField(options, 'gridSpacing', 100);
-spotRadius  = configField(options, 'spotRadius',  8);
 exposureS   = configField(options, 'exposureS',   0.1);
 showFigure  = logical(configField(options, 'showFigure', true));
-umPerPixel  = configField(options, 'umPerPixel',  1.56);
+% Camera pixel size at the sample plane. `umPerPixel` is the legacy key name;
+% the camera-prefixed one says which plane it belongs to.
+cameraUmPerPixel = configField(options, 'cameraUmPerPixel', ...
+                       configField(options, 'umPerPixel', 1.56));
 notes       = configField(options, 'notes',       'DMD-to-camera calibration');
+
+% Spot sizing: ask in sample µm (see the header). A supplied .spotRadius is the
+% deprecated pixel-count form and still wins, so existing callers/tests are
+% byte-identical.
+spotDiameterUm = configField(options, 'spotDiameterUm', 20);   %ASSUMED bright, easily centroidable
+legacyRadiusPx = configField(options, 'spotRadius', []);
+% Optics constants for the µm -> DMD-px conversion. Anything
+% tfp.util.opticalModel accepts (a full config, or a bare dmd sub-struct);
+% omit for the documented design defaults.
+opticalConfig  = configField(options, 'opticalConfig', struct());
 
 % --- validate ---
 if ~isnumeric(nGridPoints) || ~isscalar(nGridPoints) || nGridPoints < 3 || mod(nGridPoints,2) == 0
@@ -80,10 +123,32 @@ dmdCols = dmd.nCols/2 + colOff(:);
 dmdRows = dmd.nRows/2 + rowOff(:);
 dmdPts  = [dmdCols, dmdRows];              % nPts × 2
 
+% --- spot geometry ---
+% Preferred path: a stated sample-plane diameter -> anisotropic DMD ellipse, so
+% the spot the camera sees is round. Per T-BU-1f the positional radius must be
+% the GROOVE-axis (long) semi-axis and geom.spotOptions carries it explicitly;
+% geom.radiusPx is the area-matched ISOTROPIC fallback and must not be mixed in
+% here (it would paint ~17% fewer mirrors).
+if isempty(legacyRadiusPx)
+    spotGeom   = tfp.patterns.somaSpotGeometry(spotDiameterUm, opticalConfig);
+    spotRadius = spotGeom.semiAxisGroovePx;
+    spotOpts   = spotGeom.spotOptions;
+else
+    if ~isnumeric(legacyRadiusPx) || ~isscalar(legacyRadiusPx) ...
+            || ~isfinite(legacyRadiusPx) || legacyRadiusPx <= 0
+        error('tfp:calibration:alignDMDtoCamera:badOptions', ...
+            'options.spotRadius must be a positive finite scalar.');
+    end
+    spotGeom       = [];
+    spotRadius     = double(legacyRadiusPx);
+    spotOpts       = struct();       % historical isotropic pixel circle
+    spotDiameterUm = NaN;
+end
+
 % --- build and load pattern sequence ---
 patterns = false(dmd.nRows, dmd.nCols, nPts);
 for k = 1:nPts
-    patterns(:,:,k) = tfp.patterns.singleSpot(dmd, dmdPts(k,:), spotRadius);
+    patterns(:,:,k) = tfp.patterns.singleSpot(dmd, dmdPts(k,:), spotRadius, spotOpts);
 end
 seqOpts.exposureUs  = round(exposureS * 1e6);
 seqOpts.darkTimeUs  = 0;
@@ -109,8 +174,16 @@ if showFigure
 end
 
 calib.dmdToSample_affine = calib_fit.dmdToSample_affine;
-calib.umPerPixel         = umPerPixel;
-calib.pixelsPerUm        = 1 / umPerPixel;
+% Canonical, plane-tagged names. Both quantities are CAMERA-plane.
+calib.cameraUmPerPixel   = cameraUmPerPixel;
+calib.cameraPixelsPerUm  = 1 / cameraUmPerPixel;
+% DEPRECATED aliases, kept so existing rig configs and saved calibrations keep
+% loading. `pixelsPerUm` in particular was read as DMD px/µm by ppsfPattern —
+% a ~5.8x error. New code must use the camera-prefixed names above.
+calib.umPerPixel         = cameraUmPerPixel;
+calib.pixelsPerUm        = 1 / cameraUmPerPixel;
+calib.spotDiameterUm     = spotDiameterUm;
+calib.spotGeometry       = spotGeom;
 calib.powerCurve         = struct();
 calib.timestamp          = datetime('now');
 calib.notes              = notes;

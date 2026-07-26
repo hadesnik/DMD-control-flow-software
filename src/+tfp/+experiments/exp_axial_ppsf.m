@@ -39,13 +39,25 @@ daq.configureDigitalOutput(config.daq.digitalOutChannels);
 calibration = loadCalibrationOrIdentity(config);
 
 targets  = resolveTargets(config, calibration);
-target   = tfp.util.validatePPSFTarget(targets, dmd, 'exp_axial_ppsf');
+
+% Spot size is stated at the SAMPLE plane and converted by somaSpotGeometry.
+% The old `radiusPx = 15` came from a pre-optics 0.270 um/px guess; at the real
+% anisotropic scale it is a 34 x 42 um blob, three to four cells wide — which
+% would also blur the axial falloff this experiment measures.
+spotDiameterUm = spotDiameterFromConfig(config, 12.7);   %ASSUMED soma; %VERIFY per prep
+spotGeom       = tfp.patterns.somaSpotGeometry(spotDiameterUm, config);
+
+% Axial PPSF sweeps in z only, so the DMD spot never moves laterally: the
+% containment check is the target plus its own radius, from the illumination
+% centroid.
+target   = tfp.util.validatePPSFTarget(targets, dmd, 'exp_axial_ppsf', struct( ...
+    'spotRadiusPx', spotGeom.semiAxisGroovePx, ...
+    'model',        calibration.model));
 targets  = target;     % single-target sequence
 
 dzUm     = [0, 5, 10, 20, 30, 50, -5, -10, -20, -30, -50];
 nReps    = 2;
 powerMw  = 5;
-radiusPx = 15;
 if isfield(config, 'axialPpsf')
     ap = config.axialPpsf;
     if isfield(ap, 'dzUm'),    dzUm    = ap.dzUm;    end
@@ -77,8 +89,11 @@ for k = 1:numel(sequence.trials)
         plmCache(dz) = plm.computeDefocusPattern(dz, sys);
     end
     tr.targetSpec.plmPattern = plmCache(dz);
+    % Per T-BU-1f the positional radius is the GROOVE-axis (long) semi-axis and
+    % spotOptions carries it explicitly; spotGeom.radiusPx is the area-matched
+    % ISOTROPIC fallback and would paint ~17% fewer mirrors if mixed in here.
     tr.targetSpec.patternRef = tfp.patterns.singleSpot( ...
-        dmd, tr.targetSpec.dmdCoords, radiusPx);
+        dmd, tr.targetSpec.dmdCoords, spotGeom.semiAxisGroovePx, spotGeom.spotOptions);
 end
 
 % Build mock ScanImage bridge from fakeCells if defined in config.
@@ -152,20 +167,37 @@ try, plm.cleanup(); catch, end %#ok<CTCH>
 end
 
 function calibration = loadCalibrationOrIdentity(config)
+%loadCalibrationOrIdentity Design-constant "calibration" until Phase 3 fits one.
+%   The scalar pixelsPerUm this used to carry is retired (T-BU-2b): isotropic,
+%   axis-unaware, and colliding by name with the CAMERA-plane scalar that
+%   tfp.calibration.alignDMDtoCamera writes. Callers get the optical model and
+%   let tfp.patterns.sampleToDmdOffset do the arithmetic. config.dmd.umPerPixel
+%   is deliberately NOT read — it is the deprecated isotropic key.
 if isfield(config, 'calibration_file') && ~isempty(char(config.calibration_file))
     error('tfp:experiments:exp_axial_ppsf:notImplemented', ...
         'calibration_file loading is Phase 3.');
 end
-umPerPx = 1;
-if isfield(config, 'dmd') && isfield(config.dmd, 'umPerPixel')
-    umPerPx = double(config.dmd.umPerPixel);
+model = tfp.util.opticalModel(config);
+% DMD px -> substage CAMERA px; NOT um-valued (TASKS.md T-BU-M0).
+calibration.dmdToSample_affine   = eye(3);
+calibration.dmdToScan_affine     = eye(3);
+calibration.model                = model;
+calibration.umPerPixelGroove     = model.umPerPixelGroove;
+calibration.umPerPixelDispersion = model.umPerPixelDispersion;
+calibration.timestamp            = datetime('now');
+calibration.notes                = sprintf( ...
+    ['design optical model only (no fitted spatial calibration): ' ...
+     '%.4f um/px groove, %.4f um/px dispersion, chip clocked %g deg'], ...
+    model.umPerPixelGroove, model.umPerPixelDispersion, model.clockingDeg);
 end
-calibration.dmdToSample_affine = eye(3);
-calibration.dmdToScan_affine   = eye(3);
-calibration.pixelsPerUm        = 1 / umPerPx;
-calibration.umPerPixel         = umPerPx;
-calibration.timestamp          = datetime('now');
-calibration.notes              = sprintf('pixel-scale only: %.4f um/px (no spatial calibration)', umPerPx);
+
+function d = spotDiameterFromConfig(config, defaultUm)
+%spotDiameterFromConfig Sample-plane stim-spot diameter in um (key stim.spotDiameterUm).
+d = defaultUm;
+if isfield(config, 'stim') && isstruct(config.stim) ...
+        && isfield(config.stim, 'spotDiameterUm') && ~isempty(config.stim.spotDiameterUm)
+    d = double(config.stim.spotDiameterUm);
+end
 end
 
 function targets = resolveTargets(config, calibration)

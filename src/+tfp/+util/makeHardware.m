@@ -30,4 +30,19 @@ end
 if isfield(config, 'laser') && ~isempty(config.laser)
     daq.configureLaserSafety(config.laser);
 end
+
+% Pattern safety: the DMD-side interlocks (patch containment + pupil pulse
+% energy) that run on every loadPatternSequence.  Each backend already
+% self-configured from config.dmd inside initialize(); this second call hands
+% over the FULL config so the laser block is seen as well — the pupil interlock
+% needs the rep rate, the pupil energy limit, and the worst-case ao3 voltage,
+% none of which live under config.dmd.  Without it the DMD keeps its
+% conservative full-scale voltage assumption, which blocks high-fill patterns
+% rather than passing them.  See tfp.hardware.DMD "Pattern safety".
+%
+% NOTE config.laser.autoConfirmPulseEnergy is deliberately SEPARATE from
+% autoConfirmPower and defaults false even in mock configs (TASKS.md T-BU-1d):
+% the mock rig's autoConfirmPower:true must not opt past the pupil
+% confirmation band.  Do not unify them.
+dmd.configurePatternSafety(config);
 end

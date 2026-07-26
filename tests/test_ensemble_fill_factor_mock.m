@@ -331,6 +331,17 @@ fprintf('[T-EP-3b] episodic bridge PASS — beginSession=1, arm=%d, getLastTiffP
 % =========================================================================
 runFrameClockDecodeRoundtrip();
 
+% =========================================================================
+% T-BU-1e: soma-sized spot geometry + per-neuron power quantization.
+%   (1) info.nPowerLevels == info.nPatchPixels, and a soma-sized disk gives
+%       ~80 levels — not the ~900 the pilot assumed.
+%   (2) The nested-subset permutation guarantee still holds, and matters
+%       more now that 10% fill is only a handful of pixels.
+%   (3) A fill ladder spaced finer than 1/nPatchPixels warns instead of
+%       silently delivering duplicate patterns.
+% =========================================================================
+runSomaQuantizationChecks(dmd);
+
 % Best-effort cleanup of the test's mock-TIFF sidecar directory.
 if exist(mockTiffDir, 'dir')
     rmdir(mockTiffDir, 's');
@@ -427,4 +438,141 @@ title(ax, sprintf('Reference: %d disks at 100%% fill (r = %d px), illuminated re
     size(centroids, 1), radiusPx), ...
     'Color', 'w', 'FontSize', 12, 'FontWeight', 'bold');
 drawnow;
+end
+
+% =========================================================================
+% Local helper — T-BU-1e soma-sized geometry + power quantization.
+% =========================================================================
+function runSomaQuantizationChecks(dmd)
+%runSomaQuantizationChecks  Pin the "~80 px, ~80 power levels" corollary.
+%
+%   The corrected optical model (docs/dmd_control_handoff.md §5) makes the
+%   sample scale ~4x larger than the pilot assumed, so a soma-sized disk is
+%   ~80 DMD pixels rather than ~900. That number is simultaneously the
+%   per-neuron power resolution of fillFactorEnsemble.
+
+model = tfp.util.opticalModel();
+geom  = tfp.patterns.somaSpotGeometry();     % 12.7 um soma, design constants
+somaRadiusPx = geom.radiusPx;                % area-matched isotropic fallback
+
+centroids = [400 300; 700 500; 900 620];
+nCells    = size(centroids, 1);
+
+% --- (1) nPowerLevels is reported and equals the patch pixel count --------
+[~, info] = tfp.patterns.fillFactorEnsemble(dmd, centroids, somaRadiusPx, 1.0);
+
+assert(isfield(info, 'nPowerLevels'), ...
+    'info.nPowerLevels must be reported (T-BU-1e).');
+assert(isequal(info.nPowerLevels, info.nPatchPixels), ...
+    'info.nPowerLevels must equal info.nPatchPixels.');
+assert(isequal(info.requestedFractions, ones(nCells, 1)), ...
+    'info.requestedFractions must echo the requested fill fractions.');
+assert(all(abs(info.powerStepPct - 100 ./ info.nPatchPixels) < 1e-12), ...
+    'info.powerStepPct must be 100/nPowerLevels.');
+assert(all(info.nPatchPixels >= 70 & info.nPatchPixels <= 92), ...
+    ['A soma-sized disk must be ~80 DMD pixels; saw %s. If this reads ~900 ' ...
+     'the optical constants have regressed to the pre-optics guess.'], ...
+    mat2str(info.nPatchPixels(:)'));
+assert(all(abs(info.nPatchPixels - geom.nPixels) <= 5), ...
+    'fillFactorEnsemble disk (%s px) disagrees with somaSpotGeometry (%d px).', ...
+    mat2str(info.nPatchPixels(:)'), geom.nPixels);
+assert(all(info.nOnPixels == info.nPatchPixels), ...
+    '100%% fill must turn on every patch pixel.');
+
+fprintf('\n[T-BU-1e] %s\n', geom.description);
+fprintf('[T-BU-1e] fillFactorEnsemble at r = %.2f px -> %d patch px = %d power levels (%.2f%% steps).\n', ...
+    somaRadiusPx, info.nPatchPixels(1), info.nPowerLevels(1), info.powerStepPct(1));
+
+% The stale default this task retires: r = 14 px is not a cell.
+legacyExtentUm = 2 * 14 * [model.umPerPixelGroove, model.umPerPixelDispersion];
+assert(min(legacyExtentUm) > 30, ...
+    'Sanity: the legacy radiusPx = 14 default should be a >30 um blob, not a soma.');
+fprintf('[T-BU-1e] legacy radiusPx = 14 is a %.1f x %.1f um sample ellipse (%.1fx a soma).\n', ...
+    legacyExtentUm, mean(legacyExtentUm) / geom.diameterUm);
+
+% --- (2) Nested subsets still hold across a 10-level ladder ---------------
+% Low fill is now only ~8 pixels, so a non-nested ordering would make the
+% power sweep confound pattern identity with power.
+levels = 0.1:0.1:1.0;
+
+seedOpts = struct();
+seedOpts.rngSeed = 11;
+[~, base] = tfp.patterns.fillFactorEnsemble( ...
+    dmd, centroids, somaRadiusPx, levels(1), seedOpts);
+
+prevMasks = base.neuronMasks;
+prevOn    = base.nOnPixels;
+for i = 2:numel(levels)
+    stepOpts = struct();
+    stepOpts.permutations = base.permutations;
+    [~, stepInfo] = tfp.patterns.fillFactorEnsemble( ...
+        dmd, centroids, somaRadiusPx, levels(i), stepOpts);
+    for k = 1:nCells
+        assert(all(prevMasks{k}(:) <= stepInfo.neuronMasks{k}(:)), ...
+            ['Nested-subset guarantee broken: neuron %d at fill %.1f is not ' ...
+             'a superset of fill %.1f.'], k, levels(i), levels(i-1));
+        assert(stepInfo.nOnPixels(k) == ...
+            round(levels(i) * stepInfo.nPatchPixels(k)), ...
+            'Neuron %d ON count must be the exact rounded pixel count.', k);
+        assert(stepInfo.nOnPixels(k) >= prevOn(k), ...
+            'ON count must be non-decreasing with fill fraction.');
+    end
+    prevMasks = stepInfo.neuronMasks;
+    prevOn    = stepInfo.nOnPixels;
+end
+fprintf('[T-BU-1e] nested-subset ladder PASS — %d levels, %d..%d ON px per soma.\n', ...
+    numel(levels), round(levels(1) * info.nPatchPixels(1)), info.nPatchPixels(1));
+
+% --- (3) Too-fine a ladder warns rather than silently duplicating ---------
+lastwarn('');
+fineOpts = struct();
+fineOpts.requestedFillLevels = linspace(0.005, 1, 200);   % 200 levels of ~80
+tfp.patterns.fillFactorEnsemble(dmd, centroids, somaRadiusPx, 0.5, fineOpts);
+[~, fineId] = lastwarn();
+assert(strcmp(fineId, 'tfp:patterns:fillFactorEnsemble:fillQuantization'), ...
+    ['Requesting 200 fill levels from an ~80-pixel spot must warn; ' ...
+     'lastwarn id was "%s".'], fineId);
+
+% A ladder the spot can actually resolve stays quiet.
+lastwarn('');
+coarseOpts = struct();
+coarseOpts.requestedFillLevels = levels;
+tfp.patterns.fillFactorEnsemble(dmd, centroids, somaRadiusPx, 0.5, coarseOpts);
+[~, coarseId] = lastwarn();
+assert(~strcmp(coarseId, 'tfp:patterns:fillFactorEnsemble:fillQuantization'), ...
+    'A 10-level ladder on an ~80-level spot must not warn.');
+
+% The warning is suppressible for callers that already reported it.
+lastwarn('');
+quietOpts = fineOpts;
+quietOpts.warnOnQuantization = false;
+tfp.patterns.fillFactorEnsemble(dmd, centroids, somaRadiusPx, 0.5, quietOpts);
+[~, quietId] = lastwarn();
+assert(~strcmp(quietId, 'tfp:patterns:fillFactorEnsemble:fillQuantization'), ...
+    'options.warnOnQuantization = false must silence the advisory.');
+
+% Bad ladder input is rejected.
+badOpts = struct();
+badOpts.requestedFillLevels = [0.5 1.7];
+try
+    tfp.patterns.fillFactorEnsemble(dmd, centroids, somaRadiusPx, 0.5, badOpts);
+    error('Expected tfp:patterns:fillFactorEnsemble:badFillLevels.');
+catch ME
+    assert(strcmp(ME.identifier, 'tfp:patterns:fillFactorEnsemble:badFillLevels'), ...
+        'Out-of-range requestedFillLevels must throw badFillLevels; got "%s".', ...
+        ME.identifier);
+end
+
+% --- (4) Default behaviour is unchanged ----------------------------------
+% Same seed, no new options -> byte-identical result to the legacy call.
+o1 = struct(); o1.rngSeed = 3;
+[patA, infoA] = tfp.patterns.fillFactorEnsemble(dmd, centroids, 14, 0.35, o1);
+o2 = struct(); o2.rngSeed = 3;
+[patB, infoB] = tfp.patterns.fillFactorEnsemble(dmd, centroids, 14, 0.35, o2);
+assert(isequal(patA, patB) && isequal(infoA.nOnPixels, infoB.nOnPixels), ...
+    'Default behaviour must be deterministic and unchanged.');
+assert(all(infoA.nOnPixels == round(0.35 * infoA.nPatchPixels)), ...
+    'Legacy radius path must still round fill fraction against the exact patch size.');
+
+fprintf('[T-BU-1e] quantization advisory PASS — warns at 200 levels, quiet at 10, suppressible.\n');
 end

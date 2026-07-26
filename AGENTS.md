@@ -20,6 +20,10 @@ the TF-Photostim MATLAB codebase.
 
 ## Working on a task
 - Only touch files listed in your task's "Files" section
+- ALWAYS invoke MATLAB with `-nodisplay`, e.g.
+  `/Applications/MATLAB_R2023a.app/bin/matlab -nodisplay -batch "runtests"`.
+  Without it, figures render on screen and pop windows over whatever Hillel is
+  doing. It does not change results. See CLAUDE.md "Development environment".
 - Run runtests BEFORE starting — note the baseline count
 - Show diffs before applying every file change
 - Run runtests AFTER each file — confirm no regressions

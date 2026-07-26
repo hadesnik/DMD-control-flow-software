@@ -23,9 +23,16 @@ daq.configureDigitalOutput(config.daq.digitalOutChannels);
 
 calibration = loadCalibrationOrIdentity(config);
 targets     = resolveTargets(config, calibration);
-isi_s    = 0.1;
-nReps    = 2;
-radiusPx = 25;
+isi_s       = 0.1;
+nReps       = 2;
+
+% Spot size is stated at the SAMPLE plane and converted by somaSpotGeometry.
+% The old `radiusPx = 25` was picked against a pre-optics 0.270 um/px guess; at
+% the real anisotropic scale it is a 56 x 71 um blob — many cells wide, which
+% is exactly what this experiment (rapid switching between SINGLE cells) must
+% not do.
+spotDiameterUm = spotDiameterFromConfig(config, 12.7);   %ASSUMED soma; %VERIFY per prep
+spotGeom       = tfp.patterns.somaSpotGeometry(spotDiameterUm, config);
 
 sequence = tfp.trial.TrialSequence.generateRapidSequential(targets, isi_s, nReps);
 

@@ -119,6 +119,15 @@ classdef DLP650LNIR_DMD < tfp.hardware.DMD
             obj.state_        = 'idle';
             obj.seqLoaded_    = false;
             obj.isInitialized = true;
+
+            % Self-configure the pattern-safety policy from this same config,
+            % so a directly constructed DLP650LNIR_DMD is protected even when
+            % tfp.util.makeHardware is not used. config.dmd from real.yaml
+            % carries the patch geometry, which turns the patch check on;
+            % makeHardware additionally passes the FULL config so the laser
+            % block (rep rate, pupil limit, voltage ceiling) is seen too.
+            obj.configurePatternSafety(config);
+
             obj.logEvent('initialize', struct('alpVersion', alpVer, 'dmdType', dmdType));
         end
 
@@ -148,6 +157,18 @@ classdef DLP650LNIR_DMD < tfp.hardware.DMD
                 error('tfp:hardware:DLP650LNIR_DMD:badOptions', ...
                     'options must be a struct with .exposureUs and .darkTimeUs.');
             end
+
+            % Pattern-domain interlocks (patch containment + pupil pulse
+            % energy). Run BEFORE the device is touched — before AlpProjHalt /
+            % AlpSeqFree / AlpSeqAlloc — so a rejected sequence never disturbs
+            % a loaded one and never reaches the chip. See tfp.hardware.DMD
+            % "Pattern safety"; this is the path all-ON alignment frames
+            % (scripts/alpCheckerboard.m style) take, which is precisely the
+            % case the pupil interlock exists for. If the laser is shuttered
+            % for such a frame, declare it:
+            %   dmd.setAssumedLaserVoltage(0, 'laser shuttered for alignment')
+            safety = obj.checkPatternSafety_(patterns, ...
+                'DLP650LNIR_DMD.loadPatternSequence', options);
 
             nPatterns = size(patterns, 3);
 
@@ -214,7 +235,8 @@ classdef DLP650LNIR_DMD < tfp.hardware.DMD
 
             obj.state_ = 'idle';
             obj.logEvent('loadPatternSequence', struct('nPatterns', nPatterns, ...
-                'exposureUs', options.exposureUs, 'darkTimeUs', options.darkTimeUs));
+                'exposureUs', options.exposureUs, 'darkTimeUs', options.darkTimeUs, ...
+                'safety', safety));
         end
 
         % -------------------------------------------------------------- %

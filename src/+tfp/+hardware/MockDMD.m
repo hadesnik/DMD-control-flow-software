@@ -53,6 +53,13 @@ classdef MockDMD < tfp.hardware.DMD
             obj.options_           = [];
             obj.isInitialized      = true;
 
+            % Self-configure the pattern-safety policy from this same config,
+            % so a directly constructed MockDMD is protected even when
+            % tfp.util.makeHardware is not used (mirrors the guarantee
+            % tfp.hardware.DAQ gives for the ao3 laser policy). makeHardware
+            % additionally passes the FULL config, which adds the laser block.
+            obj.configurePatternSafety(config);
+
             obj.logEvent('initialize', config);
         end
 
@@ -78,13 +85,20 @@ classdef MockDMD < tfp.hardware.DMD
                     'options must be a struct with .exposureUs and .darkTimeUs.');
             end
 
+            % Pattern-domain interlocks (patch containment + pupil pulse
+            % energy). Run BEFORE any state is stored so a rejected sequence is
+            % never "loaded" — see tfp.hardware.DMD "Pattern safety".
+            safety = obj.checkPatternSafety_(patterns, ...
+                'MockDMD.loadPatternSequence', options);
+
             obj.patterns_          = patterns;
             obj.options_           = options;
             obj.state_             = 'idle';
             obj.currentPatternIdx_ = 0;
 
             nPatterns = size(patterns, 3);
-            obj.logEvent('loadPatternSequence', struct('nPatterns', nPatterns));
+            obj.logEvent('loadPatternSequence', ...
+                struct('nPatterns', nPatterns, 'safety', safety));
 
             if obj.loadLatencyMsPerPattern_ > 0
                 pause(obj.loadLatencyMsPerPattern_ * nPatterns / 1000);
