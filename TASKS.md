@@ -2340,8 +2340,31 @@ All four are new-file-dominant and share no files. Each depends only on T-BU-0.
 ---
 
 **STATUS 2026-07-26:** Round 0 and Round 1 complete (T-BU-0, 1a–1e, plus the
-unplanned reconciliation T-BU-1f). Full suite **479/479 green**, up from a
-332 baseline. Round 2 is unblocked.
+unplanned reconciliation T-BU-1f). Full suite **513/513 green**, up from a
+332 baseline.
+
+**Round 2 — LANDED BUT NOT SELF-REVIEWED.** All four agents (2a/2b/2c/2e) were
+killed mid-task by an API session limit, each partway through its own
+verification step. Their code IS in the tree and the full suite is green, but
+none of them completed its final self-check or reported back, so treat Round 2
+as needing a review pass before it is called DONE. Three failures left behind by
+the terminations were diagnosed and fixed by the orchestrator:
+  - `exp_ensemble_activation` / `exp_ensemble_fill_factor_power`: `warning()`
+    was handed a 1×2 vector for two `%.1f` slots. Unlike `error()`, **MATLAB's
+    `warning()` requires scalar formatted arguments** and raises
+    `MATLAB:warning:nonScalarInput`. Expand to `extentUm(1), extentUm(2)`.
+    Worth knowing — it is an easy trap when quoting an anisotropic pair, which
+    this task family does constantly.
+  - `test_sampleDmdMapping/wrongUnitsMessageSaysHowToConvert`: assumed
+    `verifyError` returns the caught MException. It does not — its outputs are
+    the OUTPUTS OF THE CALLED FUNCTION, so a throwing call yields `missing` and
+    `err.message` then errors. Catch explicitly when asserting on message text.
+
+Still outstanding from Round 2: nobody updated
+`tests/test_exp_ppsf_lateral_mock.m`, `test_exp_axial_ppsf_mock.m`,
+`test_ensemble_activation_mock.m` or `test_exp_power_curve_3dshot_mock.m`, which
+were in scope for 2b/2c. They pass as-is, but they do not yet assert the new
+sample-plane-diameter behaviour, so coverage of the changed defaults is thin.
 The `dmdToSample_affine` units/naming question is **DEFERRED to the first
 calibration run** (T-BU-M0) — it is a saved-calibration schema decision that
 wants real data in hand. T-BU-2e guards the hazard defensively in the meantime,

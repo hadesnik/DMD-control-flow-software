@@ -11,6 +11,14 @@ function runtests()
 thisDir = fileparts(mfilename('fullpath'));
 addpath(fullfile(thisDir, 'src'));
 
+% macOS MATLAB is not headless under -batch alone: it keeps a window-server
+% connection, so every figure the calibration/experiment code opens becomes a
+% real window that steals focus. Suppress them for batch runs only; figures are
+% still built (invisibly), so tests that save or inspect them are unaffected.
+if batchStartupOptionUsed
+    set(groot, 'DefaultFigureVisible', 'off');
+end
+
 import matlab.unittest.TestSuite;
 import matlab.unittest.TestRunner;
 
