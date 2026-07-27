@@ -14,6 +14,24 @@ classdef test_uniformity_mock < matlab.unittest.TestCase
     %                               MockDMD + MockSubstageCamera and returns a
     %                               well-formed struct. Requires Image Processing
     %                               Toolbox (findSpotCentroid).
+    %
+    %   T-BU-3e additions (stale spot-size defaults):
+    %   defaultProbeIsSomaSized      — the default probe is somaSpotGeometry's
+    %                                  soma diameter, not the old 15 px blob.
+    %   probeMatchesSomaPixelCount   — THE T-BU-1f SEAM CHECK. The pattern the
+    %                                  routine actually loads has exactly
+    %                                  geom.nPixels ON mirrors, and the wrong
+    %                                  hand-off route (.radiusPx into
+    %                                  anisotropic mode) is shown to be ~17%
+    %                                  short, so a regression back to it fails.
+    %   legacySpotRadiusUnchanged    — a supplied .spotRadius still draws the
+    %                                  historical isotropic pixel circle
+    %                                  bit-for-bit.
+    %   spotDiameterUmHonouredInUm   — asking in µm changes the pixel geometry.
+    %   intensityNormMeaningPreserved — .intensityNorm is still the raw 2p
+    %                                  response map that dwellCorrection
+    %                                  consumes; T-BU-3e changed only the probe
+    %                                  SIZE, never these two fields' meanings.
 
     methods (Test)
         function uniformFieldZeroCV(testCase)
@@ -159,6 +177,167 @@ classdef test_uniformity_mock < matlab.unittest.TestCase
             testCase.verifyNotEmpty(calib.reachableHullScan);
             testCase.verifyTrue(isfinite(calib.coverageFraction), ...
                 'coverageFraction must be finite with an affine + scanPixels');
+        end
+
+        % =================================================================
+        % T-BU-3e — probe-spot sizing
+        % =================================================================
+
+        function defaultProbeIsSomaSized(testCase)
+            %defaultProbeIsSomaSized Default probe = somaSpotGeometry's soma.
+            %   The old default was spotRadius = 15 DMD px with a comment
+            %   claiming "cell-sized". At the real bring-up scale that is a
+            %   33.8 x 42.5 um ellipse — three to four cells wide.
+            testCase.assumeTrue(logical(license('test', 'image_toolbox')), ...
+                'Requires Image Processing Toolbox (findSpotCentroid).');
+            [dmd, cam] = testCase.makeRig();
+
+            calib = tfp.calibration.measureIlluminationUniformity(dmd, cam, ...
+                testCase.fastOpts());
+
+            geom = tfp.patterns.somaSpotGeometry();
+            testCase.verifyEqual(calib.spotDiameterUm, geom.diameterUm, ...
+                'AbsTol', 1e-12, ...
+                'Default probe must be the soma diameter somaSpotGeometry states');
+            testCase.verifyNotEmpty(calib.spotGeometry, ...
+                'The geometry used must be recorded for the figure caption');
+
+            % The legacy 15 px circle is ~9x the mirror budget of a soma.
+            legacy = tfp.patterns.singleSpot(dmd, [dmd.nCols/2, dmd.nRows/2], 15);
+            testCase.verifyLessThan(geom.nPixels, nnz(legacy) / 5, ...
+                'A soma-sized probe must be far smaller than the retired 15 px default');
+        end
+
+        function probeMatchesSomaPixelCount(testCase)
+            %probeMatchesSomaPixelCount T-BU-1f seam check, measured not assumed.
+            %   somaSpotGeometry hands out three NON-interchangeable routes.
+            %   The routine must use .spotOptions/.semiAxisGroovePx; feeding the
+            %   area-matched isotropic .radiusPx into anisotropic mode silently
+            %   paints ~17% fewer mirrors (67 rather than 81 for a soma), i.e.
+            %   17% less delivered power, with no error anywhere.
+            testCase.assumeTrue(logical(license('test', 'image_toolbox')), ...
+                'Requires Image Processing Toolbox (findSpotCentroid).');
+            [dmd, cam] = testCase.makeRig();
+
+            tfp.calibration.measureIlluminationUniformity(dmd, cam, ...
+                testCase.fastOpts());
+
+            geom  = tfp.patterns.somaSpotGeometry();
+            drawn = nnz(dmd.getActivePattern());
+            testCase.verifyEqual(drawn, geom.nPixels, ...
+                'Loaded probe pattern must have exactly geom.nPixels ON mirrors');
+
+            % Pin the failure mode itself, so a regression to the broken route
+            % cannot pass by coincidence.
+            badOpts = rmfield(geom.spotOptions, 'semiAxisGroovePx');
+            badMask = tfp.patterns.singleSpot(dmd, [dmd.nCols/2, dmd.nRows/2], ...
+                geom.radiusPx, badOpts);
+            testCase.verifyLessThan(nnz(badMask), 0.9 * geom.nPixels, ...
+                'The wrong hand-off route must be measurably short on pixels');
+        end
+
+        function legacySpotRadiusUnchanged(testCase)
+            %legacySpotRadiusUnchanged .spotRadius still draws the old circle.
+            testCase.assumeTrue(logical(license('test', 'image_toolbox')), ...
+                'Requires Image Processing Toolbox (findSpotCentroid).');
+            [dmd, cam] = testCase.makeRig();
+
+            opts = testCase.fastOpts();
+            opts.spotRadius = 15;
+            calib = tfp.calibration.measureIlluminationUniformity(dmd, cam, opts);
+
+            expected = tfp.patterns.singleSpot(dmd, [dmd.nCols/2, dmd.nRows/2], 15);
+            testCase.verifyEqual(nnz(dmd.getActivePattern()), nnz(expected), ...
+                'Deprecated .spotRadius must reproduce the historical pixel circle');
+            testCase.verifyTrue(isnan(calib.spotDiameterUm), ...
+                'A pixel-radius probe has no stated sample-plane diameter');
+            testCase.verifyEmpty(calib.spotGeometry);
+        end
+
+        function spotDiameterUmHonouredInUm(testCase)
+            %spotDiameterUmHonouredInUm Asking in µm changes the pixel geometry.
+            testCase.assumeTrue(logical(license('test', 'image_toolbox')), ...
+                'Requires Image Processing Toolbox (findSpotCentroid).');
+            [dmd, cam] = testCase.makeRig();
+
+            opts = testCase.fastOpts();
+            opts.spotDiameterUm = 20;
+            calib = tfp.calibration.measureIlluminationUniformity(dmd, cam, opts);
+
+            geom20 = tfp.patterns.somaSpotGeometry(20);
+            testCase.verifyEqual(calib.spotDiameterUm, 20, 'AbsTol', 1e-12);
+            testCase.verifyEqual(nnz(dmd.getActivePattern()), geom20.nPixels, ...
+                'A 20 um request must draw the 20 um ellipse');
+            testCase.verifyGreaterThan(geom20.nPixels, ...
+                tfp.patterns.somaSpotGeometry().nPixels, ...
+                'Sanity: 20 um is bigger than a soma');
+        end
+
+        function intensityNormMeaningPreserved(testCase)
+            %intensityNormMeaningPreserved The dwellCorrection contract holds.
+            %   .intensityNorm is the RAW integrated 2p signal (prop I^2) and
+            %   .intensitySqrtNorm is its square root (prop I). dwellCorrection
+            %   consumes the former and treats it as g^2; swapping them would
+            %   silently drop the 2p correction (2.72x at the patch edge) to
+            %   the energy-equalising linear one (1.65x). T-BU-3e touched only
+            %   the probe SIZE, so this must still hold.
+            testCase.assumeTrue(logical(license('test', 'image_toolbox')), ...
+                'Requires Image Processing Toolbox (findSpotCentroid).');
+            [dmd, cam] = testCase.makeRig();
+
+            calib = tfp.calibration.measureIlluminationUniformity(dmd, cam, ...
+                testCase.fastOpts());
+
+            reach = calib.reachable;
+            testCase.assumeTrue(any(reach), 'Need at least one reachable spot');
+            testCase.verifyEqual(calib.intensitySqrtNorm(reach), ...
+                sqrt(calib.intensityNorm(reach)), 'AbsTol', 1e-12, ...
+                'intensitySqrtNorm must remain sqrt(intensityNorm)');
+            testCase.verifyLessThanOrEqual(max(calib.intensityNorm(reach)), ...
+                1 + 1e-12, 'intensityNorm stays peak-normalised');
+
+            % The whole struct is still consumable by dwellCorrection in its
+            % default (two-photon) mode — the end-to-end T-BU-3d contract.
+            dwell = tfp.patterns.dwellCorrection([dmd.nCols/2, dmd.nRows/2], ...
+                struct('uniformityCalib', calib));
+            testCase.verifyNotEmpty(dwell.equalises);
+            testCase.verifySubstring(lower(dwell.equalises), '2p', ...
+                'Default dwell correction must still equalise 2p dose');
+            testCase.verifyTrue(all(isfinite(dwell.dwellFrames)) && ...
+                all(dwell.dwellFrames > 0), ...
+                'Dwell frames from the measured map must be finite and positive');
+        end
+    end
+
+    % =====================================================================
+    % Shared fixtures for the T-BU-3e cases
+    % =====================================================================
+    methods (Access = private)
+        function [dmd, cam] = makeRig(~)
+            %makeRig Full-size MockDMD + MockSubstageCamera.
+            %   Full chip size matters here: the spot-geometry assertions are
+            %   compared against tfp.patterns.somaSpotGeometry, which knows
+            %   nothing about a shrunken test array.
+            dmdCfg.nRows                   = 800;
+            dmdCfg.nCols                   = 1280;
+            dmdCfg.loadLatencyMsPerPattern = 0;
+            dmd = tfp.hardware.MockDMD();
+            dmd.initialize(dmdCfg);
+
+            camCfg.nRows       = 256;
+            camCfg.nCols       = 320;
+            camCfg.dmd         = dmd;
+            camCfg.truthAffine = [0.2 0 20; 0 0.2 10; 0 0 1];
+            camCfg.noiseLevel  = 0.01;
+            camCfg.spotSigmaPx = 4;
+            cam = tfp.hardware.MockSubstageCamera();
+            cam.initialize(camCfg);
+        end
+
+        function opts = fastOpts(~)
+            %fastOpts A 3x3 grid with no pauses and no figure.
+            opts = struct('nGridPoints', 3, 'gridSpacing', 50, ...
+                'exposureS', 0, 'showFigure', false);
         end
     end
 end

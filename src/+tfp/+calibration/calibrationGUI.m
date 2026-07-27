@@ -11,7 +11,35 @@ function calib = calibrationGUI(dmd, camera, siBridge, options)
 %   dmd:      tfp.hardware.DMD-derived object, already initialised
 %   camera:   tfp.hardware.SubstageCamera-derived object, already initialised
 %   siBridge: tfp.hardware.ScanImageBridge object, or [] to skip SI panel
-%   options:  struct — same fields as alignDMDtoCamera options
+%   options:  struct — same fields as alignDMDtoCamera options, in particular
+%       .spotDiameterUm  calibration-spot DIAMETER at the SAMPLE plane, µm
+%                        (default 20 — the same default alignDMDtoCamera uses;
+%                        see "spot sizing" below)
+%       .spotRadius      DEPRECATED. Spot radius in DMD pixels. When given it
+%                        overrides .spotDiameterUm and draws the historical
+%                        isotropic pixel circle. Prefer .spotDiameterUm.
+%       .opticalConfig   config struct forwarded to tfp.util.opticalModel for
+%                        the µm→DMD-px conversion. Default: design constants.
+%
+%   SPOT SIZING. This routine is the interactive twin of alignDMDtoCamera and
+%   must draw the SAME spot, or the two would fit affines from different
+%   optical objects. The old default here was a bare `spotRadius = 8` DMD
+%   pixels, chosen against the retired pre-optics guess of 0.270 µm/px; at the
+%   real bring-up scale (1.1250 µm/px along the grooves, 1.4162 µm/px along
+%   dispersion, chip clocked 45°) that is an 18.0 × 22.7 µm ellipse at the
+%   sample, not the ~4 µm dot it reads as. Calibration spots do not need to be
+%   soma-sized — they need to be bright and cleanly centroidable — but they do
+%   need to STATE their size, so it is now given in sample µm and converted by
+%   tfp.patterns.somaSpotGeometry. The 20 µm default keeps the historical ~8 px
+%   pixel budget while making the intent explicit, and the spot is drawn
+%   anisotropically so the camera sees a ROUND spot (a centroid fit on a round
+%   spot is less sensitive to a background gradient than one on a 1.26:1
+%   ellipse).
+%
+%   Output calib gains, on top of the alignDMDtoCamera fields:
+%     .spotDiameterUm  sample-plane diameter used (µm), or NaN for the
+%                      deprecated .spotRadius path
+%     .spotGeometry    the tfp.patterns.somaSpotGeometry struct, or []
 %
 %   Figure layout (1400×800, 2×2 subplot grid):
 %     [1,1] Substage camera image with red × at detected centroid
@@ -30,10 +58,16 @@ if nargin < 4, options  = struct(); end
 % --- parse options (same defaults as alignDMDtoCamera) ---
 nGridPoints = configField(options, 'nGridPoints', 5);
 gridSpacing = configField(options, 'gridSpacing', 100);
-spotRadius  = configField(options, 'spotRadius',  8);
 exposureS   = configField(options, 'exposureS',   0.1);
 umPerPixel  = configField(options, 'umPerPixel',  1.56);
 notes       = configField(options, 'notes', 'DMD-to-camera calibration (GUI)');
+
+% Spot sizing: ask in sample µm (see the header). Defaults deliberately match
+% alignDMDtoCamera so the two routines fit the same optical object. A supplied
+% .spotRadius is the deprecated pixel-count form and still wins.
+spotDiameterUm = configField(options, 'spotDiameterUm', 20);   %ASSUMED bright, easily centroidable
+legacyRadiusPx = configField(options, 'spotRadius',     []);
+opticalConfig  = configField(options, 'opticalConfig',  struct());
 
 % --- validate ---
 if ~isnumeric(nGridPoints) || ~isscalar(nGridPoints) || nGridPoints < 3 || mod(nGridPoints,2) == 0
@@ -61,10 +95,31 @@ axis1d    = (-half:half) * gridSpacing;
 [colOff, rowOff] = meshgrid(axis1d, axis1d);
 dmdCoords = [dmd.nCols/2 + colOff(:),  dmd.nRows/2 + rowOff(:)];   % nPts×2
 
+% --- spot geometry (mirrors alignDMDtoCamera exactly) ---
+% Per T-BU-1f the positional radius singleSpot takes in anisotropic mode is the
+% GROOVE-axis (long) semi-axis, carried explicitly by geom.spotOptions.
+% geom.radiusPx is the area-matched ISOTROPIC fallback for circle-only call
+% sites and must NOT be passed here (it would paint ~17% fewer mirrors).
+if isempty(legacyRadiusPx)
+    spotGeom   = tfp.patterns.somaSpotGeometry(spotDiameterUm, opticalConfig);
+    spotRadius = spotGeom.semiAxisGroovePx;
+    spotOpts   = spotGeom.spotOptions;
+else
+    if ~isnumeric(legacyRadiusPx) || ~isscalar(legacyRadiusPx) ...
+            || ~isfinite(legacyRadiusPx) || legacyRadiusPx <= 0
+        error('tfp:calibration:calibrationGUI:badSpotRadius', ...
+            'options.spotRadius must be a positive finite scalar.');
+    end
+    spotGeom       = [];
+    spotRadius     = double(legacyRadiusPx);
+    spotOpts       = struct();       % historical isotropic pixel circle
+    spotDiameterUm = NaN;
+end
+
 % --- build and load pattern sequence ---
 patterns = false(dmd.nRows, dmd.nCols, nPts);
 for k = 1:nPts
-    patterns(:,:,k) = tfp.patterns.singleSpot(dmd, dmdCoords(k,:), spotRadius);
+    patterns(:,:,k) = tfp.patterns.singleSpot(dmd, dmdCoords(k,:), spotRadius, spotOpts);
 end
 seqOpts.exposureUs = round(max(exposureS, 0) * 1e6);
 seqOpts.darkTimeUs = 0;
@@ -254,6 +309,8 @@ if nAcceptedFinal >= 4
     calib = fitAffineCalib(dmdCoords, measuredPts, rejectedPts);
     calib.umPerPixel         = umPerPixel;
     calib.pixelsPerUm        = 1 / umPerPixel;
+    calib.spotDiameterUm     = spotDiameterUm;
+    calib.spotGeometry       = spotGeom;
     calib.powerCurve         = struct();
     calib.timestamp          = datetime('now');
     calib.notes              = notes;

@@ -1799,12 +1799,32 @@ Two consequences, one good and one bad:
 
     The anisotropic correction is exact in the continuum — the residual converges
     to 1.000 — but on the pixel lattice it cannot be fully expressed at small
-    radii. At soma scale ~8% aspect error remains, and **below ~4 px semi-axis
+    radii. At soma scale ~8% aspect error remains, and **below ~3 px semi-axis
     the ellipse rasterizes to the same pixel set as the circle, so the
     correction buys nothing at all.** This is physics, not a defect: you cannot
-    make a perfectly round 12.7 µm spot out of ~80 mirrors. Relevant to T-BU-3e
-    (`measurePSF` deliberately wants a near-minimal spot and is at the floor)
-    and worth stating in any figure caption that claims round targets.
+    make a perfectly round 12.7 µm spot out of ~80 mirrors. Worth stating in any
+    figure caption that claims round targets.
+
+    **REFINEMENT (T-BU-3e, 2026-07-26) — do not misread the table above.** The
+    monotonic-looking progression 1.2588 → 1.079 → 1.007 invites the conclusion
+    that "the correction helps a bit, all the way down to ~3 px". It does not.
+    A denser sweep shows the intermediate band is NOT reliably closer to round:
+
+    | groove semi-axis (px) | ON px | sample aspect | same pixel set as circle? |
+    |---|---|---|---|
+    | 1.25 | 5  | 1.2588 | yes |
+    | 2.00 | 9  | 1.2588 | yes |
+    | 2.80 | 21 | 1.2588 | yes |
+    | 3.11 | 23 | **0.944** | no |
+    | 4.00 | 41 | 1.007 | no |
+    | 5.64 | 81 | 1.079 | no |
+
+    Between roughly 3 and 6 px the correction does move a handful of mirrors,
+    but the residual aspect **oscillates** (it overshoots below 1.0 at 3.11 px
+    and back above at 5.64 px) depending on where the lattice happens to fall.
+    Treat anything under ~6 px semi-axis as "aspect not controlled" rather than
+    "partially corrected". Above ~4 px the correction earns its keep on average;
+    below ~3 px it is provably a no-op.
 
   - **Bad:** every spot-radius default in the repo is **3–4× too large**. They
     were chosen against the old 0.270 µm/px guess. `radiusPx = 15`, drawn as an
@@ -1826,6 +1846,30 @@ and should be fixed upstream in the `TF optics simulator` repo. Consequences:
     40 W available (~7%), not 10.8% of 80 W.
 Any task that hardcodes a laser number takes it from `configs/real.yaml`, never
 from §7 of the handoff doc.
+
+**%CORRECTION 2 — §8's dwell correction under-corrects a two-photon process
+(found by T-BU-3d, 2026-07-26; verified independently by the orchestrator).**
+§8 says to scale each target's dwell by `1 / I(r)`, giving **1.65×** at the
+patch edge. That is the correct factor to equalise delivered **energy**
+(`∫I dt`). But this is a 2-photon photostim rig: excitation goes as **I²**, so
+equalising the quantity that actually drives the opsin (`∫I² dt`) needs
+`1 / I(r)²` = **2.72×** at the edge.
+
+    relative intensity at patch edge      0.6061   (§8 quotes 0.61)
+    relative 2p response at edge (I²)     0.3673
+    §8's energy-equalising dwell   1/I    1.650×
+    2p-dose-equalising dwell       1/I²   2.722×
+    → using §8's number on a 2p rig leaves edge cells 1.65× UNDER-dosed
+
+Consequences: `dwellCorrection` therefore defaults to the 2p exponent and says
+so in `.equalises`; §8's factor is still available as `mode = 'linear'` for
+energy budgeting. Flat-fielding a wide ensemble costs proportionally more time
+than §8 implies. Filed upstream as T-BU-M7.
+
+Caveat for the rig: the true exponent is not guaranteed to be exactly 2 — opsin
+activation saturates and temporal focusing complicates the depth dependence — so
+`options.exponent` is configurable and should be checked empirically against a
+power-response curve rather than assumed.
 
 ---
 
@@ -2195,7 +2239,63 @@ All four are new-file-dominant and share no files. Each depends only on T-BU-0.
 
 ### Round 3 — Calibration and reporting [5 parallel agents]
 
-- [ ] T-BU-3a  Affine sanity check + periscope-reversal diagnostic.
+- [x] T-BU-3a  Affine sanity check + periscope-reversal diagnostic.
+                **[DONE 2026-07-26]** 17 new tests + `test_calibration_mock`
+                still 7/7 and silent. Additive `calib.scaleCheck`; the 2/3-arg
+                call forms are untouched.
+                **Deviated from the task spec, correctly:** the spec said to
+                check that the rotation is near 45°. Checking the CAMERA-frame
+                rotation would be wrong — it contains the substage camera's
+                arbitrary mounting angle, which no document pins, so it would
+                fire false positives. The clocking angle is instead taken from
+                the RIGHT singular vectors, which live in the DMD frame and are
+                immune to camera rotation; camera-frame rotation and reflection
+                are reported but never checked. A test pins that immunity.
+                **Mode gating** solves a file-ownership problem: this private
+                helper is shared with `crossRegisterScanImage`, which fits
+                ScanImage scan-field px → camera px and has no business being
+                measured against a DMD model. Default `'auto'` computes the
+                diagnostic always but withholds warnings when BOTH scale and
+                anisotropy are off (indistinguishable from a good non-DMD fit);
+                it does warn when one is right and the other wrong, which are
+                exactly the two informative cases. Pass `scaleCheck:'dmd'` from
+                a DMD call site to remove the blind spot.
+                Enumerates five candidate scale factors (1, 1.778 periscope
+                reversed, 0.5625 constants already assume reversal, 1.56
+                µm-grid/wrong camera pixel, 0.5 binning), marks each that fits,
+                and refuses to name a cause when more than one does — see the
+                T-BU-2e blind spot. Expected singular values pinned at
+                [0.9078, 0.7212] camera px per DMD px.
+
+- [x] T-BU-3b  Focal-plane-tilt defaults and expectation check.
+                **[DONE 2026-07-26]** 17/17 (6 pre-existing untouched + 11 new).
+                Verified independently by the orchestrator against the design:
+                dispersion gradient 0.02174 µm/µm (design 0.02174), groove
+                component 2e-18 (design exactly zero), tilt 1.2454° (design
+                1.245), walk 17.118 µm (design 17.1), 0.03079 µm per px on the
+                (1,1) diagonal. Lateral→sample conversion goes through
+                `dmdToSampleOffset`, never a scalar.
+                **The scalar reduction it replaced was +12.2% wrong**
+                (1.3973° vs 1.2454°); a test locks that gap so a future
+                "simplification" back to scalar µm/px fails.
+                Decomposes the plane into dispersion and groove components and
+                raises `:grooveComponent` on a groove-axis walk, because the
+                design has NO groove term — the grating disperses along one
+                diagonal only and field curvature (0.56 µm) cannot explain one
+                either. Fires `:depthWalkExceedsFwhm` on the design config,
+                which is correct not noisy: the walk is 0.967 of the axial FWHM,
+                so the field genuinely is not one focal plane.
+
+- [x] T-BU-3d  Gaussian-uniformity dwell correction. **[DONE 2026-07-26]**
+                44/44. See %CORRECTION 2 at the top of this task family — it
+                found that §8's `1/I` (1.65× at the edge) equalises delivered
+                ENERGY, whereas a 2p rig needs `1/I²` (2.72×). Defaults to the
+                2p exponent, exposes §8's factor as `mode='linear'`, and states
+                in `.equalises` which quantity you got. Handles the short-dwell
+                quantisation limit (a 1-frame base cannot express 1.65× at all —
+                the next step is 2.0×) by warning with the shortest base dwell
+                that gets inside tolerance, rather than silently mis-dosing.
+
                 §9 asks the control code to fit its own affine and use §5 only
                 as an expected starting point. The fit is already 6-DOF
                 (`fitgeotrans(...,'affine')`), so it absorbs the 45° rotation
@@ -2212,7 +2312,7 @@ All four are new-file-dominant and share no files. Each depends only on T-BU-0.
               Files: MODIFY `src/+tfp/+calibration/private/fitAffineCalib.m`,
                      NEW `tests/test_affineScaleCheck.m`.
 
-- [ ] T-BU-3b  Focal-plane-tilt defaults and expectation check.
+- [x] T-BU-3b (spec, completed — see the DONE entry above)
                 The routine already exists and has the right shape; it just
                 carries stale constants. Replace the `umPerPixel` default of
                 0.270 with the `opticalModel` values, and compare the measured
@@ -2224,7 +2324,36 @@ All four are new-file-dominant and share no files. Each depends only on T-BU-0.
                      MODIFY `src/+tfp/+calibration/measureFocalPlaneTilt_mock.m`,
                      MODIFY `tests/test_focalPlaneTilt_mock.m` (add cases only).
 
-- [ ] T-BU-3c  Per-target depth offset helper (pure function, no wiring).
+- [x] T-BU-3c  Per-target depth offset helper. **[DONE 2026-07-26]** 29/29.
+                `depth = tfp.util.targetDepthOffset(targetsPx, options)`.
+                Lateral conversion via `dmdToSampleOffset`; a MEASURED
+                `sampleTilt` from T-BU-3b supersedes the design gradient, and an
+                unusable measured struct warns rather than silently degrading
+                (the design tilt is groove-free and would erase a real groove
+                term). Pins the handoff numbers: edge target z = 8.5591 µm
+                (= 17.1/2), full-width spread 17.1182 µm, 0.9671 of the axial
+                FWHM, 0.03079 µm per px on the (1,1) diagonal, tilt 1.2454°.
+                Re-derives the scalar shortcut's error as exactly
+                `sqrt(anisotropy)` = 12.2%, matching T-BU-3b independently.
+
+                **CORRECTION to an over-strong claim made earlier in this
+                session.** It is NOT true that "no single objective Z brings
+                both field edges into focus" at design values. The full-field
+                depth spread is 17.118 µm against a 17.7 µm axial FWHM = **0.967
+                FWHM, just UNDER one**. At the compromise Z (mid-range, the
+                minimax choice — not the mean) each edge target sits 0.48 FWHM
+                off focus, i.e. still marginally inside half-max. So the
+                categorical claim fails at design values by a small margin.
+                The helper keeps its hard-tier boundary at a true FWHM
+                precisely so the categorical statement is only made when true,
+                and fires the softer `:ensembleDepthSpread` tier here instead.
+                The margin is thin and should not be relied on: §6 quotes the
+                17.7 µm FWHM as `[LOW ±40%]`, so a focus 30% tighter than
+                quoted tips exactly this geometry over the line.
+                NB this is consistent with T-BU-3b's `:depthWalkExceedsFwhm`
+                firing on the same config — that warning's threshold is the 0.5
+                fraction, so the two name different things and are both right.
+
                 17.1 µm of depth walk across the patch against a 17.7 µm axial
                 FWHM means two targets at opposite field edges are NOT in the
                 same plane. The handoff says to surface this rather than hide
@@ -2235,7 +2364,7 @@ All four are new-file-dominant and share no files. Each depends only on T-BU-0.
               Files: NEW `src/+tfp/+util/targetDepthOffset.m`,
                      NEW `tests/test_targetDepthOffset.m`.
 
-- [ ] T-BU-3d  Gaussian-uniformity dwell correction.
+- [x] T-BU-3d (spec, completed — see the DONE entry above)
                 §8: no πShaper, so the patch sits inside a Gaussian —
                 `I(r)/I0 = exp(-2r²/555.6²)`, falling to 0.61 at the patch
                 edge, needing a 1.65× dwell correction there. The flat-field
@@ -2251,7 +2380,34 @@ All four are new-file-dominant and share no files. Each depends only on T-BU-0.
               Files: NEW `src/+tfp/+patterns/dwellCorrection.m`,
                      NEW `tests/test_dwellCorrection.m`.
 
-- [ ] T-BU-3e  Spot-radius defaults in the calibration routines.
+- [x] T-BU-3e  Spot-radius defaults in the calibration routines.
+                **[DONE 2026-07-26]** uniformity 11/11, measurePSF 6/6,
+                calibration_mock 7/7 unchanged. Sizes now stated in SAMPLE-PLANE
+                µm and derived via `somaSpotGeometry`:
+                  measureIlluminationUniformity  12.7 µm (soma), 81 px
+                  verifyScanFieldComposition     25 µm, 311 px
+                  calibrationGUI                 20 µm, 193 px (deliberately
+                    identical to alignDMDtoCamera — same measurement, so the
+                    affines must be fitted from the same optical object)
+                  measurePSF                     7 µm, 21 px, ISOTROPIC by design
+                Old option names still work as documented-deprecated pixel
+                overrides drawing the historical circle bit-for-bit.
+                Empirically verified the T-BU-1f seam in each routine: drawn ON
+                count == `geom.nPixels` (81/311/193), and the wrong route still
+                reproduces the 67-vs-81 deficit, pinned by assertions so a
+                regression cannot pass.
+                `measurePSF` is inside the raster floor ON PURPOSE, so it draws
+                the exactly area-matched circle rather than pretending, delivers
+                6.24 × 7.85 µm (elongated 1.2588× along dispersion), reports that
+                in `calib.spotExtentUm`/`.atRasterFloor` and on the figure, and
+                warns `:spotAtRasterFloor` by default (opt-out via
+                `suppressFloorWarning`). Truthful-by-default was the right call —
+                it matches T-BU-3b's precedent of warning on the design config.
+                Also documented in `measureIlluminationUniformity` why swapping
+                `intensityNorm` for `intensitySqrtNorm` would silently drop the
+                2p dwell correction from 2.72× to 1.65×, with a test that feeds
+                the calib struct through `dwellCorrection` and asserts it still
+                equalises 2p dose.
                 Depends on T-BU-1e. `spotRadius = 15` in
                 `measureIlluminationUniformity` (whose comment says
                 "≈ cell-sized" — it is ~34 × 42 µm), `spotRadiusPx = 5` in
@@ -2337,13 +2493,68 @@ All four are new-file-dominant and share no files. Each depends only on T-BU-0.
                 `TF optics simulator` repo and regenerate
                 `docs/dmd_control_handoff.md`. Cannot be done from this repo.
 
+- [MANUAL] T-BU-M7  Fix §8's dwell correction upstream in the same repo: on a
+                2-photon rig the flat-field correction is `1/I²` (2.72× at the
+                patch edge), not `1/I` (1.65×). See %CORRECTION 2 at the top of
+                this task family. Also cannot be done from this repo.
+
+- [MANUAL] T-BU-M8  Measure the effective excitation exponent on the rig rather
+                than assuming 2. Sweep power at a fixed target and fit the
+                response; opsin saturation and temporal focusing can both bend
+                it away from a clean square. Feed the result into
+                `dwellCorrection`'s `options.exponent`. Until then the
+                theoretical 2 is the right default, but the flat-field is only
+                as good as that exponent.
+
 ---
 
 **STATUS 2026-07-26:** Round 0 and Round 1 complete (T-BU-0, 1a–1e, plus the
 unplanned reconciliation T-BU-1f). Full suite **513/513 green**, up from a
 332 baseline.
 
-**Round 2 — LANDED BUT NOT SELF-REVIEWED.** All four agents (2a/2b/2c/2e) were
+**Round 2 — REVIEWED AND VERIFIED 2026-07-26 (orchestrator).** The review pass
+below was run after the terminations; Round 2 can now be treated as complete.
+
+*Safety chain verified end-to-end* by loading real patterns through
+`MockDMD.loadPatternSequence` under `configs/real.yaml` — not by reading the
+code. All five cases behave correctly:
+
+| pattern | result |
+|---|---|
+| all-ON full chip | BLOCKED `assertPulseEnergySafe:overPupilLimit` |
+| all-ON restricted to the patch disc | BLOCKED `assertPulseEnergySafe:overPupilLimit` |
+| 10 soma spots inside the patch (0.078% fill) | ALLOWED |
+| one soma spot outside the patch | BLOCKED `assertPatternInPatch:outsideHardLimit` |
+| all-ON patch disc, laser declared OFF | ALLOWED |
+
+Row 2 is the one that matters: it is exactly the case T-BU-1d's patch-relative
+fill fix was written for. Chip-wide that pattern scores only 0.237 fill and
+would have slipped past a naive gate; patch-relative it is 1.0 and is blocked.
+Row 5 confirms `setAssumedLaserVoltage(0, ...)` correctly re-enables the
+legitimate all-ON alignment case without weakening anything.
+
+*Voltage question (T-BU-2a) resolved conservatively:* the DMD does not own ao3,
+so it assumes **full-scale 5 V** unless told otherwise. Not knowing the voltage
+does NOT skip the pulse-energy check — it fails the dangerous patterns. Four
+narrowing routes exist, in order: a per-load option, a sticky
+`setAssumedLaserVoltage(v, reason)`, `laser.dmd_assumed_voltage_v`, then
+`laser.modulation_voltage_max`.
+
+*T-BU-2c investigated rather than assumed*, and correctly concluded that
+`exp_power_curve_3dshot` is the SLM/CGH arm whose spot size is set by the CGH
+model, NOT by the DMD/grating path — so the anisotropy does not apply there.
+
+*T-BU-2e found a blind spot worth carrying to the calibration run
+(see T-BU-M0/M1):* the camera-pixel factor (1.56) and the periscope-reversal
+factor (1.778) are only ~14% apart, so scale alone cannot distinguish "wrong
+units" from "periscope installed the other way". Worse, **the two errors
+partially cancel** — a camera-valued map on a reversed periscope looks almost
+correct (1.778/1.56 = 1.14). Do not treat a plausible-looking fitted scale as
+proof that both are right.
+
+---
+
+**Round 2 — original termination record.** All four agents (2a/2b/2c/2e) were
 killed mid-task by an API session limit, each partway through its own
 verification step. Their code IS in the tree and the full suite is green, but
 none of them completed its final self-check or reported back, so treat Round 2
@@ -2374,7 +2585,7 @@ so no task waits on it.
   Round 0: 1 agent  (T-BU-0, sequential prereq — everything reads its constants)
   Round 1: 5 agents (T-BU-1a/1b/1c/1d/1e) + 1f reconciliation at the seam
   Round 2: 4 agents (T-BU-2a/2b/2c/2e)
-  Round 3: 5 agents (T-BU-3a/3b/3c/3d/3e)
+  Round 3: COMPLETE (3a/3b/3c/3d/3e)
   Round 4: serialized (T-BU-4a; 4b blocked on TASK-EP; 4c after 0)
 
 **Dependency edges that force the rounds:**

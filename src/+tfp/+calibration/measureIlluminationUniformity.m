@@ -32,7 +32,17 @@ function calib = measureIlluminationUniformity(dmd, camera, options)
 %                         the default span and the nominal active box
 %                         (default floor(0.4*min(nRows,nCols)); pass the rig
 %                         value, e.g. 278 for the DLP650LNIR).
-%       .spotRadius     — spot radius in DMD px (default 15 ≈ cell-sized)
+%       .spotDiameterUm — probe-spot DIAMETER at the SAMPLE plane, in µm
+%                         (default: the soma diameter from
+%                         tfp.patterns.somaSpotGeometry, 12.7 µm). See
+%                         "spot sizing" below.
+%       .spotRadius     — DEPRECATED. Spot radius in DMD pixels. When given it
+%                         overrides .spotDiameterUm and draws the historical
+%                         isotropic pixel circle, so old callers are byte-for-
+%                         byte unchanged. Prefer .spotDiameterUm.
+%       .opticalConfig  — config struct forwarded to tfp.util.opticalModel for
+%                         the µm→DMD-px conversion (a full loaded config or a
+%                         bare dmd sub-struct). Default: design constants.
 %       .intWindowPx    — half-size of the camera integration window (default 12)
 %       .detectFrac     — a spot counts as reachable if its integrated signal
 %                         is >= detectFrac * max signal (default 0.1)
@@ -62,18 +72,51 @@ function calib = measureIlluminationUniformity(dmd, camera, options)
 %     .activeBoxDmd      / .activeBoxScan     — nominal active-region box
 %     .coverageFraction  — fraction of the imaging FOV the DMD can reach (or NaN)
 %     .scanFieldBox, .nGridPoints, .gridSpacingPx, .roiHalfWidthPx
+%     .spotDiameterUm    — sample-plane probe-spot diameter actually used (µm),
+%                          or NaN when a deprecated .spotRadius was supplied
+%     .spotGeometry      — the tfp.patterns.somaSpotGeometry struct used, or []
 %     .umPerPixel, .timestamp, .notes
+%
+%   SPOT SIZING — probe with the spot you will actually stimulate with.
+%     The old default was a bare `spotRadius = 15` DMD pixels with a comment
+%     claiming "≈ cell-sized". It was picked against the retired pre-optics
+%     guess of 0.270 µm/px. At the real bring-up scale (1.1250 µm/px along the
+%     grooves, 1.4162 µm/px along dispersion, chip clocked 45°) a 15 px pixel
+%     circle is a 33.8 × 42.5 µm ellipse at the sample — three to four cells
+%     wide, and ~709 mirrors instead of ~80.
+%
+%     That mattered here more than in most places, because this routine's
+%     output is a per-target dose correction. `.intensityNorm` is the spatially
+%     INTEGRATED 2p signal of one probe spot, so a probe much larger than a
+%     soma averages the Gaussian illumination over an area no real target ever
+%     occupies, smoothing the very gradient the map exists to measure. The
+%     default is therefore the soma diameter from tfp.patterns.somaSpotGeometry
+%     (12.7 µm, ~81 mirrors) — the same size the experiments stimulate with —
+%     and the spot is drawn anisotropically so it is ROUND at the sample.
+%     Ask in µm via .spotDiameterUm if a brighter or dimmer probe is wanted;
+%     the pixel geometry then tracks any future optics change automatically.
+%
+%   WHAT `.intensityNorm` MEANS — do not "fix" it with a square root.
+%     The substage image of a temporal-focusing spot is 2p fluorescence (∝ I²),
+%     so `.intensityNorm` is a RESPONSE map (∝ I²) and `.intensitySqrtNorm` is
+%     the relative INTENSITY (∝ I). tfp.patterns.dwellCorrection consumes
+%     `.intensityNorm` directly and treats it as g², which is what makes its
+%     default 2-photon correction come out as base/intensityNorm with no square
+%     root anywhere. Changing which quantity either field carries would
+%     silently drop that correction to the energy-equalising `1/I` form
+%     (1.65× at the patch edge instead of 2.72×). This task (T-BU-3e) changed
+%     only the probe SIZE; the two fields keep their meanings exactly.
 %
 %   Requires: Image Processing Toolbox (via findSpotCentroid).
 %
-%   See also tfp.calibration.alignDMDtoCamera, tfp.calibration.composeCalibration.
+%   See also tfp.calibration.alignDMDtoCamera, tfp.calibration.composeCalibration,
+%            tfp.patterns.somaSpotGeometry, tfp.patterns.dwellCorrection.
 
 if nargin < 3
     options = struct();
 end
 
 nGridPoints  = configField(options, 'nGridPoints', 9);
-spotRadius   = configField(options, 'spotRadius',  15);
 intWindowPx  = configField(options, 'intWindowPx', 12);
 detectFrac   = configField(options, 'detectFrac',  0.1);
 exposureS    = configField(options, 'exposureS',   0.1);
@@ -83,6 +126,15 @@ notes        = configField(options, 'notes', 'illumination uniformity + extent')
 dmdToScan    = configField(options, 'dmdToScan_affine', []);
 scanFieldBox = configField(options, 'scanFieldBox', []);
 scanPixels   = configField(options, 'scanPixels', []);
+
+% Spot sizing: ask in sample µm (see the header). An empty .spotDiameterUm
+% means "whatever somaSpotGeometry calls a soma", so the soma diameter is
+% stated in exactly one place in the repo. A supplied .spotRadius is the
+% deprecated pixel-count form and still wins, so existing callers are
+% byte-identical.
+spotDiameterUm = configField(options, 'spotDiameterUm', []);
+legacyRadiusPx = configField(options, 'spotRadius',     []);
+opticalConfig  = configField(options, 'opticalConfig',  struct());
 
 % --- validate ---
 if ~isnumeric(nGridPoints) || ~isscalar(nGridPoints) || nGridPoints < 3 || mod(nGridPoints,2) == 0
@@ -118,10 +170,35 @@ dmdRows = dmd.nRows/2 + rowOff(:);
 dmdPts  = [dmdCols, dmdRows];              % nPts × 2
 nPts    = size(dmdPts, 1);
 
+% --- probe-spot geometry ---
+% Preferred path: a stated sample-plane diameter -> anisotropic DMD ellipse, so
+% the probe is ROUND at the sample and the same size as a real target.
+% Per T-BU-1f the positional radius handed to singleSpot must be the GROOVE-axis
+% (long) semi-axis, which geom.spotOptions also carries explicitly.
+% geom.radiusPx is the area-matched ISOTROPIC fallback for circle-only call
+% sites and must NOT be mixed in here — doing so paints ~17% fewer mirrors
+% (67 rather than 81 for a soma) with no error anywhere.
+if isempty(legacyRadiusPx)
+    spotGeom       = tfp.patterns.somaSpotGeometry(spotDiameterUm, opticalConfig);
+    spotDiameterUm = spotGeom.diameterUm;    % echo back the resolved default
+    spotRadius     = spotGeom.semiAxisGroovePx;
+    spotOpts       = spotGeom.spotOptions;
+else
+    if ~isnumeric(legacyRadiusPx) || ~isscalar(legacyRadiusPx) ...
+            || ~isfinite(legacyRadiusPx) || legacyRadiusPx <= 0
+        error('tfp:calibration:measureIlluminationUniformity:badSpotRadius', ...
+            'options.spotRadius must be a positive finite scalar.');
+    end
+    spotGeom       = [];
+    spotRadius     = double(legacyRadiusPx);
+    spotOpts       = struct();               % historical isotropic pixel circle
+    spotDiameterUm = NaN;
+end
+
 % --- build and load pattern sequence ---
 patterns = false(dmd.nRows, dmd.nCols, nPts);
 for k = 1:nPts
-    patterns(:,:,k) = tfp.patterns.singleSpot(dmd, dmdPts(k,:), spotRadius);
+    patterns(:,:,k) = tfp.patterns.singleSpot(dmd, dmdPts(k,:), spotRadius, spotOpts);
 end
 seqOpts.exposureUs = round(max(exposureS, 1e-3) * 1e6);
 seqOpts.darkTimeUs = 0;
@@ -178,6 +255,8 @@ calib.nReachable        = stats.nReachable;
 calib.nGridPoints       = nGridPoints;
 calib.gridSpacingPx     = gridSpacing;
 calib.roiHalfWidthPx    = roiHalfWidth;
+calib.spotDiameterUm    = spotDiameterUm;
+calib.spotGeometry      = spotGeom;
 calib.reachableHullDmd  = ext.reachableHullDmd;
 calib.activeBoxDmd      = ext.activeBoxDmd;
 calib.reachableHullScan = ext.reachableHullScan;
@@ -224,7 +303,15 @@ inten = sum(win(:));
 end
 
 function plotUniformityDiagnostic(calib)
-figure('Name', 'Illumination Uniformity + Extent', 'NumberTitle', 'off');
+% The probe-spot size belongs on the figure: a flat-field map measured with a
+% 34 x 42 um blob is not the same measurement as one made with a soma.
+if isfinite(calib.spotDiameterUm)
+    spotStr = sprintf('%.3g um probe spot', calib.spotDiameterUm);
+else
+    spotStr = 'legacy pixel-radius probe spot';
+end
+figure('Name', ['Illumination Uniformity + Extent — ' spotStr], ...
+    'NumberTitle', 'off');
 
 % --- flat-field map over the DMD grid ---
 subplot(1,2,1);
