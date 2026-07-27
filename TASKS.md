@@ -1289,7 +1289,34 @@ sequencer end-to-end on the mock stack; existing test count unaffected.
 
 ---
 
-## TASK-SYNC-ALIGN: Frame-precise stim → ScanImage frame association [IN PROGRESS]
+## TASK-SYNC-ALIGN: Frame-precise stim → ScanImage frame association [12/14 DONE — audited 2026-07-26]
+
+> **CHECKBOX AUDIT 2026-07-26.** The boxes below had drifted badly out of date:
+> the work was done and committed, but never ticked. Every item was re-verified
+> against files on disk **plus** commit evidence (not checkbox state). Result:
+> **12 DONE, 1 PARTIAL (T-OUT-2), 1 NOT-STARTED (T-OUT-3).**
+>
+> Evidence: T-SYNC-1 `afaa98d` · T-SYNC-2 `9f30b64` · T-SYNC-3 `012f2b5` ·
+> T-SYNC-4 `cb30a6a` · T-SYNC-5 `8ffa74d` · T-SYNC-6 `ed35d32` ·
+> T-SYNC-7 `c277697` · T-SYNC-8 `a6888bd` · T-SYNC-9 `6a109ba` ·
+> T-SYNC-11 `7e6fddb` · T-SYNC-12 `98f4b21`/`71cecab`/`668f52b` ·
+> T-SYNC-13 `d0af4f0`.
+>
+> **Relationship to TASK-EP — PARTIAL supersession, not wholesale.** TASK-EP
+> replaces the *continuous-ScanImage* alignment strategy, but it **keeps the
+> continuous DAQ session** and builds directly on much of this task. Do not
+> mass-delete these items:
+>
+> - **Still load-bearing:** T-SYNC-2 / T-SYNC-3 (continuous DAQ session, clocked
+>   AO, frame-clock DI capture — all retained), and T-SYNC-4 (`decodeFrameClock`,
+>   called directly by T-EP-2a's cross-check). T-SYNC-7's scope-PC timing
+>   verification is independent of acquisition mode.
+> - **Genuinely superseded:** T-SYNC-5's `alignTrialsToFrames` (replaced by
+>   `alignTrialsEpisodic`; deprecation warning already in place) and
+>   T-SYNC-8 / T-SYNC-9's experiment refactors (redone episodically by
+>   T-EP-3a / T-EP-3b).
+> - **Retired by design:** T-OUT-2's `trialOnsetPulseS` sub-bullet — the
+>   start-acq TTL replaced the per-trial onset pulse in T-EP-3a.
 
 **Goal:** Every ScanImage acquired frame is unambiguously tagged with the
 stim condition active during that frame (trial id, condition 1/2,
@@ -1341,6 +1368,13 @@ Once both are in, the per-trial result struct records:
       Files: `src/+tfp/+experiments/exp_ensemble_activation.m`,
              `tests/test_ensemble_activation_mock.m`,
              `scripts/run_ensemble_activation.m`
+      **[PARTIAL 2026-07-26]** Commits `6a109ba`, `be4fea2`. The experiment
+      and its mock test are done (`syncDOLine` + `sessionStartPulseS` +
+      `sendDigitalPulse` wired; test sets `options.syncDOLine`). **Remaining:**
+      `scripts/run_ensemble_activation.m` never sets `opts.syncDOLine` /
+      `opts.sessionStartPulseS` — it sets only `opts.frameClockLine` and
+      relies on defaults, unlike its T-OUT-1 sibling runner. The
+      `trialOnsetPulseS` sub-bullet is superseded, not missing (see header).
 
 - [ ] T-OUT-3  propagate to remaining experiments (optional for R01 prelim)
       Files: `src/+tfp/+experiments/{exp_ppsf_lateral,exp_power_curve,exp_pseudo_axial,exp_axial_ppsf,exp_rapid_sequential,exp_ppsf_2d}.m`
@@ -1350,7 +1384,7 @@ Once both are in, the per-trial result struct records:
 Must land before anything in Round 2 starts. Single commit, no
 implementations — only signatures, schema, and docs.
 
-- [ ] T-SYNC-1  `docs/SYNC_FRAME.md` (or extend `docs/SYNC.md`):
+- [x] T-SYNC-1  `docs/SYNC_FRAME.md` (or extend `docs/SYNC.md`):
                   - DAQ master-clock model
                   - Out-pulse pulse spec (line, widths, edges) — already in
                     code; this just documents it.
@@ -1373,30 +1407,30 @@ implementations — only signatures, schema, and docs.
 
 All 6 code against the locked Round 1 spec; no inter-agent dependencies.
 
-- [ ] T-SYNC-2  MockDAQ continuous session + clocked AO + synthetic frame clock
+- [x] T-SYNC-2  MockDAQ continuous session + clocked AO + synthetic frame clock
                 Files: `src/+tfp/+hardware/MockDAQ.m`
 
-- [ ] T-SYNC-3  NI6323_DAQ continuous session + clocked AO + frame-clock DI capture
+- [x] T-SYNC-3  NI6323_DAQ continuous session + clocked AO + frame-clock DI capture
                 Files: `src/+tfp/+hardware/NI6323_DAQ.m`
                 Note: only mock-verifiable on Mac; final verification
                 belongs to T-SYNC-7 on the scope PC.
 
-- [ ] T-SYNC-4  `tfp.io.decodeFrameClock(diVec, sampleRate)` → frame start
+- [x] T-SYNC-4  `tfp.io.decodeFrameClock(diVec, sampleRate)` → frame start
                 samples + inferred frame rate. Unit tests with synthetic
                 pulse trains (regular, jittered, missing pulses, polarity).
                 Files: NEW `src/+tfp/+io/decodeFrameClock.m`,
                        NEW `tests/test_decodeFrameClock.m`
 
-- [ ] T-SYNC-5  `tfp.io.alignTrialsToFrames(trials, frameStartSamples)` →
+- [x] T-SYNC-5  `tfp.io.alignTrialsToFrames(trials, frameStartSamples)` →
                 per-trial frame index lists + per-frame condition table.
                 Files: NEW `src/+tfp/+io/alignTrialsToFrames.m`,
                        NEW `tests/test_alignTrialsToFrames.m`
 
-- [ ] T-SYNC-6  Extend `tfp.io.saveTrial` for the new schema fields
+- [x] T-SYNC-6  Extend `tfp.io.saveTrial` for the new schema fields
                 (preserve backward compat with existing trial files).
                 Files: `src/+tfp/+io/saveTrial.m`, related test
 
-- [ ] T-SYNC-7  Sync verification script for the scope PC: scopes the
+- [x] T-SYNC-7  Sync verification script for the scope PC: scopes the
                 TTL + AO lines, captures and decodes the frame clock,
                 asserts timing precision (jitter, latency, edge alignment).
                 Codes against Round-1 API only; doesn't need Round-2 done.
@@ -1406,7 +1440,7 @@ All 6 code against the locked Round 1 spec; no inter-agent dependencies.
 
 Depends on T-SYNC-2 (mock path) and T-SYNC-6 (trial schema persistence).
 
-- [ ] T-SYNC-8  Refactor `exp_ensemble_fill_factor_power.m`:
+- [x] T-SYNC-8  Refactor `exp_ensemble_fill_factor_power.m`:
                   - Start continuous DAQ session at top, stop at end.
                   - Replace `outputSingleAnalog + pause` with clocked AO
                     (the DO out-pulse already records onset; keep it).
@@ -1415,7 +1449,7 @@ Depends on T-SYNC-2 (mock path) and T-SYNC-6 (trial schema persistence).
                   - Save per-trial `.mat` via `tfp.io.saveTrial`.
                 Files: `src/+tfp/+experiments/exp_ensemble_fill_factor_power.m`
 
-- [ ] T-SYNC-9  Same refactor for `exp_ensemble_activation.m`.
+- [x] T-SYNC-9  Same refactor for `exp_ensemble_activation.m`.
                 Files: `src/+tfp/+experiments/exp_ensemble_activation.m`
 
 - [DEFERRED] T-SYNC-10 Same refactor for the remaining experiments
@@ -1450,19 +1484,19 @@ Depends on T-SYNC-2 (mock path) and T-SYNC-6 (trial schema persistence).
 
 Depends on Round 3.
 
-- [ ] T-SYNC-11 Update mock tests to assert new behavior — frame-clock
+- [x] T-SYNC-11 Update mock tests to assert new behavior — frame-clock
                 decode roundtrip, monotonic trial samples, per-trial
                 onset/offset present, out-pulse + in-capture cross-check
                 within tolerance.
                 Files: `tests/test_ensemble_fill_factor_mock.m`,
                        `tests/test_ensemble_activation_mock.m`
 
-- [ ] T-SYNC-12 Update scope-PC runner scripts to enable continuous
+- [x] T-SYNC-12 Update scope-PC runner scripts to enable continuous
                 session capture + save the full session DI/AI buffers.
                 Files: `scripts/run_ensemble_fill_factor_power.m`,
                        `scripts/run_ensemble_activation.m`
 
-- [ ] T-SYNC-13 End-to-end mock integration test: full session →
+- [x] T-SYNC-13 End-to-end mock integration test: full session →
                 `saveTrial` → reload → reconstruct frame→condition table
                 → verify a synthetic GCaMP trace bins correctly by
                 condition.
@@ -1483,7 +1517,27 @@ their assigned file lists.
 
 ---
 
-## TASK-EP: Switch ScanImage from continuous to episodic acquisition
+## TASK-EP: Switch ScanImage from continuous to episodic acquisition [10/16 DONE — audited 2026-07-26]
+
+> **CHECKBOX AUDIT 2026-07-26.** Same drift as TASK-SYNC-ALIGN: Rounds 0-3 are
+> substantially built and committed, but every box read unchecked — which made
+> this task look unstarted when it is mostly done. Re-verified against files on
+> disk plus commit evidence. Result: **10 DONE, 6 NOT-STARTED.**
+>
+> Evidence: T-EP-0 `53ebaf6`/`f92ad1f` · T-EP-1a `30238ad` · T-EP-1b `589c7b9` ·
+> T-EP-1c `f3cdb86` · T-EP-1d `5ac8773` · T-EP-2a `8d3243f`/`f7c6ca1` ·
+> T-EP-2b `6970fa0` · T-EP-3a `be4fea2` · T-EP-3b `9153128` ·
+> T-EP-3c `2f04661`/`3800c03`.
+>
+> **Genuinely remaining:** T-EP-3d (powerLUT plumbing — `Sequencer.m` still
+> carries `TODO C2 / T-EP-3d` and treats voltage directly), T-EP-4a, T-EP-4b,
+> T-EP-5a, T-EP-5b, T-EP-5c. The tail is tests + docs, plus the one functional
+> gap in 3d.
+>
+> **Sequencing notes:** T-BU-4b is blocked **only** by T-EP-3d, not by all of
+> TASK-EP — T-EP-3c already landed the Sequencer episodic work, so `Sequencer.m`
+> is contended by exactly one remaining item. T-EP-5b and T-BU-4a both rewrite
+> CLAUDE.md sections and must not run in parallel.
 
 **Tracking prefix:** `T-EP-`. **Top-level item:** TODO.md C9.
 **Architecture target:** continuous DAQ session (unchanged) + episodic ScanImage
@@ -1500,7 +1554,7 @@ to one trial instead of corrupting everything after.
 
 No code deps. Must finish before Round 1.
 
-- [ ] T-EP-0   Lock the new architecture spec:
+- [x] T-EP-0   Lock the new architecture spec:
                   - Write `docs/SYNC_EPISODIC.md` covering trigger topology,
                     ScanImage external-trigger config, continuous-DAQ +
                     episodic-SI coupling, Trial schema additions, aligner
@@ -1518,7 +1572,7 @@ No code deps. Must finish before Round 1.
 
 Depends on T-EP-0.
 
-- [ ] T-EP-1a  Trial schema additions:
+- [x] T-EP-1a  Trial schema additions:
                   - Add `SetAccess = private` properties `siTiffPath` (char/""),
                     `alignmentDiscrepancy` (int32/NaN), `alignmentConfidence`
                     (string: "none"|"high"|"low"|"quarantine").
@@ -1531,7 +1585,7 @@ Depends on T-EP-0.
                 Files: MODIFY `src/+tfp/+trial/Trial.m`;
                        NEW `tests/test_trial_schema_episodic.m`.
 
-- [ ] T-EP-1b  TIFF metadata reader:
+- [x] T-EP-1b  TIFF metadata reader:
                   - `tfp.io.readScanImageTiff(tiffPath)` returns struct with
                     `numFrames`, `frameRateHz`, `frameTimestamps_s`,
                     `sourceTiff`.
@@ -1543,7 +1597,7 @@ Depends on T-EP-0.
                        NEW `tests/test_read_scanimage_tiff.m`
                        (+ small fixture under `tests/fixtures/`).
 
-- [ ] T-EP-1c  MockScanImageBridge episodic mode:
+- [x] T-EP-1c  MockScanImageBridge episodic mode:
                   - `armForExternalTrigger(nFrames)` records expected frame
                     count; on `softTrigger` / external-trigger callback,
                     synthesize a fake TIFF placeholder (`.mat` sidecar under
@@ -1554,7 +1608,7 @@ Depends on T-EP-0.
                 Files: MODIFY `src/+tfp/+hardware/MockScanImageBridge.m`;
                        NEW `tests/test_mock_scanimage_episodic.m`.
 
-- [ ] T-EP-1d  Real ScanImageBridge episodic mode:
+- [x] T-EP-1d  Real ScanImageBridge episodic mode:
                   - Implement `armForExternalTrigger(nFrames)`: configure
                     `hSI.hScan2D.framesPerAcq`, external-trigger mode,
                     `hSI.startGrab`. Mark items needing rig verification with
@@ -1573,7 +1627,7 @@ Depends on T-EP-0.
 
 T-EP-2a depends on T-EP-1b. T-EP-2b depends on T-EP-2a and T-EP-1c.
 
-- [ ] T-EP-2a  Episodic aligner:
+- [x] T-EP-2a  Episodic aligner:
                   - `tfp.io.alignTrialsEpisodic(trials, tiffPaths,
                     frameStartSamples, sampleRate)`:
                       perTrial(i).frame_indices_during_stim =
@@ -1595,7 +1649,7 @@ T-EP-2a depends on T-EP-1b. T-EP-2b depends on T-EP-2a and T-EP-1c.
                        MODIFY `src/+tfp/+io/alignTrialsToFrames.m` (banner +
                        warning).
 
-- [ ] T-EP-2b  Aligner integration tests:
+- [x] T-EP-2b  Aligner integration tests:
                   - Clean run: all trials "high" confidence.
                   - Inject 1 missing DI edge → affected trial "low".
                   - Inject 1 spurious DI edge → symmetric.
@@ -1609,7 +1663,7 @@ T-EP-2a depends on T-EP-1b. T-EP-2b depends on T-EP-2a and T-EP-1c.
 T-EP-3a, T-EP-3b, T-EP-3c can run in parallel after Round 2; T-EP-3d
 coordinates with T-EP-3c (both touch `Sequencer.runOne`) — sequence them.
 
-- [ ] T-EP-3a  Refactor `exp_ensemble_activation` for episodic SI:
+- [x] T-EP-3a  Refactor `exp_ensemble_activation` for episodic SI:
                   - Per-trial: arm SI for nFrames → fire start-acq TTL on
                     `port0/line10` via `sendDigitalPulse` → `queueClockedAO`
                     → `waitForCompletion` → record TIFF path on Trial.
@@ -1622,13 +1676,13 @@ coordinates with T-EP-3c (both touch `Sequencer.runOne`) — sequence them.
                 Files: MODIFY `src/+tfp/+experiments/exp_ensemble_activation.m`;
                        MODIFY `tests/test_ensemble_activation_mock.m`.
 
-- [ ] T-EP-3b  Refactor `exp_ensemble_fill_factor_power` for episodic SI:
+- [x] T-EP-3b  Refactor `exp_ensemble_fill_factor_power` for episodic SI:
                   - Mirror of T-EP-3a applied to the fill-factor experiment.
                 Files: MODIFY
                        `src/+tfp/+experiments/exp_ensemble_fill_factor_power.m`;
                        MODIFY `tests/test_ensemble_fill_factor_mock.m`.
 
-- [ ] T-EP-3c  Sequencer convergence (resolves TODO C1, C3, C4, S1):
+- [x] T-EP-3c  Sequencer convergence (resolves TODO C1, C3, C4, S1):
                   - `Sequencer.run` opens one continuous DAQ session via
                     `startContinuousSession` (replaces per-trial start/stop).
                   - `Sequencer.runOne`:
@@ -1737,6 +1791,35 @@ Depends on Rounds 3–4.
   docs/SYNC_FRAME.md   — T-EP-0 (banner) then T-EP-5a (final state)
   CLAUDE.md            — T-EP-5b only
   probe_scanimage_external_trigger.m — T-EP-5c only
+
+---
+
+### Round 6 — Follow-ups found by the 2026-07-26 checkbox audit
+
+These are not bookkeeping. Both are real defects found while verifying the
+boxes above, and neither is visible from a green test suite.
+
+- [ ] T-EP-6a  **Persist the episodic Trial fields in `saveTrial`.**
+                `Trial.m` sets `siTiffPath`, `alignmentDiscrepancy` and
+                `alignmentConfidence` (T-EP-1a), but `tfp.io.saveTrial` writes
+                none of them — verified: zero references to any of the three in
+                `saveTrial.m`. They are therefore **silently lost on reload**,
+                so the confidence tier `alignTrialsEpisodic` computes — including
+                `quarantine` — never reaches analysis. T-SYNC-6 extended
+                `saveTrial` for the *continuous* schema fields only; the episodic
+                fields landed later and were never added.
+              Files: MODIFY `src/+tfp/+io/saveTrial.m`, + test asserting a
+                     round-trip of all three fields.
+
+- [ ] T-EP-6b  **Restore the cross-check assertions dropped by `be4fea2`.**
+                T-EP-3a silently removed the frame-clock decode-roundtrip and
+                out-pulse cross-check block from
+                `tests/test_ensemble_activation_mock.m` (present at
+                `7e6fddb:L189-279`, now absent — 0 `decodeFrameClock` hits).
+                `tests/test_ensemble_fill_factor_mock.m` still has it (2 hits).
+                This is a coverage regression, not a completed migration: a
+                green suite does not reveal it.
+              Files: MODIFY `tests/test_ensemble_activation_mock.m`.
 
 ---
 
@@ -2145,7 +2228,7 @@ All four are new-file-dominant and share no files. Each depends only on T-BU-0.
 
 ### Round 2 — Wiring [3 parallel agents]
 
-- [ ] T-BU-2a  Wire both guards into the DMD load choke point.
+- [x] T-BU-2a  Wire both guards into the DMD load choke point.
                 Depends on T-BU-1c + T-BU-1d. `loadPatternSequence` is the one
                 path every pattern crosses — same argument that put the laser
                 check inside the DAQ rather than in each experiment. Add a
@@ -2159,7 +2242,7 @@ All four are new-file-dominant and share no files. Each depends only on T-BU-0.
                      MODIFY `src/+tfp/+util/makeHardware.m`,
                      MODIFY `tests/test_MockDMD.m` (add cases only).
 
-- [ ] T-BU-2b  Retire the scalar `pixelsPerUm`; fix the field-name collision.
+- [x] T-BU-2b  Retire the scalar `pixelsPerUm`; fix the field-name collision.
                 Depends on T-BU-1a. Two separate defects:
                 (i) `ppsfPattern` converts µm offsets with a single scalar
                 applied to both row/column axes — wrong magnitude, wrong
@@ -2195,7 +2278,7 @@ All four are new-file-dominant and share no files. Each depends only on T-BU-0.
                      MODIFY `src/+tfp/+experiments/exp_rapid_sequential.m`,
                      MODIFY `src/+tfp/+experiments/exp_axial_ppsf.m`.
 
-- [ ] T-BU-2c  Spot-radius defaults in the remaining experiment scripts.
+- [x] T-BU-2c  Spot-radius defaults in the remaining experiment scripts.
                 Depends on T-BU-1e. Same defect as T-BU-2b(iii) in the files
                 T-BU-2b does not own: `radiusPx = 15` in `exp_power_curve` and
                 `exp_power_curve_3dshot`, `spotRadiusPx = 14` in
@@ -2213,7 +2296,7 @@ All four are new-file-dominant and share no files. Each depends only on T-BU-0.
 
 ---
 
-- [ ] T-BU-2e  Units guard on the DMD→sample map (defensive; replaces the
+- [x] T-BU-2e  Units guard on the DMD→sample map (defensive; replaces the
                 deferred schema decision).
                 Depends on T-BU-1a. Small but load-bearing.
                 `calibration.dmdToSample_affine` is misleadingly named: it maps
