@@ -403,7 +403,7 @@ fig = figure('Name', 'Full disks (reference at 100% fill)', ...
 ax = axes(fig, 'Color', 'k', 'Position', [0.04 0.06 0.94 0.88]);
 imagesc(ax, double(full));
 colormap(ax, gray);
-clim(ax, [0 1]);
+set(ax, 'CLim', [0 1]);   % not clim(): that is R2022a+; imaging PC runs R2019b
 axis(ax, 'image');
 axis(ax, 'off');
 hold(ax, 'on');

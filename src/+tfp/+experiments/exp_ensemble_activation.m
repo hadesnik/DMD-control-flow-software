@@ -767,7 +767,7 @@ lh.ax = axes(lh.fig, 'Color', 'k', ...
 % Pattern image (starts all-black)
 lh.img = imagesc(lh.ax, zeros(nRows, nCols));
 colormap(lh.ax, gray);
-clim(lh.ax, [0 1]);
+set(lh.ax, 'CLim', [0 1]);   % not clim(): that is R2022a+; imaging PC runs R2019b
 axis(lh.ax, 'image');
 axis(lh.ax, 'off');
 hold(lh.ax, 'on');

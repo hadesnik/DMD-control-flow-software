@@ -9,8 +9,13 @@ classdef test_mock_scanimage_episodic < matlab.unittest.TestCase
 
     methods (TestMethodSetup)
         function makeTmpDir(testCase)
+            % tempname() for the unique suffix, not matlab.lang.internal.uuid:
+            % the latter is undocumented and absent in R2019b, which the
+            % imaging PC runs. tempname generates the name only — no file is
+            % created — so this is a drop-in on every supported release.
+            [~, uniqueStem] = fileparts(tempname());
             testCase.TmpDir = fullfile(tempdir(), ...
-                sprintf('tfp_mock_episodic_%s', char(matlab.lang.internal.uuid())));
+                sprintf('tfp_mock_episodic_%s', uniqueStem));
             if ~exist(testCase.TmpDir, 'dir')
                 mkdir(testCase.TmpDir);
             end

@@ -174,7 +174,7 @@ function generate_plm_multispot_validation()
         imagesc(ax1, phi_disp);
         axis(ax1, 'image', 'off');
         colormap(ax1, hsv(256));
-        clim(ax1, [0, max_phase]);
+        set(ax1, 'CLim', [0, max_phase]);   % not clim(): R2022a+; imaging PC runs R2019b
         title(ax1, sprintf('Phase (%s)', conds(c).name));
 
         ax2 = subplot(2, nConds, c + nConds);
