@@ -29,6 +29,8 @@ streamPort = cfg.streamPort;
 
 % Registering a user function requires ScanImage to be idle. Fail fast (before
 % opening the socket) so the order is always: SIStreamSetup, THEN start Focus.
+% hSI.acqState confirmed on the installed SI2019bR0 (+scanimage/SI.m:42),
+% one of {'focus' 'grab' 'loop' 'idle' 'point'}.
 if isprop(hSI, 'acqState') && ~strcmpi(hSI.acqState, 'idle')
     error('SIStreamSetup:acquiring', ...
         ['ScanImage is acquiring (%s). Registering the frame callback requires idle.\n' ...
@@ -47,11 +49,15 @@ disp(['Connected to ' scopePcIp ':' num2str(streamPort) '.']);
 % ScanImage stores these in hSI.hUserFunctions.userFunctionsCfg.
 %
 % Field order MUST match ScanImage's record layout (EventName, UserFcnName,
-% Arguments, Enable) — confirmed against SI2018b guis/userFunctionControlsV4.m.
+% Arguments, Enable) — confirmed against SI2018b guis/userFunctionControlsV4.m,
+% and re-confirmed against the installed SI2019bR0 (2026-08-05) at
+% guis/userFunctionControlsV4.m:53-59, where both recordFieldInfo and
+% defaultNewRecord are built in exactly that field order.
 % In R2018b, assigning a differently-ordered struct into a non-empty struct
 % array errors with "dissimilar structures".
 % 'frameAcquired' is a valid user-function event (SI.m notifies it).
-% CONFIRMED (SI2018b source, SI.m ~L1178): frameAcquired fires per FRAME
+% CONFIRMED (SI2019bR0 source, +scanimage/SI.m:1080 inside zzzFrameAcquiredFcn
+% at SI.m:1009): frameAcquired fires per FRAME
 % (per z-slice on stripeData.endOfFrame), NOT per volume. On a single-plane
 % scan frame == volume, so the callback gets one fresh integration value per
 % frame — correct, and what the 3044 dry-run validated. Multi-plane stacks are

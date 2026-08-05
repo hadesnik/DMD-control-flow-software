@@ -37,6 +37,7 @@ Bottom line: **do not run on the real rig until the CRITICAL items below are res
   - [x] Round 3 — Experiment refactor: `exp_ensemble_activation`, `exp_ensemble_fill_factor_power`, and `Sequencer` all now run episodic SI on a continuous DAQ session. Cross-check uses acquisition window (not stim-only). 174/174 tests passing on main at `3800c03`.
   - [ ] Round 4 — Integration tests covering frame-drop / glitch resilience (T-EP-4a/4b).
   - [ ] Round 5 — Doc finalisation (SYNC_FRAME.md banner → final), CLAUDE.md update, ScanImage probe script (T-EP-5a/5b/5c), rig-side verification (T-EP-5d — manual).
+        *T-EP-5c partially landed 2026-08-05 from the imaging PC: `scripts/imaging_pc_setup/probe_scanimage_config.m` dumps the ScanImage config and closed the SI-property `%VERIFY` items in `docs/SYNC_EPISODIC.md` §9.2/§12 against the installed SI2019bR0. Arm-latency measurement still needs the DAQ PC firing TTLs — folded into T-EP-5d.*
   *Archived prior design: tag `archive/continuous-alignment-2026-05-23`, see [docs/ARCHIVE_CONTINUOUS_ALIGNMENT.md](docs/ARCHIVE_CONTINUOUS_ALIGNMENT.md). Task decomposition: [tasks.md](tasks.md).*
 
 ---

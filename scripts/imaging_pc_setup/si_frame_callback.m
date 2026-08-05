@@ -22,12 +22,15 @@ function si_frame_callback(src, ~) %#ok<INUSL>
 % accumulator (ScanImageBridge.receiveLiveFrame) anchors on the first frame of
 % each trial and converts to a 1-based column index.
 %
-% NOTE — single-plane only: frameAcquired fires once per FRAME/slice (SI2018b
-% SI.m ~L1178). On a single-plane scan frame == volume, so each callback yields
-% one fresh integration value. On a multi-plane stack the callback fires N times
-% per volume while integration values finalize per volume → duplicate sends and
+% NOTE — single-plane only: frameAcquired fires once per FRAME/slice. On a
+% single-plane scan frame == volume, so each callback yields one fresh
+% integration value. On a multi-plane stack the callback fires N times per
+% volume while integration values finalize per volume → duplicate sends and
 % non-contiguous frame indices. Add dedupe-by-frame + volume indexing on both
 % ends before streaming multi-plane.
+% CONFIRMED against the installed SI2019bR0 (2026-08-05): +scanimage/SI.m:1080
+% notifies 'frameAcquired' from zzzFrameAcquiredFcn (SI.m:1009, whose own
+% comment reads "Executes on Every Stripe as well").
 
 global SIStreamSocket %#ok<GVMIS>
 
@@ -43,7 +46,11 @@ try
     % hidden integrationValueHistory buffer directly (its rows are in
     % cursor order, not time order, so v(1,:)/v(end,:) are arbitrary-age).
     %
-    % CONFIRMED against SI2018b on the rig (2026-05-29):
+    % CONFIRMED against SI2018b on the rig (2026-05-29), and re-confirmed
+    % against the installed SI2019bR0 on the imaging PC (2026-08-05) at
+    % +scanimage/+components/IntegrationRoiManager.m:506, which declares
+    %   [intRois, values, timestamps, framenumbers] = getIntegrationValues(obj)
+    % and returns all four as [] when no integration ROIs are configured.
     %   F  : 1 x nROIs current integration values
     %   ts : 1 x nROIs frame timestamps (s) — identical across ROIs (one frame)
     %   fn : 1 x nROIs frame numbers       — identical across ROIs (one frame)

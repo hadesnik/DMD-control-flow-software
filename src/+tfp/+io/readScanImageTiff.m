@@ -147,6 +147,13 @@ function meta = readViaOpentif(tiffPath, meta)
 %   %VERIFY: exact return-struct shape from scanimage.util.opentif depends
 %   on ScanImage version; this code probes optimistically and ignores
 %   missing fields.
+%
+%   Imaging PC runs SI2019bR0 (confirmed 2026-08-05). On that version
+%   scanFrameRate lives at hSI.hRoiManager.scanFrameRate
+%   (+scanimage/+components/RoiManager.m:25), which is the key this
+%   function already reads — so the modern path is the live one here.
+%   What still needs a real trial TIFF: whether the saved ImageDescription
+%   header actually carries that key, and opentif's return shape.
 
 [~, header, imgInfo] = scanimage.util.opentif(tiffPath); %#ok<ASGLU>
 

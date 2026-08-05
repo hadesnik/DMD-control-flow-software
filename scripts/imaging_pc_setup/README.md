@@ -1,7 +1,19 @@
 # Imaging PC Setup Scripts
 
-These scripts run on the **IMAGING PC** (128.32.177.205), not the scope PC.
+These scripts run on the **IMAGING PC**, not the DAQ/scope PC.
 Copy this entire folder to the imaging PC before running experiments.
+
+Current rig addressing (confirmed 2026-08-05) — the two PCs talk over a
+**private link**, not the campus subnet:
+
+| PC | Hostname | IP | Role |
+|----|----------|----|------|
+| Imaging | `ScanImage-PC` | `192.168.10.104` | ScanImage SI2019bR0, MATLAB R2019b. Runs these scripts. |
+| DAQ / scope | — | `192.168.10.103` | Timing master, DMD, NI PCIe-6323. msocket **server**. |
+
+Earlier revisions of this repo document `128.32.177.205` / `128.32.177.203`.
+Those are stale campus-subnet addresses — do not use them. Live values always
+come from `imaging_pc_config()`, never from this table.
 
 ## What these scripts do
 
@@ -60,10 +72,28 @@ with a clear message if ScanImage is acquiring.)
 |------|---------|
 | `imaging_pc_config.m` | Central settings (msocket path, scope-PC IP, ports); adds msocket to path |
 | `imaging_pc_config_local.m.example` | Template for per-machine overrides (copy to `imaging_pc_config_local.m`) |
+| `probe_scanimage_config.m` | **Read-only** diagnostic — dumps this PC's live ScanImage config |
 | `SIStreamSetup.m` | Run once per session to connect and register the callback |
 | `si_frame_callback.m` | ScanImage `frameAcquired` callback — do not call directly |
 | `si_send_rois.m` | Send ROI centroids to the scope PC after drawing ROIs |
 | `SIStreamTeardown.m` | Run at end of session to disconnect cleanly |
+| `test_msocket_link.m` | Control-channel dry-run; no ScanImage, no hardware |
+
+## Checking this PC's ScanImage config
+
+`probe_scanimage_config` reports the values the DAQ PC needs but cannot see:
+which external-trigger terminals are available, how per-trial TIFF paths are
+derived, the frame rate, and whether ROI integration is live. It is strictly
+read-only — it never writes to `hSI` or touches `logFileCounter`.
+
+```matlab
+probe_scanimage_config     % with ScanImage open; run before first triggered session
+```
+
+Run it after any ScanImage upgrade or rig rewire, and paste groups 2 and 3 into
+the rig log. Property names were confirmed against the installed **SI2019bR0**
+source; anything reported `MISSING` means a property moved and the episodic
+contracts in [`docs/SYNC_EPISODIC.md`](../../docs/SYNC_EPISODIC.md) need review.
 
 ## Prerequisites
 
@@ -80,5 +110,7 @@ Start the experiment on the scope PC first, which opens port 3044 before SIStrea
 **Frames not appearing on scope PC** — verify ROI Integration is enabled in ScanImage
 and that `hSI.hIntegrationRoiManager` is populated. Run SIStreamSetup after defining ROIs.
 
-**%VERIFY items** — several ScanImage property names in `si_frame_callback.m` must
-be confirmed with Masato against the installed ScanImage version before first use.
+**%VERIFY items** — the ScanImage property names in `si_frame_callback.m` and
+`SIStreamSetup.m` were confirmed against the installed **SI2019bR0** source on
+2026-08-05 (citations inline in each file). Re-check with
+`probe_scanimage_config` after any ScanImage upgrade.

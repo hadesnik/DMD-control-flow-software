@@ -520,9 +520,17 @@ Files parse: check yaml is valid, scripts have no syntax errors via
   src/+tfp/+hardware/RealScanImageBridge.m
 
 **Context:**
-Verified msocket protocol between scope PC (128.32.177.203)
-and ScanImage PC (128.32.177.205). This PC is the SERVER —
-it listens on port 3043, ScanImage PC connects to it.
+Verified msocket protocol between the scope/DAQ PC and the ScanImage PC.
+The scope/DAQ PC is the SERVER — it listens on port 3043, the ScanImage
+PC connects to it.
+
+**ADDRESSES UPDATED 2026-08-05.** The `128.32.177.203` / `128.32.177.205`
+pair below was the old campus-subnet addressing and is no longer correct.
+The rig now uses a private link:
+  DAQ / scope PC   192.168.10.103   (msocket server)
+  ScanImage PC     192.168.10.104   (hostname ScanImage-PC)
+Imaging-side scripts read these from `imaging_pc_config()`; never
+hardcode them.
 
 Protocol (from verified SImsocketPrep.m):
   srvsock = mslisten(3043)
@@ -535,7 +543,9 @@ Protocol (from verified SImsocketPrep.m):
   → sendThisSI.times = stim onset times
   → sendThisSI.power = laser power
 
-msocket library: C:\Users\adesniklab\Documents\MATLAB\msocket\
+msocket library (scope/DAQ PC): C:\Users\adesniklab\Documents\MATLAB\msocket\
+msocket library (ScanImage PC): C:\Users\FrankenSI\Documents\MATLAB\msocket\
+  — imaging side resolves this via imaging_pc_config_local.m, not this path.
 
 **Spec:**
 classdef RealScanImageBridge < handle
@@ -1690,14 +1700,29 @@ Depends on Rounds 3–4.
                     episodic SI acquisition and the continuous DAQ session.
                 Files: MODIFY `CLAUDE.md`.
 
-- [ ] T-EP-5c  ScanImage external-trigger probe script:
-                  - `scripts/probe_scanimage_external_trigger.m` (runs on
-                    imaging PC).
-                  - Dumps the `hSI` properties needed to configure
-                    external-trigger mode; measures arm-ready latency
-                    (timer around `armForExternalTrigger` → first-frame
-                    edge); writes a markdown report under `data/probes/`.
-                Files: NEW `scripts/probe_scanimage_external_trigger.m`.
+- [~] T-EP-5c  ScanImage external-trigger probe script: **PARTIAL (2026-08-05)**
+                Landed as `scripts/imaging_pc_setup/probe_scanimage_config.m`
+                (filed with the other imaging-PC scripts rather than at
+                `scripts/` root, and named for its broader scope).
+                  - [x] Dumps the `hSI` properties needed to configure
+                        external-trigger mode — plus TIFF-path derivation,
+                        frame rate, ROI integration, and msocket config.
+                        Read-only; never writes to `hSI`.
+                  - [ ] Arm-ready latency (timer around
+                        `armForExternalTrigger` → first-frame edge).
+                        **Blocked:** needs the DAQ PC firing real start-acq
+                        TTLs, so it cannot be written or tested from the
+                        imaging PC alone. Fold into T-EP-5d.
+                  - [ ] Markdown report under `data/probes/` — currently
+                        prints to console for copy/paste into the rig log.
+                Also confirmed on this run, against the installed SI2019bR0
+                source (see docs/SYNC_EPISODIC.md §9.2, §12): `acqNumWidth_ = 5`
+                (`Photostim.m:2254`), `framesPerAcq` (`Scan2D.m:121`),
+                `trigAcqInTerm`/`Edge`/`Allowed` (`Scan2D.m:44,47,150`),
+                `extTrigEnable` (`SI.m:20`), `logFileStem`/`Path`/`Counter`
+                (`Scan2D.m:88,55,89`), `scanFrameRate` (`RoiManager.m:25`),
+                `getIntegrationValues` 4-output (`IntegrationRoiManager.m:506`).
+                Files: NEW `scripts/imaging_pc_setup/probe_scanimage_config.m`.
 
 - [MANUAL] T-EP-5d  Rig verification (operator at scope PC, not for agents):
                   - Run T-EP-5c probe → confirm external-trigger config and
@@ -1732,7 +1757,7 @@ Depends on Rounds 3–4.
   docs/SYNC_EPISODIC.md             — T-EP-0 (draft) then T-EP-5a (finalize)
   docs/SYNC_FRAME.md   — T-EP-0 (banner) then T-EP-5a (final state)
   CLAUDE.md            — T-EP-5b only
-  probe_scanimage_external_trigger.m — T-EP-5c only
+  imaging_pc_setup/probe_scanimage_config.m — T-EP-5c only
 
 ---
 

@@ -329,9 +329,17 @@ ScanImage's TIFF header schema is stable across 5.x/2020+ but the
 exact property names for `frameRateHz` and per-frame timestamps drift.
 The function MUST handle both `hSI.hRoiManager.scanFrameRate` (the
 modern path) and the older `hSI.hScan2D.scanFrameRate`; if neither is
-present in the header, return `NaN` and continue. Mark this with a
-`%VERIFY` comment in the implementation and validate on the rig once
-the ScanImage version is confirmed.
+present in the header, return `NaN` and continue.
+
+**Imaging-PC version confirmed (2026-08-05): SI2019bR0**
+(`C:\Program Files\Vidrio\SI2019bR0_2020-01-08-110731_4d721e971c`).
+`hSI.hRoiManager.scanFrameRate` exists at
+`+scanimage/+components/RoiManager.m:25` (a dependent property derived
+from `scanFramePeriod`), so the modern path is the live one on this rig.
+Keep the `hScan2D` fallback for TIFFs written by other/older installs.
+The remaining `%VERIFY` is which of the two the *header* of an actual
+saved TIFF carries — settled by reading one real trial TIFF, not by
+inspecting the running object.
 
 ### 6.5 Errors
 
@@ -565,12 +573,13 @@ deterministically derivable.
     (`hSI.hScan2D.logFileCounter`) at the moment of the call. Trial *i*
     (1-based) will land at acquisition number `startAcqNum_ + i - 1`.
   - `logFileStem_` (char) — value of `hSI.hScan2D.logFileStem`.
-  - `logFileSaveDir_` (char) — value of `hSI.hScan2D.logFilePath` (or
-    equivalent; `%VERIFY` on rig).
+  - `logFileSaveDir_` (char) — value of `hSI.hScan2D.logFilePath`.
+    Confirmed on SI2019bR0 at `+scanimage/+components/Scan2D.m:55`.
   - `acqNumWidth_` (uint8) — zero-pad width of the acquisition-number
-    field in the filename. Default `5` (locked here pending T-EP-5c
-    rig confirmation that ScanImage uses `_%05d.tif`). MUST NOT be
-    changed mid-session.
+    field in the filename. Default `5`, **confirmed against the
+    installed SI2019bR0** (2026-08-05): `+scanimage/+components/
+    Photostim.m:2254` uses `sprintf('_%05d', logFileCounter)`. MUST NOT
+    be changed mid-session.
   - `trialCounter_ = 0` (uint32).
 - **Inputs.** `opts` struct, all optional:
   - `opts.startAcqNumOverride` (uint32) — for tests; bypass ScanImage
@@ -809,15 +818,25 @@ The imaging PC's ScanImage instance MUST be configured before the
 Sequencer is started:
 
 1. **External-trigger mode.** Acquisition triggered by an external TTL
-   on the ScanImage `trigAcqInTerm` (vDAQ external trigger input).
-   Mark `%VERIFY` — the exact `trigAcqInTerm` channel and edge
-   polarity must be confirmed against the rig wiring; the present
-   `configs/real.yaml` line `port0/line10` is the DAQ-side DO.
+   on the ScanImage `trigAcqInTerm`. **Property names confirmed** on the
+   installed SI2019bR0 (imaging PC, 2026-08-05): `hSI.extTrigEnable`
+   (`+scanimage/SI.m:20`), `hSI.hScan2D.trigAcqInTerm` and
+   `trigAcqEdge` (`+scanimage/+components/Scan2D.m:44, 47`), with the
+   legal terminal list in `trigAcqInTermAllowed` (`Scan2D.m:150`).
+   Still `%VERIFY` on the rig: **which** terminal from
+   `trigAcqInTermAllowed` is physically wired, and the edge polarity.
+   Run `probe_scanimage_config` on the imaging PC to dump the allowed
+   list. The `configs/real.yaml` line `port0/line10` is the DAQ-side DO
+   that drives it.
 2. **Frames per acquisition.** ScanImage's
-   `hSI.hScan2D.framesPerAcq` (or the `hSI.hRoiManager` equivalent
-   for newer versions; `%VERIFY` on the rig) MUST be set to
-   `cfg.framesPerTrial`. The Sequencer DOES NOT remotely change this
-   value — the operator sets it manually before the session.
+   `hSI.hScan2D.framesPerAcq` MUST be set to `cfg.framesPerTrial`. The
+   Sequencer DOES NOT remotely change this value — the operator sets it
+   manually before the session.
+   **Confirmed** on SI2019bR0 at `+scanimage/+components/Scan2D.m:121`
+   ("number of frames per acquisition trigger"). Note a same-named
+   property also exists at the `hSI` level (`+scanimage/SI.m:126`,
+   initialised `nan`); `probe_scanimage_config` reports both live values
+   so the operator sets the one that is actually in effect.
 3. **Save directory per session.** Operator selects a fresh save
    directory in ScanImage at the start of every session (existing lab
    workflow). The bridge MUST NOT mutate ScanImage's
@@ -829,11 +848,19 @@ Sequencer is started:
    overwriting prior trials.
 4. **Log-file naming convention.** ScanImage will write one TIFF per
    external trigger named `<logFileStem>_<NNNNN>.tif`, where `NNNNN`
-   is the zero-padded acquisition counter (default width 5 — `%VERIFY`
-   on rig at T-EP-5c bring-up). The aligner does not parse filenames;
-   it consumes whatever `bridge.getLastTiffPath()` returns. `%VERIFY`
-   that ScanImage's per-acquisition file naming actually produces a
-   fresh file per external trigger (and not one growing TIFF).
+   is the zero-padded acquisition counter. **Width 5 confirmed** on
+   SI2019bR0: `+scanimage/+components/Photostim.m:2254` builds
+   `sprintf('_%05d', hSI.hScan2D.logFileCounter)`, and the same `%05d`
+   convention appears in `IntegrationRoiManager.m:155` and
+   `MotionManager.m:1627`. The three source properties are confirmed at
+   `Scan2D.m:88` (`logFileStem`), `:55` (`logFilePath`), `:89`
+   (`logFileCounter`, default 1); `Scan2D.m:237` also exposes
+   `logFullFilename` = `fullfile(logFilePath, logFileStem)`.
+   The aligner does not parse filenames; it consumes whatever
+   `bridge.getLastTiffPath()` returns. Still `%VERIFY` on the rig: that
+   per-acquisition naming actually produces a fresh file per external
+   trigger (and not one growing TIFF) — that is acquisition behaviour,
+   not a property name, so only a live triggered run settles it.
 5. **Save format.** TIFF only (not BigTIFF unless trials are very
    large; `tfp.io.readScanImageTiff` handles both via `imfinfo`).
 6. **No Save-Last-Frame mode.** Each acquisition MUST write a
