@@ -9,7 +9,7 @@ Current rig addressing (confirmed 2026-08-05) — the two PCs talk over a
 | PC | Hostname | IP | Role |
 |----|----------|----|------|
 | Imaging | `ScanImage-PC` | `192.168.10.104` | ScanImage SI2019bR0, MATLAB R2019b. Runs these scripts. |
-| DAQ / scope | — | `192.168.10.103` | Timing master, DMD, NI PCIe-6323. msocket **server**. |
+| DAQ / scope | — | `192.168.10.110` | Timing master, DMD, NI PCIe-6323. msocket **server**. |
 
 Earlier revisions of this repo document `128.32.177.205` / `128.32.177.203`.
 Those are stale campus-subnet addresses — do not use them. Live values always

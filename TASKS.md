@@ -527,7 +527,7 @@ PC connects to it.
 **ADDRESSES UPDATED 2026-08-05.** The `128.32.177.203` / `128.32.177.205`
 pair below was the old campus-subnet addressing and is no longer correct.
 The rig now uses a private link:
-  DAQ / scope PC   192.168.10.103   (msocket server)
+  DAQ / scope PC   192.168.10.110   (msocket server)
   ScanImage PC     192.168.10.104   (hostname ScanImage-PC)
 Imaging-side scripts read these from `imaging_pc_config()`; never
 hardcode them.
