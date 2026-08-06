@@ -871,6 +871,64 @@ items 1, 2, and 4 are marked `%VERIFY` here so that the rig-bring-up
 checklist captures them. Item 3 (save directory selection) is operator
 workflow, not a software-detectable misconfiguration.
 
+### 12.1 Measured on the imaging PC, 2026-08-05
+
+First run of `probe_scanimage_config` against the live ScanImage
+(SI2019bR0, commit `4d721e971c`, `ResScan` / "ImagingScanner", idle).
+These are the actual values, not design intent:
+
+| Property | Value | Note |
+|---|---|---|
+| `hScan2D.trigAcqInTermAllowed` | `{'', PFI1, PFI2, PFI3, PFI4}` | **The start-acq TTL must land on one of PFI1–PFI4.** |
+| `hScan2D.trigAcqInTerm` | `PFI1` | already selected |
+| `hScan2D.trigAcqEdge` | `rising` | matches the DAQ-side pulse |
+| `hSI.extTrigEnable` | `false` | **must be turned on before episodic runs** |
+| `hScan2D.framesPerAcq` | `1800` | live one; set to `framesPerTrial` per session |
+| `hSI.framesPerAcq` | `NaN` | confirms `hScan2D` is the property in effect |
+| `hChannels.loggingEnable` | `1` | see the counter caveat below |
+| `hChannels.channelSave` | `1` | single channel ⇒ `numChannels = 1` in §6.2 |
+| `hRoiManager.scanFrameRate` | **19.0954 Hz** | see the frame-rate caveat below |
+| `hStackManager.numSlices` | `3` | see the multi-plane caveat below |
+| `hRoiManager.mroiEnable` | `false` | 512×512, zoom 4 |
+
+Path derivation (§9.5) **verified end-to-end**: with stem
+`20260729_beads200nm__1test_G` and counter `2`, the `_%05d` rule predicts
+`..._00002.tif`, matching the live `logFullFilename` root.
+
+**Three caveats this run surfaced, all live-config rather than code:**
+
+1. **The acq counter is not unconditionally auto-advancing.** `SI.m:993`
+   guards it: `if obj.hChannels.loggingEnable` then
+   `logFileCounter = logFileCounter + 1` (again at `SI.m:1501` for the
+   grab/loop abort path). With logging **disabled** the counter freezes and
+   every trial in §9.5 derives the *same* path — silently overwriting, since
+   the derivation is counter arithmetic and never reads the disk. Currently
+   `loggingEnable = 1`, so this is satisfied, but it is a precondition, not
+   a given. There is no `logFileAutoIncrement` property on this version.
+
+2. **Frame rate is 19.0954 Hz, not the nominal 30.** `configs/real.yaml`
+   and `dli4130.yaml` both carry `imaging.frameRate: 30`. `framesPerTrial`
+   and the computed `trialTimeoutS` (§4) derive from that value, so a
+   stale 30 asks ScanImage for ~1.6× the frames a trial actually produces
+   and the cross-check in §8 drifts on every trial. Set it from the live
+   rate at session setup.
+
+3. **`numSlices = 3` — multi-plane.** `si_frame_callback` is single-plane
+   only by construction: `frameAcquired` fires per slice (`SI.m:1080`)
+   while integration values finalize per volume, so a 3-slice stack sends
+   3 duplicate packets per volume with non-contiguous frame indices. This
+   degrades data quality silently rather than erroring. Set `numSlices = 1`
+   before enabling F-streaming, or implement the dedupe-by-frame plus
+   volume indexing the callback header describes.
+
+`probe_scanimage_config` now checks caveats 1 and 3 automatically and
+reports the live rate for 2.
+
+Also confirmed absent on SI2019bR0: `hScan2D.scanFrameRate` (the legacy
+fallback named in §6.4) and `hScan2D.logFileAutoIncrement`. The
+`hRoiManager.scanFrameRate` path §6.4 prefers is the only one available
+here, which is what `tfp.io.readScanImageTiff` already reads.
+
 ---
 
 ## 13. Migration notes

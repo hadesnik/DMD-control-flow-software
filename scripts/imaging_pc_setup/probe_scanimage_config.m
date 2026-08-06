@@ -88,7 +88,22 @@ show2('hScan2D.logFileStem',     hSI, 'hScan2D', 'logFileStem');
 show2('hScan2D.logFileCounter',  hSI, 'hScan2D', 'logFileCounter');
 show2('hScan2D.logFullFilename', hSI, 'hScan2D', 'logFullFilename');
 show2('hScan2D.logFramesPerFile',hSI, 'hScan2D', 'logFramesPerFile');
-show2('hScan2D.logFileAutoIncrement', hSI, 'hScan2D', 'logFileAutoIncrement');
+
+% The acq counter does NOT auto-advance unconditionally. SI.m:993 guards it:
+%     if obj.hChannels.loggingEnable
+%         obj.hScan2D.logFileCounter = obj.hScan2D.logFileCounter + 1;
+% (same guard again at SI.m:1501 for the abort path, grab/loop only).
+% With logging disabled the counter is frozen and every trial would derive
+% the SAME path -- silently overwriting, since 9.5 derives paths by counter
+% arithmetic rather than reading the disk. Check it explicitly.
+% There is no logFileAutoIncrement property on this ScanImage version.
+show2('hChannels.loggingEnable', hSI, 'hChannels', 'loggingEnable');
+if isprop(hSI, 'hChannels') && isprop(hSI.hChannels, 'loggingEnable') ...
+        && ~hSI.hChannels.loggingEnable
+    result('FAIL', 'acq counter will advance?', ...
+        'NO -- loggingEnable is false, so logFileCounter is frozen (SI.m:993)');
+end
+show2('hChannels.channelSave', hSI, 'hChannels', 'channelSave');
 
 % Pad width 5 confirmed: +scanimage/+components/Photostim.m:2254 builds
 % sprintf('_%05d', logFileCounter). Same convention in
@@ -118,9 +133,34 @@ show2('hScan2D.scanFrameRate (legacy fallback)', hSI, 'hScan2D', 'scanFrameRate'
 show2('hRoiManager.scanZoomFactor',  hSI, 'hRoiManager', 'scanZoomFactor');
 show2('hRoiManager.linesPerFrame',   hSI, 'hRoiManager', 'linesPerFrame');
 show2('hRoiManager.pixelsPerLine',   hSI, 'hRoiManager', 'pixelsPerLine');
+show2('hRoiManager.mroiEnable',      hSI, 'hRoiManager', 'mroiEnable');
+
+% framesPerTrial and trialTimeoutS are computed on the DAQ PC from
+% config.imaging.frameRate. If that config value disagrees with the live
+% scanFrameRate here, every trial asks ScanImage for the wrong frame count
+% and the episodic cross-check drifts. Compare explicitly.
+liveRate = safeGet2(hSI, 'hRoiManager', 'scanFrameRate');
+if isnumeric(liveRate) && isscalar(liveRate) && isfinite(liveRate)
+    note(sprintf(['Live frame rate is %.4f Hz. Whoever sets config.imaging.' ...
+        'frameRate on the DAQ PC must match THIS, not a nominal 30.'], liveRate));
+end
 
 % ---------------------------------------------------------------------------
 section('5. ROI integration (live F-streaming path)');
+
+% si_frame_callback is SINGLE-PLANE ONLY (see its header). frameAcquired
+% fires once per frame/slice (SI.m:1080), but integration values finalize
+% per VOLUME -- so on an N-slice stack the callback sends N duplicate packets
+% per volume with non-contiguous frame indices. This is a silent data-quality
+% failure, not a crash, so check it up front.
+nSlices = safeGet2(hSI, 'hStackManager', 'numSlices');
+showValue('hStackManager.numSlices', nSlices);
+if isnumeric(nSlices) && isscalar(nSlices) && nSlices > 1
+    result('FAIL', 'single-plane required', sprintf( ...
+        ['%d slices configured -- si_frame_callback would send %d duplicate ' ...
+         'packets per volume. Set numSlices = 1 before F-streaming.'], ...
+        nSlices, nSlices));
+end
 % Confirmed: getIntegrationValues -> [intRois, values, timestamps, framenumbers]
 % at +scanimage/+components/IntegrationRoiManager.m:506. Returns [] for all
 % four when no integration ROIs are configured.
