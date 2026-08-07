@@ -66,6 +66,120 @@ The NIR DMD (TI DLP650LNIR) is not in hand yet; arrival expected second week of 
 | port0/line8 | out | SLM trigger out | Masato's SLM rig — spare for our DMD setup |
 | port0/line1 | in | ScanImage frame clock | rising edge = frame acquired |
 
+## Bring-up optical arm (authoritative: `docs/dmd_control_handoff.md`)
+
+`docs/dmd_control_handoff.md` is **generated** from the `TF optics simulator` repo
+(`python -m configs.dmd_handoff`). **Regenerate it, never hand-edit it**, and treat
+it — not this file — as the source of truth for optical constants. The summary
+below is a convenience copy and can go stale.
+
+> ### ⚠️ STALE AS OF 2026-08-06 — do not trust the numbers below
+>
+> The handoff revision these numbers came from (build
+> `33010FL01-530R 3.5mm 50/400 250/60`) specifies a **Nikon CFI75 LWD 16×/0.8 W**
+> objective, which is **not what is on the bench**. Since µm/px ∝ EFL_obj, and the
+> objective sits underneath `M_gs`, this invalidates **both scale constants, the
+> patch diameter, and the field size** — and, as the periscope correction showed,
+> a change at this level can re-pick the optimum lens set underneath it too.
+>
+> **Regenerate the handoff from `TF optics simulator` with the correct objective
+> before any of the numbers below are used for calibrated coordinates.**
+>
+> What is *not* affected: the 45° clocking, the coordinate-transform structure,
+> the anamorphic factor (set by the grating, not the objective), the 50% ON-fraction
+> rule, and the "fit, don't paste" principle in §9. Those are structural.
+>
+> This is exactly the failure mode §9 warns about — which is why control code
+> **fits its affine from a measured grid** rather than pasting design constants.
+> Follow that and a stale handoff costs a sanity-check threshold, not a calibration.
+
+**The three things that bite:**
+
+1. **The chip is mounted clocked 45°** about its own normal. The DLP650LNIR's
+   mirrors hinge on the chip diagonal, and clocking lays that diagonal in the table
+   plane. So **every sample↔DMD transform carries a 45° rotation**, and the optical
+   axes run along the chip's *diagonals*, not its rows and columns.
+2. **Sample-plane scale is anisotropic** (1.1559×), along the diagonal, because
+   that is where the grating disperses. **A circle in DMD pixels lands as an
+   ellipse at the sample.** To get a round spot, compress the DMD ellipse by
+   1.1559× along the `(1,1)` diagonal.
+3. **A uniform all-ON frame is a hardware hazard**, not just a dull pattern.
+
+**Coordinate mapping.** `(dc, dr)` = pixel offset from patch centre:
+
+```
+d_disp   = (dc + dr) / sqrt(2)     # dispersion axis
+d_groove = (dc - dr) / sqrt(2)     # groove axis
+x_disp   = d_disp   * 2.2193       # µm at sample
+y_groove = d_groove * 1.9200       # µm at sample
+```
+
+**Sign conventions are NOT specified** — which diagonal is `+disp`, and which way
+each runs at the sample, must be fixed on the bench by two-point calibration. The
+magnitudes above are what a correct fit should recover.
+
+| Quantity | Value |
+|---|---|
+| Usable patch | **Ø3.5 mm = 324 px** diameter, centred |
+| Hard maximum | Ø7.12 mm = 659 px (beyond this the beam clips La and the grating) |
+| Field at sample | 622 × 719 µm ellipse |
+| µm/px, groove / dispersion | **1.9200 / 2.2193** |
+| Anamorphic factor | 1.1559 |
+| Axial FWHM | 7.1 µm `[LOW ±40%]` |
+| Depth gradient | 0.01929 µm/µm along dispersion; 13.9 µm total across the patch |
+| Binary frame rate | 12,500 Hz → 80 µs/frame |
+| Illumination | Ø12 mm 1/e² Gaussian, `I(r)/I0 = exp(-2 r_px² / 555.6²)` |
+| Patch-edge intensity | 0.84 → dwell correction up to **1.19×** |
+| Objective | **Nikon CFI75 LWD 16×/0.8 W** (EFL 12.5 mm), Olympus 180 mm tube |
+
+**Depth is a tilted plane.** There is no PLM in this build, so the 1.105° tilt
+cannot be corrected optically — but it is deterministic and the control code
+should *report* it: `z_um ≈ x_disp * 0.01929`. The walk across the field is
+comparable to one axial FWHM, so targets at opposite edges are genuinely not
+in the same plane. Surface this rather than hiding it. (The handoff notes the
+walk is cancelled by the sample tilt stage.)
+
+### Hard software rule: never illuminate more than 50% of the chip
+
+[USER 2026-07-28, supersedes the softer "sensible interlock" wording of earlier
+revisions.] Count ON mirrors over the **whole chip** and **refuse to load** any
+frame above the cap. One comparison per frame — it costs nothing.
+
+For a contiguous ON region, pupil intensity scales as the **square** of the ON
+fraction (power rises with lit area while the DC spot area falls as its inverse).
+At the 7.1 W operating point: 100% ON = 5.2e13 W/cm², over the ~5e13 air-breakdown
+threshold; 50% = 1.3e13, about **4× margin**. The only thing the cap forbids is the
+full-power alignment frame, which nobody needs.
+
+The cap is conservative for sparse patterns and tight for solid ones: what actually
+concentrates light is the largest **contiguous** ON region, not the total count. 50%
+ON as scattered cell-sized targets is orders of magnitude safer than 50% ON as one
+filled block. For a solid alignment target, stay under 50% **and** drop the power.
+
+**Laser context matters.** These thresholds are CARBIDE numbers — CB3-40W, 200 fs,
+~400 µJ at 100 kHz, requiring ≥104 kHz. Whole-field-at-once needs 7.06 W of 40 W =
+71 µJ/pulse against the ~68 µJ ceiling, a **0.96× margin** — headroom, not comfort.
+A Ti:Sapph oscillator (Chameleon Ultra II, 80 MHz, 1 W ≈ 12.5 nJ/pulse) sits ~5000×
+below the ceiling, so the pupil hazard does not bind during oscillator bring-up.
+**Check which laser is on the arm before reasoning about power limits.**
+
+### What invalidates the calibration
+
+Swap any of these and the µm/px figures move — silently:
+
+| Change | Effect |
+|---|---|
+| f_L1a (50) / f_L1b (400) | ∝ 1/f_L1a, ∝ f_L1b |
+| f_La (250) / f_Lb (60) | ∝ 1/f_La, ∝ f_Lb |
+| **Periscope reversed** | **× 0.562** — highest-leverage single item |
+| Tube lens / objective | ∝ 1/f_tube, ∝ EFL_obj |
+| Grating incidence angle | dispersion axis only, via cos(β)/cos(α) |
+
+The periscope order (150 mm first, magnifying 1.333×) was **measured on the bench
+2026-07-27** after being assumed backwards in earlier revisions — that single
+correction moved M_gs by 1.78× and both scale constants with it. If the arm is
+ever rebuilt, **re-measure it**.
+
 ## Software architecture
 
 ### Top-level structure
@@ -217,8 +331,8 @@ Both new fields (`scanToCam_affine`, `dmdToScan_affine`) are appended to the cal
 - **Data**: trial-level data saved as `.mat` (v7.3) with a consistent schema. Session metadata as YAML alongside.
 - **Time**: all timestamps in seconds, double precision, referenced to DAQ master clock. Convert at the boundary, not in the middle.
 - **Coordinates**: DMD pixels are integer (col, row) with origin top-left. Sample coordinates are µm (x, y, z) with z=0 at the focal plane during calibration. All transforms live in `+calibration/`.
-- **Active DMD region**: Only the **central 6×6 mm** of the DMD chip is optically active (flat-top beam footprint). Pattern generation should constrain spot placement to this region. For the DLP7000 (13.68 µm pitch): `roiHalfWidthPx = 219` (439 px). For the DLP650LNIR (10.8 µm pitch): `roiHalfWidthPx = 278` (556 px). Both stored in config under `dmd.roiHalfWidthPx`.
-- **Pixel scale**: ~40× optical demagnification gives ~0.342 µm/px (DLP7000) and ~0.270 µm/px (DLP650LNIR) at the sample plane. A 10 µm cell body (5 µm radius) → 15 px radius on DLP7000, 19 px on DLP650LNIR. Stored in config as `dmd.umPerPixel`. **Verify both values on the rig before using for calibrated coordinates.**
+- **Active DMD region**: only a centred disc of the chip is illuminated; mirrors outside it must be OFF. The size is **build-specific — do not assume 6 mm**. For the bring-up arm it is **Ø3.5 mm = 324 px** (see [Bring-up optical arm](#bring-up-optical-arm-authoritative-docsdmd_control_handoffmd)). The older "central 6×6 mm / `roiHalfWidthPx = 278`" figure described a πShaper flat-top that this build does not have. Stored in config under `dmd.roiHalfWidthPx`. Prefer a **disc, never a square**: a square's diagonal is what the grating sees, so it overruns the optics at √2 the nominal width.
+- **Pixel scale**: **anisotropic, and not a single number.** The bring-up arm is 1.9200 µm/px along the groove axis and 2.2193 µm/px along the dispersion axis, with the axes running along the chip *diagonals* (45° clocking). The old "~40× demag → 0.270 µm/px isotropic" figure is superseded for this build — it is off by ~7× and hides the anisotropy. See the bring-up section below. Stored in config as `dmd.umPerPixel`. **Always fit the affine from a measured grid; use the design numbers only as a starting point and sanity check.**
 
 ## Conventions established in implementation
 
