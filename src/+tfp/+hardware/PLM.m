@@ -16,7 +16,7 @@ classdef PLM < handle
         pitchX_um       % pixel pitch along x (columns), µm; e.g. 16.2
         pitchY_um       % pixel pitch along y (rows), µm; e.g. 10.8
         nPhaseStates    % quantized phase levels, e.g. 32 (5-bit)
-        lambda_nm       % design wavelength, nm; e.g. 1030
+        lambda_nm       % design wavelength, nm; e.g. 1038 (measured CARBIDE [CERT])
         isInitialized
     end
 

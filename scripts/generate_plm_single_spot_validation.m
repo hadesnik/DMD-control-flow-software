@@ -31,7 +31,7 @@ addpath(fullfile(fileparts(mfilename('fullpath')), '..', 'src'));
 
 % --- PLM device (mock; geometry only) ---
 plm = tfp.hardware.MockPLM();
-plm.initialize(struct());   % defaults: 800x904, pitch 10.8x16.2 µm, N=32, 1030 nm
+plm.initialize(struct());   % defaults: 800x904, pitch 10.8x16.2 µm, N=32, 1038 nm [CERT]
 
 % --- Optical system (Avocado 10x 0.6 NA, water) ---
 sys = struct( ...

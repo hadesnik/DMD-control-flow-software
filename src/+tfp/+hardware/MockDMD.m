@@ -78,6 +78,10 @@ classdef MockDMD < tfp.hardware.DMD
                     'options must be a struct with .exposureUs and .darkTimeUs.');
             end
 
+            % Safety cap (docs/optics_handoff.md §7): enforced in the mock
+            % too, so an over-ON pattern fails in development, not on the rig.
+            obj.assertPatternsSafe(patterns);
+
             obj.patterns_          = patterns;
             obj.options_           = options;
             obj.state_             = 'idle';

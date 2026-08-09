@@ -149,6 +149,10 @@ classdef DLP650LNIR_DMD < tfp.hardware.DMD
                     'options must be a struct with .exposureUs and .darkTimeUs.');
             end
 
+            % Safety cap (docs/optics_handoff.md §7): never load a frame
+            % lighting more than the handoff's ON-fraction cap.
+            obj.assertPatternsSafe(patterns);
+
             nPatterns = size(patterns, 3);
 
             % Free any previously allocated sequence before allocating a new one.
