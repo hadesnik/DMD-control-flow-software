@@ -118,6 +118,33 @@ y_groove = d_groove * 1.9200       # µm at sample
 each runs at the sample, must be fixed on the bench by two-point calibration. The
 magnitudes above are what a correct fit should recover.
 
+#### Mount clocking handedness — MEASURED 2026-08-07
+
+**To draw something upright in the lab frame, pre-rotate it by +45° about the chip
+centre in DMD pixel coordinates.** Equivalently: `scripts/dmdStickman.m` takes
+`tiltDeg = -45`, and applies a rotation of `-tiltDeg`.
+
+Measured by projecting a figure drawn upright in chip coordinates and observing it
+on the bench:
+
+| pre-rotation applied | appearance on the bench |
+|---|---|
+| none | 45° uphill |
+| −45° | **90° — straight up a wall** |
+| **+45°** | **level** ✅ |
+
+The −45° case is what makes it unambiguous: it took the tilt from 45° to 90°, so
+that correction *adds* to the mount rotation rather than cancelling it. One sign,
+settled by three observations rather than assumed.
+
+**This survives regeneration of the handoff.** Objective, tube lens and laser
+wavelength all change *scale*; none of them changes the mount's handedness.
+
+**What this does NOT settle:** which diagonal is `+dispersion` vs `+groove`, or
+either sign at the *sample*. The relay adds a 180° inversion and every fold adds a
+flip, so the sample-plane signs still need the two-point calibration above. This
+fixes only the chip↔bench rotation.
+
 | Quantity | Value |
 |---|---|
 | Usable patch | **Ø3.5 mm = 324 px** diameter, centred |
