@@ -48,13 +48,10 @@ if nargin < 2 || isempty(holdSec), holdSec = [];        end
 % holdSec empty  -> project until a key is pressed (interactive default)
 % holdSec numeric-> project for that many seconds, then halt (batch-safe)
 
-% --- Installed ALP-4.3 SDK (x64) ------------------------------------------
-% The header must match the DLL. vendor/alp/official/alp.h is byte-identical
-% to the installed copy apart from line endings, so either works; prefer the
-% installed one so an SDK upgrade is picked up automatically.
-DLL_PATH = 'C:\Program Files\ALP-4.3\ALP-4.3 API\x64\alp4395.dll';
-HDR_PATH = 'C:\Program Files\ALP-4.3\ALP-4.3 API\alp.h';
-LIB      = 'alp4395';
+% Pinned to 4.3: this script asserts the DLP650LNIR type code and 1280x800
+% geometry, which only make sense on that board. alpPaths also returns a
+% header guaranteed to match the DLL and sets MW_MINGW64_LOC for loadlibrary.
+[DLL_PATH, HDR_PATH, LIB] = alpPaths('4.3');
 
 % --- ALP constants, verbatim from vendor/alp/official/alp.h (Version 28) --
 ALP_OK                  = 0;

@@ -10,10 +10,7 @@ if nargin < 1, nPatterns         = 8;   end
 if nargin < 2, nSpotsPerPattern  = 10;  end
 if nargin < 3, secondsPerPattern = 0.2; end
 
-DLL_PATH    = 'C:\Program Files\ALP-4.1\ALP-4.1 high-speed API\x64\alpD41.dll';
-HEADER_PATH = fullfile(fileparts(mfilename('fullpath')), '..', ...
-                       'vendor', 'alp', 'official-4.1', 'alp.h');
-LIB_ALIAS   = 'alp41';
+[DLL_PATH, HEADER_PATH, LIB_ALIAS] = alpPaths();
 
 % DLP7000 pixel scale: 13.68 µm pitch, ~40× optical demag → 0.342 µm/px.
 % Central 6×6 mm active region: 6 mm / 13.68 µm/px = 439 px half = 219 px.

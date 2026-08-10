@@ -1,4 +1,9 @@
-%ALPSMOKE TEST  Minimal ALP-4.1 smoke test: projects an all-on pattern.
+%ALPSMOKETEST  Minimal ALP smoke test: projects an all-on pattern.
+%
+% Version-agnostic: alpPaths() resolves whichever SDK is installed. For the
+% DLP650LNIR on ALP-4.3 prefer alpSmokeTest43, which checks the DMD type and
+% enforces the 50% ON-fraction cap of docs/dmd_control_handoff.md §7. This
+% script projects a full-field frame with no such check.
 %
 % Confirms the ALP DLL loads, the device allocates, and the DMD responds.
 % Queries actual DMD dimensions from the board at runtime — do not hardcode.
@@ -13,15 +18,10 @@ function alpSmokeTest(mode)
 
 if nargin < 1, mode = 'on'; end
 
-% -----------------------------------------------------------------------
-% CONFIGURE: set DLL_PATH to wherever the ALP SDK installed alp41.dll
-% Typical locations after running the Vialux ALP-4.1 SDK installer:
-%   C:\ALP-4.1\alp41.dll
-%   C:\Program Files\ALP\alp41.dll
-% -----------------------------------------------------------------------
-DLL_PATH = 'C:\Program Files\ALP-4.1\ALP-4.1 high-speed API\x64\alpD41.dll';
-
-LIB_ALIAS = 'alp41';
+% Resolved by alpPaths(), which finds whichever ALP SDK is actually installed
+% and returns a matching DLL/header pair. Pass a version to pin it, e.g.
+% alpPaths('4.1').
+[DLL_PATH, HEADER_PATH, LIB_ALIAS] = alpPaths();
 
 ALP_OK      = int32(0);
 ALP_DEFAULT = int32(0);
@@ -36,10 +36,8 @@ end
 
 if ~libisloaded(LIB_ALIAS)
     fprintf('Loading %s ...\n', DLL_PATH);
-    HEADER_PATH = fullfile(fileparts(mfilename('fullpath')), '..', ...
-                           'vendor', 'alp', 'official-4.1', 'alp.h');
     % loadlibrary with header compiles a thunk once; requires MinGW or MSVC.
-    % Install MinGW free via MATLAB Add-Ons if not present.
+    % alpPaths() sets MW_MINGW64_LOC. On this PC only R2020b has a compiler.
     loadlibrary(DLL_PATH, HEADER_PATH, 'alias', LIB_ALIAS);
     fprintf('  OK\n');
 end

@@ -8,10 +8,7 @@ function alpCheckerboard(squareSize)
 
 if nargin < 1, squareSize = 32; end
 
-DLL_PATH    = 'C:\Program Files\ALP-4.1\ALP-4.1 high-speed API\x64\alpD41.dll';
-HEADER_PATH = fullfile(fileparts(mfilename('fullpath')), '..', ...
-                       'vendor', 'alp', 'official-4.1', 'alp.h');
-LIB_ALIAS   = 'alp41';
+[DLL_PATH, HEADER_PATH, LIB_ALIAS] = alpPaths();
 ALP_OK      = int32(0);
 
 cleanup = onCleanup(@() doCleanup(LIB_ALIAS));

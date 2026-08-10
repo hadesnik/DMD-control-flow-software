@@ -78,9 +78,7 @@ HERE       = fileparts(mfilename('fullpath'));
 STOP_FILE  = fullfile(HERE, 'STOP_PROJECTION');
 MAX_HOLD_S = 4 * 3600;
 
-DLL = 'C:\Program Files\ALP-4.3\ALP-4.3 API\x64\alp4395.dll';
-HDR = 'C:\Program Files\ALP-4.3\ALP-4.3 API\alp.h';
-LIB = 'alp4395';
+[DLL, HDR, LIB] = alpPaths('4.3');
 
 % Constants verbatim from vendor/alp/official/alp.h (Version 28)
 ALP_OK = 0; ALP_DEFAULT = 0;

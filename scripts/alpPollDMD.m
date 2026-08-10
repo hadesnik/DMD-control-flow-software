@@ -1,13 +1,15 @@
 %ALPPOLLDMD  Poll DMD detection status while jiggling the flex cable.
-% Prints DMD type every 0.5s. Type 255 = no DMD, 4 = DLP7000 detected.
+% Prints DMD type when it changes. Type 255 = no DMD; 12 = DLP650LNIR,
+% 4 = DLP7000. Ctrl-C to stop -- the device is freed on the way out.
 
-DLL_PATH    = 'C:\Program Files\ALP-4.1\ALP-4.1 high-speed API\x64\alpD41.dll';
-HEADER_PATH = fullfile(fileparts(mfilename('fullpath')), '..', ...
-                       'vendor', 'alp', 'official-4.1', 'alp.h');
-LIB_ALIAS   = 'alp41';
+[DLL_PATH, HEADER_PATH, LIB_ALIAS] = alpPaths();
 ALP_OK      = int32(0);
 
-cleanup = onCleanup(@() doCleanup(LIB_ALIAS));
+% Device id lives in a handle container so the cleanup closure sees it once
+% allocated. The loop below never exits normally, so the AlpDevFree after it
+% is unreachable -- this is what actually frees the device on Ctrl-C.
+st = containers.Map({'devId'}, {[]});
+cleanup = onCleanup(@() doCleanup(LIB_ALIAS, st));
 
 if ~libisloaded(LIB_ALIAS)
     loadlibrary(DLL_PATH, HEADER_PATH, 'alias', LIB_ALIAS);
@@ -19,6 +21,7 @@ if ret ~= ALP_OK
     error('AlpDevAlloc failed: error %d', ret);
 end
 devId = devIdPtr.Value;
+st('devId') = devId;
 fprintf('Device allocated (id=0x%X). Polling DMD type — jiggle the cable...\n\n', devId);
 
 typePtr = libpointer('int32Ptr', int32(0));
@@ -40,8 +43,13 @@ while true
     pause(0.05);
 end
 
-calllib(LIB_ALIAS, 'AlpDevFree', devId);
-
-function doCleanup(alias)
-    if libisloaded(alias), unloadlibrary(alias); end
+function doCleanup(alias, st)
+    % Runs on Ctrl-C, which is the only way out of the loop above.
+    if ~libisloaded(alias), return; end
+    devId = st('devId');
+    if ~isempty(devId)
+        try calllib(alias, 'AlpDevFree', devId); catch, end   %#ok<CTCH>
+        fprintf('\n[cleanup] device freed.\n');
+    end
+    try unloadlibrary(alias); catch, end   %#ok<CTCH>
 end

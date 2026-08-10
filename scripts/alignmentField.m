@@ -45,9 +45,7 @@ HERE       = fileparts(mfilename('fullpath'));
 STOP_FILE  = fullfile(HERE, 'STOP_PROJECTION');
 MAX_HOLD_S = 4 * 3600;
 
-DLL = 'C:\Program Files\ALP-4.3\ALP-4.3 API\x64\alp4395.dll';
-HDR = 'C:\Program Files\ALP-4.3\ALP-4.3 API\alp.h';
-LIB = 'alp4395';
+[DLL, HDR, LIB] = alpPaths('4.3');
 
 % Constants verbatim from vendor/alp/official/alp.h (Version 28)
 ALP_OK = 0; ALP_DEFAULT = 0;
@@ -65,8 +63,11 @@ if isfile(STOP_FILE), delete(STOP_FILE); end
 mingw = 'C:\ProgramData\MATLAB\SupportPackages\R2020b\3P.instrset\mingw_w64.instrset';
 if isfolder(mingw), setenv('MW_MINGW64_LOC', mingw); end
 
+% containers.Map is a handle class, so the cleanup closure sees later updates.
+% A nested function cannot be used: onCleanup runs after the parent workspace
+% is destroyed, and uplevel variables are gone by then.
 st = containers.Map({'devId','seqId'}, {[], []});
-cleanupObj = onCleanup(@() doCleanup(LIB, st));  %#ok<NASGU>
+cleanupObj = onCleanup(@() doCleanup(LIB, st));
 
 if ~libisloaded(LIB), loadlibrary(DLL, HDR, 'alias', LIB); end
 
@@ -122,7 +123,10 @@ ret = calllib(LIB, 'AlpSeqAlloc', devId, int32(1), int32(1), seqPtr);
 if ret ~= ALP_OK
     error('tfp:scripts:alignmentField:seqAlloc', 'AlpSeqAlloc returned %d', ret);
 end
-seqId = seqPtr.Value; st('seqId') = seqId;
+% Recording seqId in `st` is load-bearing -- doCleanup reads it to free the
+% sequence. Code Analyzer flags it as unused because it cannot see the handle
+% captured by the cleanup closure.
+seqId = seqPtr.Value; st('seqId') = seqId;   %#ok<NASGU>
 
 dataPtr = libpointer('uint8Ptr', patternData);
 ret = calllib(LIB, 'AlpSeqPut', devId, seqId, int32(0), int32(1), dataPtr);
