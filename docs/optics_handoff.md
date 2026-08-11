@@ -1,7 +1,7 @@
 # Optics handoff — DMD photostimulation, merged arm (rev 4, 2026-08-09)
 
 **Generated** by `python -m configs.dmd_handoff` in the `TF optics simulator`
-repo (commit `8a02b5f+dirty`) — **regenerate rather than edit**; hand-edits are
+repo (commit `631970c+dirty`) — **regenerate rather than edit**; hand-edits are
 overwritten. Build: `5.0mm Ra/Rb 300/200 f7 250 f6 80 p1 100`, the trade study's pinned labelled default
 (`configs.merged_arm.recommended()`).
 
@@ -40,7 +40,7 @@ factory test certificate; the deltas are not tweaks to the old design.
 |---|---|---|
 | Arm | standalone bring-up arm — no SLM, walk uncorrectable | **merged into the 3D-SHOT back end, SLM remote focus** |
 | Laser | CARBIDE CB3-40W, 1030 nm, 200 fs, 9.00 nm — all datasheet | **1038 nm, 205 fs, 9.6 nm — all `[CERT]` for this unit** |
-| Back end | periscope 150 → 250 mm (proposed swap), Olympus 180 mm tube | **f7 250 → SLM → f6 80 → peri 100/200 → Nikon 200 tube** |
+| Back end | periscope 150 → 250 mm (proposed swap), Olympus 180 mm tube | **f7 250 → SLM → f6 80 → peri 100/200 → Nikon 200 mm tube** |
 | New lenses | L1a 75 / L1b 400 / La 200 / Lb 60 | **L1a 80 / L1b 400 / Ra 300 / Rb 200** |
 | Field | 926 × 1108 µm | **1067 × 1199 µm** |
 | **µm/px, groove axis** | 2.0000 | **2.3040** |
@@ -178,7 +178,7 @@ record [USER 2026-08-08], with the 2 swaps this build asks for marked):
 | f6 (SLM relay) | **80 mm** | bench carries 150 mm — SWAP (AC508-080-B-ML). Beam 18.4 mm |
 | Periscope | 100 → 200 mm | as on the bench; the 200 sits INSIDE the periscope and is shared with 3D-SHOT — never treated as swappable |
 | PBS | — | joins the imaging path, no power |
-| Tube lens | **Nikon 200 mm** (ITL200-class) | [USER 2026-08-05] Not the Olympus 180 mm on the camera path — this arm passes the Nikon |
+| Tube lens | **Nikon 200 mm (ITL200-class)** | [USER 2026-08-05] Not the Olympus 180 mm on the camera path — this arm passes the Nikon. Alternate candidate: Pacific Optica Ventana TL (same 200 mm, published Ø20 mm pupil / ±5° acceptance, AR 780–1350 nm) [VEN 2026-08-10] |
 | Objective | Nikon CFI Plan Apo Lambda D 10X/0.45 (dry) | EFL 20.0 mm — the large-field configuration; the Nikon 16×/0.8 (design of record on the MOM) is a different solve, not this build rescaled |
 
 **Layout**, DMD to the f7 lens — 2.21 m of new table:
@@ -523,7 +523,7 @@ the *device geometry* group is build-independent fact.
 ```handoff-constants
 handoff_rev: 4
 handoff_rev_date: 2026-08-09
-generator_commit: 8a02b5f+dirty
+generator_commit: 631970c+dirty
 build: merged_arm
 build_label: 5.0mm Ra/Rb 300/200 f7 250 f6 80 p1 100
 
