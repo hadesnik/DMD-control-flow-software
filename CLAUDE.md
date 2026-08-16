@@ -210,7 +210,17 @@ dmdToScan_affine = inv(scanToCam_affine) * dmdToCam_affine
 ```
 Both new fields (`scanToCam_affine`, `dmdToScan_affine`) are appended to the calibration struct; the original `dmdToSample_affine` (DMD→camera) is preserved unchanged.
 
-### Phase 4 — PLM integration (post-grant if needed)
+### Phase 4 — Remote focusing + 3D (bringup arm, 2026-08)
+
+The Meadowlark SLM remote-focusing stack landed 2026-08-15 (mock-first, per the standing architecture):
+
+- **Masks**: `tfp.slm` package (shared engine; `computeDefocusMask` is the one home of the defocus physics — `PLM.computeDefocusPattern` delegates to it byte-identically). Objectives registry: `tfp.optics.objectives` (nikon10x045 default; olympus20x, nikon16x, avocado10x). `config.slm.m_relay` is **required** and `%VERIFY` until the optics repo adds `slm_bfp_relay_mag`.
+- **Z-calibration** (three coded methods, indirect primary): `tfp.calibration.calibrateSlmDefocus` (Basler through-focus vs the MP-285 ruler) + `calibrateEtlPlanes` (ETL plane → µm) + `composeZCalibration` (the ETL-plane↔SLM-defocus tag stamped onto ROIs); direct burn/bleach verify via `markFluorescentSlab` + `locateMarksInStack` + `verifyZCalibration`. Z ruler: `tfp.hardware.ZStage` (mp285 serial / relay via imaging-PC `si_motor_helper` / manual / mock; [docs/mp285-protocol-audit.md](docs/mp285-protocol-audit.md) gates the serial backend). Calibration IO: `tfp.io.saveCalibration`/`loadCalibration`/`updateConfigCalibrationPath`; `loadCalibrationOrIdentity` now actually loads.
+- **3D experiments**: `exp_3d_ensemble` (flag: `config.threeD.enabled`); `TrialSequence.generate3DEnsemble` bins targets by required SLM defocus (dz = z_target − tilt-native z; tilt gradient read from handoff constants at runtime, sign from config) and the Sequencer advances the SLM per depth group (dedupe + LC settle). Imaging is **async free-run**: SI runs continuous `etl.n_planes` volumes; frames are plane-tagged post-hoc (`tfp.io.assignFramePlanes` — gap-aware — + `alignTrialsFreeRun`). ROI link carries Nx4 `[x y planeIdx zUm]` (backward-compatible Nx2). Use `shuffleWithinGroups`, never plain `shuffle`, on 3D sequences.
+- **Safety**: `tfp.util.assertSlmPowerSafe` makes the handoff §7b LC alignment cap (44 mW) live — largest-contiguous-blob discriminator, enforced in `Sequencer.runOne` and calibration paths.
+- **⚠ Handoff regen prerequisite**: the committed handoff (rev 4) predates the ratified **f7 = 300 mm** build (BOM 2026-08-10). Until the optics repo regenerates `docs/optics_handoff.md` (rev ≥5), all design-value sanity bands warn rather than fail — the calibrations fit the truth regardless.
+
+### (old) Phase 4 — PLM integration (post-grant if needed)
 
 ## Optics handoff (cross-repo contract)
 
@@ -255,6 +265,11 @@ Phase 1 implementation pinned the following conventions; treat them as load-bear
   - [vendor/alp/reference/nakul-alp41/](vendor/alp/reference/nakul-alp41/) — wraps the **ALP Basic** API (separate DLL `alp41basic.dll`, `Alpb*` prefix, no sequence/projection model). NOT the high-speed API — useful only as a reference for device alloc/free/inquire mechanics; cannot express sequence-based stimulation
 - Never invent ALP function names. If a function isn't in one of the references above, stop and ask.
 - Flag any uncertain calls for verification once official headers arrive.
+
+### Meadowlark 1K SLM (Blink SDK)
+- The Meadowlark HSP1K (1024×1024, 17 µm, 8-bit LC) does the remote focusing on the bringup arm. It lives on a **separate SLM PC** (PCIe + Blink SDK); the DAQ PC never sends pixels — it sends a small **mask spec** over msocket (port 3046; see [docs/PORTS.md](docs/PORTS.md)) and the SLM PC recomputes identical masks with the shared `tfp.slm` engine (`scripts/slm_pc_setup/slm_server.m`).
+- **Never invent Blink function names** — same discipline as the ALP rule. The SDK header must be vendored into `vendor/meadowlark/official/` and audited in [docs/blink-api-audit.md](docs/blink-api-audit.md) before any `calllib` name lands in `tfp.hardware.BlinkSLM` (stubbed with `sdkNotVendored` errors until then). Sequence advance defaults to `trigger_mode: software`; TTL (DAQ `port0/line8`) becomes a config flip once the audit confirms this unit's external-trigger sequencing.
+- The future TI-PLM swap stays a config change: all modulators sit under the `tfp.hardware.PLM` base (`makeModulator` factory keyed on `config.slm.backend`).
 
 ## Development environment
 - Code is written on macOS (this machine)

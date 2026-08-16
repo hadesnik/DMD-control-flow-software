@@ -1,10 +1,15 @@
-function probe_scanimage_config()
+function probe_scanimage_config(mode)
 %probe_scanimage_config  Report this imaging PC's live ScanImage configuration.
 %
 % Implements TASKS.md T-EP-5c. Run on the IMAGING PC, in the MATLAB session that
 % is running ScanImage, with `hSI` in the base workspace.
 %
-%   >> probe_scanimage_config
+%   >> probe_scanimage_config          % '2d' (default): single-plane session
+%   >> probe_scanimage_config('3d')    % free-running ETL multi-plane session
+%
+% mode scopes the stack checks: '2d' FAILs when numSlices > 1 (the
+% F-streaming callback is single-plane); '3d' EXPECTS numSlices > 1 and
+% FAILs on a single-plane configuration instead.
 %
 % STRICTLY READ-ONLY. It reads properties and prints them. It never assigns to
 % hSI, never starts or stops an acquisition, and never touches logFileCounter.
@@ -24,9 +29,20 @@ function probe_scanimage_config()
 %
 % See also: imaging_pc_config, SIStreamSetup, test_msocket_link.
 
+if nargin < 1 || isempty(mode)
+    probeMode = '2d';
+else
+    probeMode = lower(char(mode));
+end
+if ~any(strcmp(probeMode, {'2d', '3d'}))
+    error('probe_scanimage_config:badMode', ...
+        'mode must be ''2d'' or ''3d'' (got ''%s'').', probeMode);
+end
+
 fprintf('\n');
 fprintf('=========================================================\n');
-fprintf(' probe_scanimage_config   %s\n', datestr(now, 'yyyy-mm-dd HH:MM:SS'));
+fprintf(' probe_scanimage_config   %s   [mode: %s]\n', ...
+    datestr(now, 'yyyy-mm-dd HH:MM:SS'), probeMode);
 fprintf('=========================================================\n');
 
 % --- hSI must exist in the BASE workspace (ScanImage puts it there) ---------
@@ -155,10 +171,27 @@ section('5. ROI integration (live F-streaming path)');
 % failure, not a crash, so check it up front.
 nSlices = safeGet2(hSI, 'hStackManager', 'numSlices');
 showValue('hStackManager.numSlices', nSlices);
-if isnumeric(nSlices) && isscalar(nSlices) && nSlices > 1
+if strcmpi(probeMode, '3d')
+    % 3D session: a multi-plane ETL stack is EXPECTED. F-streaming stays a
+    % caveat (si_frame_callback is single-plane), but the stack itself is
+    % correct — the DAQ PC assigns frame->plane post-hoc
+    % (tfp.io.assignFramePlanes).
+    if isnumeric(nSlices) && isscalar(nSlices) && nSlices > 1
+        result('PASS', '3d multi-plane stack', sprintf( ...
+            ['%d slices configured. Confirm this matches config.etl.n_planes ' ...
+             'on the DAQ PC. Do NOT enable si_frame_callback F-streaming in ' ...
+             'this mode (single-plane only).'], nSlices));
+    else
+        result('FAIL', '3d mode expects numSlices > 1', sprintf( ...
+            ['numSlices = %s but the probe was run in ''3d'' mode. Configure ' ...
+             'the fastZ/ETL stack (hStackManager) before a 3D session.'], ...
+            num2str(nSlices)));
+    end
+elseif isnumeric(nSlices) && isscalar(nSlices) && nSlices > 1
     result('FAIL', 'single-plane required', sprintf( ...
         ['%d slices configured -- si_frame_callback would send %d duplicate ' ...
-         'packets per volume. Set numSlices = 1 before F-streaming.'], ...
+         'packets per volume. Set numSlices = 1 before F-streaming (or run ' ...
+         'probe_scanimage_config(''3d'') for a 3D session).'], ...
         nSlices, nSlices));
 end
 % Confirmed: getIntegrationValues -> [intRois, values, timestamps, framenumbers]

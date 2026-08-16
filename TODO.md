@@ -66,7 +66,7 @@ Bottom line: **do not run on the real rig until the CRITICAL items below are res
 
 - [ ] **S10. Ensemble experiments never call `siBridge.setActivePattern`.** Synthetic imaging via `MockScanImageBridge.getLastAcquisition → CellResponseModel` is only reachable from the Sequencer path. Ensemble mock tests can't detect a pattern↔cell-position mismatch — exactly what the illuminated-region commit was meant to guard against.
 
-- [ ] **S11. Improve `CellResponseModel` for ensembles.** Uses pattern-OR centroid ([CellResponseModel.m:86-90](src/+tfp/+sim/CellResponseModel.m#L86-L90)): a multi-spot ensemble lands its "perceived center" at the geometric mean of all ON-pixels. The 28-px spot radius from the recent commit isn't reflected (`sigma=10`).
+- [x] **S11. Improve `CellResponseModel` for ensembles.** RESOLVED 2026-08-15 (3D work): `computeTrace` now uses the NEAREST ON-blob centroid (bwconncomp per blob, global-centroid fallback without IPT), so multi-target depth-group patterns couple each cell to the blob on top of it. Covered by `tests/test_bridge_multiplane_mock.m` (nearestBlobCentroidFixS11). The `sigma=10` default vs 28-px spot radius note still stands.
 
 - [ ] **S12. Enforce `illuminatedRegion` inside `+patterns/`** (`singleSpot.m`, `multiSpot.m`, `ppsfPattern.m`) — currently only checked at experiment level in the two ensemble scripts. Sequencer-driven experiments can place spots outside the π-Shaper footprint silently.
 

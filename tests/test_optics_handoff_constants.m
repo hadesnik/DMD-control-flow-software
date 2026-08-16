@@ -76,6 +76,53 @@ classdef test_optics_handoff_constants < matlab.unittest.TestCase
             testCase.verifyEqual(grab('maxPatternRate'), c.dmd_binary_rate_hz);
         end
 
+        function slm_driver_geometry_matches_the_handoff(testCase)
+            % The Meadowlark drivers (MockSLM simulator + MeadowlarkSLM
+            % proxy) must default to the handoff's device-geometry facts.
+            c = tfp.util.readHandoffConstants();
+            slm = tfp.hardware.MockSLM();
+            slm.initialize(struct());
+            testCase.verifyEqual(slm.nCols,     c.slm_cols);
+            testCase.verifyEqual(slm.nRows,     c.slm_rows);
+            testCase.verifyEqual(slm.pitchX_um, c.slm_pitch_um);
+            testCase.verifyEqual(slm.pitchY_um, c.slm_pitch_um);
+            testCase.verifyEqual(slm.lambda_nm, c.wavelength_nm);
+
+            proxy = tfp.hardware.MeadowlarkSLM(struct());
+            testCase.verifyEqual(proxy.nCols,     c.slm_cols);
+            testCase.verifyEqual(proxy.nRows,     c.slm_rows);
+            testCase.verifyEqual(proxy.pitchX_um, c.slm_pitch_um);
+            testCase.verifyEqual(proxy.lambda_nm, c.wavelength_nm);
+        end
+
+        function slm_settle_budget_tracks_the_handoff_frame_rate(testCase)
+            % The Meadowlark proxy's default LC settle (3.4 ms, handoff §6)
+            % must stay consistent with the device's max frame rate: settle
+            % can never exceed one frame period, or the timing budget in
+            % docs/optics_handoff.md §6 is being violated somewhere.
+            c = tfp.util.readHandoffConstants();
+            proxy = tfp.hardware.MeadowlarkSLM(struct());
+            testCase.verifyLessThanOrEqual(proxy.settleTimeS(), ...
+                1 / c.slm_max_frame_hz * 5, ...
+                'settle default drifted far beyond the device frame period');
+            testCase.verifyGreaterThan(proxy.settleTimeS(), 0);
+        end
+
+        function slm_relay_mag_key_is_still_pending(testCase)
+            % m_relay (SLM -> objective-BFP pupil relay magnification) has
+            % NO handoff key yet — configs carry it with a %VERIFY marker
+            % and the z-calibration fits the true scale. This test flips
+            % into a real assertion the moment the optics repo adds
+            % slm_bfp_relay_mag at the f7=300 regeneration.
+            c = tfp.util.readHandoffConstants();
+            if ~isfield(c, 'slm_bfp_relay_mag')
+                testCase.assumeFail(['slm_bfp_relay_mag not yet in the ' ...
+                    'handoff constants — requested for the f7=300 regen; ' ...
+                    'config m_relay values remain %VERIFY until then.']);
+            end
+            testCase.verifyGreaterThan(c.slm_bfp_relay_mag, 0);
+        end
+
         function the_safety_caps_are_present_and_sane(testCase)
             % on_fraction_cap is ENFORCED by tfp.hardware.DMD
             % .assertPatternsSafe, which reads it from this block — so its

@@ -1,12 +1,14 @@
-function centroids = receiveROIsFromScanImage(options)
+function [centroids, rois] = receiveROIsFromScanImage(options)
 %receiveROIsFromScanImage Wait for ROI centroids from the ScanImage imaging PC.
 %
-%   centroids = receiveROIsFromScanImage()
-%   centroids = receiveROIsFromScanImage(options)
+%   centroids         = receiveROIsFromScanImage()
+%   [centroids, rois] = receiveROIsFromScanImage(options)
 %
 %   Acts as an msocket server on the scope (DAQ) PC. The imaging PC connects
-%   and sends an Nx2 double of [x y] centroids in scan-field coords (a struct
-%   with a .centroids field is also accepted for backward compatibility).
+%   and sends an Nx2 double of [x y] centroids in scan-field coords, OR an
+%   Nx4 double [x y planeIdx zUm] when si_send_rois runs in 3D mode (ETL
+%   multi-plane; planeIdx is the fastZ plane the ROI was drawn on). A struct
+%   with a .centroids field is also accepted for backward compatibility.
 %   Port 3045 is used (separate from stim metadata on 3043 and F-stream on 3044).
 %
 %   Inputs (all optional via options struct):
@@ -14,11 +16,17 @@ function centroids = receiveROIsFromScanImage(options)
 %     .msocketPath   - path to msocket\ directory on this PC (default '')
 %     .timeoutS      - seconds to wait for connection   (default 30)
 %
-%   Output:
+%   Outputs:
 %     centroids      - Nx2 double, [x y] scan-field coordinates per ROI,
 %                      in whatever units crossRegisterScanImage used when
 %                      the calibration was run (typically normalised scan-field
 %                      units matching ScanImage's coordinate convention).
+%                      Unchanged for existing callers regardless of payload
+%                      width.
+%     rois           - full parse (tfp.io.parseRoiPayload): .centroids,
+%                      .planeIdx (NaN for 2D payloads), .zUm, .is3D.
+%                      3D experiments consume this and stamp .zUm /
+%                      dzCmdForPlane from the composed z-calibration.
 %
 %   On the ScanImage / imaging PC, the operator runs:
 %     msconnect('<daqPcIp>', 3045);
@@ -95,27 +103,19 @@ if isempty(data)
         timeoutS);
 end
 
-% Payload is a bare Nx2 double (si_send_rois sends the matrix directly —
-% structs do not round-trip reliably on this msocket build). Still accept a
-% struct with a .centroids field for backward compatibility.
-if isnumeric(data)
-    centroids = double(data);
-elseif isstruct(data) && isfield(data, 'centroids')
-    centroids = double(data.centroids);
-else
-    error('tfp:io:receiveROIsFromScanImage:badPayload', ...
-        'Expected an Nx2 double (or struct with .centroids); received %s.', class(data));
-end
-if ~isnumeric(centroids) || ndims(centroids) ~= 2 || size(centroids, 2) ~= 2
-    error('tfp:io:receiveROIsFromScanImage:badCentroids', ...
-        '.centroids must be Nx2 numeric; got size [%s].', num2str(size(centroids)));
-end
-if size(centroids, 1) < 1
-    error('tfp:io:receiveROIsFromScanImage:noROIs', ...
-        '.centroids has zero rows — no ROIs received.');
-end
+% Payload is a bare Nx2 or Nx4 double (si_send_rois sends the matrix
+% directly — structs do not round-trip reliably on this msocket build; a
+% struct with .centroids is still accepted for backward compatibility).
+% Parsing lives in tfp.io.parseRoiPayload so it is testable socket-free.
+rois      = tfp.io.parseRoiPayload(data);
+centroids = rois.centroids;
 
-fprintf('[receiveROIsFromScanImage] Received %d ROIs.\n', size(centroids, 1));
+if rois.is3D
+    fprintf('[receiveROIsFromScanImage] Received %d ROIs (3D: plane-tagged).\n', ...
+        size(centroids, 1));
+else
+    fprintf('[receiveROIsFromScanImage] Received %d ROIs.\n', size(centroids, 1));
+end
 end
 
 % -------------------------------------------------------------------------
