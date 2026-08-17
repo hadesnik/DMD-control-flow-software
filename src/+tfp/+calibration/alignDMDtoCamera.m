@@ -27,6 +27,12 @@ function calib = alignDMDtoCamera(dmd, camera, options)
 %       .showFigure   — show diagnostic figure after fit (default true)
 %       .umPerPixel   — imaging pixel size at sample plane in µm (default 1.56)
 %       .notes        — char note appended to calib.notes
+%       .stagePositionUm — 1×3 [x y z] position of the sample-mount stage
+%                      (tfp.hardware.MP285ZStage.getPositionXYZUm) at
+%                      calibration time; default [] (no stage / objective
+%                      mount). Any XY move after this stamp translates the
+%                      affine — composeCalibration warns when the DMD and
+%                      scan fits carry different stamps.
 %
 %   Output calibration struct:
 %     .dmdToSample_affine  — 3×3: [x;y;1] = A * [u;v;1], DMD→camera px
@@ -37,6 +43,7 @@ function calib = alignDMDtoCamera(dmd, camera, options)
 %     .notes               — string
 %     .residualErrorPx     — RMS residual in camera pixels
 %     .nCalibrationPoints  — nGridPoints^2
+%     .stagePositionUm     — echo of the option ([] when not provided)
 %
 %   Requires: Image Processing Toolbox (graythresh, bwconncomp, regionprops).
 
@@ -51,11 +58,19 @@ exposureS   = configField(options, 'exposureS',   0.1);
 showFigure  = logical(configField(options, 'showFigure', true));
 umPerPixel  = configField(options, 'umPerPixel',  1.56);
 notes       = configField(options, 'notes',       'DMD-to-camera calibration');
+stagePosUm  = configField(options, 'stagePositionUm', []);
 
 % --- validate ---
 if ~isnumeric(nGridPoints) || ~isscalar(nGridPoints) || nGridPoints < 3 || mod(nGridPoints,2) == 0
     error('tfp:calibration:alignDMDtoCamera:badOptions', ...
         'options.nGridPoints must be an odd integer >= 3; got %g.', nGridPoints);
+end
+if ~isempty(stagePosUm)
+    if ~isnumeric(stagePosUm) || numel(stagePosUm) ~= 3 || ~all(isfinite(stagePosUm))
+        error('tfp:calibration:alignDMDtoCamera:badStagePosition', ...
+            'options.stagePositionUm must be a 1x3 finite [x y z] in um (or []).');
+    end
+    stagePosUm = double(stagePosUm(:)');
 end
 if ~isa(camera, 'tfp.hardware.SubstageCamera')
     error('tfp:calibration:alignDMDtoCamera:badCamera', ...
@@ -116,6 +131,7 @@ calib.timestamp          = datetime('now');
 calib.notes              = notes;
 calib.residualErrorPx    = calib_fit.residualErrorPx;
 calib.nCalibrationPoints = nPts;
+calib.stagePositionUm    = stagePosUm;   % [] unless a sample-mount stage is in use
 end
 
 % =========================================================================

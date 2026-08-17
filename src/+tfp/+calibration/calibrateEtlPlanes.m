@@ -94,7 +94,7 @@ calib.planeZUm     = planeZUm;
 calib.nPlanes      = nPlanes;
 calib.zPositionsUm = zGrid;
 calib.brightness   = brightness;
-calib.zRuler       = class(zstage);
+calib.zRuler       = zstage.rulerId();
 calib.timestamp    = datetime('now');
 calib.notes        = sprintf('%d planes over %d z steps [%g..%g] um', ...
     nPlanes, nZ, zGrid(1), zGrid(end));

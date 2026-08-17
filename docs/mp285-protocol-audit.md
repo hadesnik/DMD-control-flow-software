@@ -1,8 +1,13 @@
 # Sutter MP-285 serial protocol audit
 
 **Status: NOT VERIFIED — required before first hardware use of
-`tfp.hardware.MP285ZStage` (the direct-serial backend, used when the manual
-serial switch box points the MP-285 at the DAQ PC).**
+`tfp.hardware.MP285ZStage` (the direct-serial backend).**
+
+Two mountings use this backend, both needing the audit below:
+- `mount: 'objective'` (default) — the rig MP-285 moving the MOM objective,
+  reached when the manual serial switch box points it at the DAQ PC.
+- `mount: 'sample'` — the spare MP-285 carrying the substage camera + slide
+  (BRINGUP_GUIDE §5 Option B). Adds items #7 (XY) and #8 (mechanics).
 
 `MP285ZStage.m` implements the framing below from the MP-285 manual's binary
 command set; every item must be checked against the unit's actual manual and
@@ -34,11 +39,42 @@ semantics on SI2019bR0).
 6. **ROE interaction**: commands while the operator touches the ROE knob —
    confirm the unit's documented behaviour (typically the ROE and remote
    commands must not race; brief the operator).
+7. **XY axes** (sample mount only — see below). `moveToXYUm` writes the
+   same 3-axis `'m'` frame with x/y set and z echoed back. Verify: (a) a
+   pure-XY move leaves z unchanged on the ROE display; (b) all three axes
+   share the same µsteps/µm — item #1 is measured on z, and `moveToXYUm`
+   assumes it applies to x/y. If they differ, x/y need their own scale
+   before XY travel can be trusted as a distance.
+8. **Sample-mount mechanics** (Option B only). The spare MP-285 carries the
+   Basler + slide as one rigid unit. Check: (a) total payload against the
+   MP-285's rated load; (b) no sag or vibration during a sweep — a long
+   cantilevered camera bracket is the failure mode, since µm-scale z
+   accuracy is the whole point of this axis; (c) THE load-bearing property:
+   camera-to-film focus must stay invariant across the full z sweep range
+   AND the XY travel used. If the camera can defocus relative to the film,
+   the mount has given up the very advantage it exists for.
 
 ## Sign convention
 
-`ZStage` promises "zUm increases toward deeper focus". Determine on the
-bench which MP-285 z direction that is on this rig's mounting, and if
-inverted, note it here and negate in `MP285ZStage` (single place) — the
-calibrations only use differences, but the SIGN decides
-`threeD.depth_gradient_sign` bookkeeping downstream.
+`ZStage` promises "zUm increases toward deeper focus". Which RAW MP-285 z
+direction that is **depends on the mount**, so it is a config key rather
+than a code edit: `config.zstage.direction_sign` (+1 | -1), applied to the
+z element only at the µm↔µsteps boundary in `MP285ZStage`.
+
+| `mount` | What moves | Raw stage direction that is "deeper" |
+|---|---|---|
+| `'objective'` (default) | the MOM objective, sample fixed | objective travels toward the sample |
+| `'sample'` (Option B) | slide + substage camera, objective fixed | sample travels toward the objective — **opposite** raw sense |
+
+Bench procedure, per mount, once: put the film in focus, command
+`z.moveRelativeUm(+10)`, and observe whether the focal plane moved DEEPER
+into the sample (for a film: the film goes out of focus in the direction
+that matches a deeper focal plane; easiest with a thick slab or a slide
+with debris on both faces). If it moved shallower, set
+`direction_sign: -1` and re-check. Record the result here.
+
+The calibrations only use differences, so a wrong sign still fits — but it
+flips `threeD.depth_gradient_sign` bookkeeping downstream and silently
+mirrors 3D targeting, which is why this is a bench check and not an
+assumption. Note also that `calibrateSlmDefocus`'s slope sanity band
+compares `abs(slope)`, so it will NOT catch an inverted ruler.

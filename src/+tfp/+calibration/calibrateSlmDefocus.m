@@ -149,7 +149,7 @@ calib.fit       = struct('slopeUmPerCmd', p(1), 'interceptUm', p(2), 'r2', r2);
 calib.objective = char(tfp.util.configField( ...
     tfp.util.configField(config, 'objective', struct()), 'name', 'nikon10x045'));
 calib.sweeps    = sweeps;
-calib.zRuler    = class(zstage);
+calib.zRuler    = zstage.rulerId();
 calib.timestamp = datetime('now');
 calib.notes     = sprintf('%d dz points, spot r=%d px @ [%d %d], power %.1f mW', ...
     N, spotRadiusPx, center(1), center(2), powerMw);

@@ -151,6 +151,10 @@ you walk away.
 **Target:** thin fluorescent film on the stage, substage Basler running
 (`scripts/basler_live_preview.m` to focus/expose).
 
+> Running the §5 Option B sample mount (camera + slide on a spare MP-285)?
+> Pass `options.stagePositionUm = z.getPositionXYZUm()` to both fits below
+> and do not move XY until §4c is done — see the XY discipline note in §5.
+
 ### 4a. DMD → camera (Step A)
 
 ```matlab
@@ -194,9 +198,15 @@ tfp.io.updateConfigCalibrationPath('configs/real.yaml', 'session', 'calibration_
 
 ## 5. Z ruler bringup (the MP-285 as the common axis)
 
-Everything axial — SLM defocus AND ETL planes — is measured against one
-objective-z ruler so the composition is a direct substitution. Pick a backend
-(`zstage.backend` in the config):
+Everything axial — SLM defocus AND ETL planes — is measured against ONE z
+ruler so the composition is a direct substitution. Two mountings are
+supported; **Option A (move the objective) is the default** — Option B below
+is the alternative. Either way the ruler only ever supplies *relative*
+objective↔film motion, which is why both work unchanged downstream.
+
+### Option A (DEFAULT) — the rig MP-285 moves the Sutter MOM objective
+
+Pick a backend (`zstage.backend` in the config):
 
 - **`relay` (recommended, no recabling):** on the imaging PC (inside the
   ScanImage MATLAB, where `hSI` lives):
@@ -219,8 +229,74 @@ assert(abs(z.getPositionUm() - z0 - 10) < 0.5); z.moveToUm(z0);
 ```
 - [ ] move/read round-trip good to < 0.5 µm
 - [ ] **Sign convention checked**: +z must move focus DEEPER into the sample
-      (the `ZStage` contract). If inverted on this mount, fix it in the backend
-      (one place) — note it in the audit doc.
+      (the `ZStage` contract). If inverted on this mount, set
+      `zstage.direction_sign: -1` (one config key, `mp285` backend) — the
+      expected sign DIFFERS BY MOUNT; bench procedure + table in
+      `docs/mp285-protocol-audit.md`. Note the result there.
+      ⚠ `calibrateSlmDefocus`'s slope band compares `|slope|`, so it will
+      not catch an inverted ruler for you.
+
+### Option B (SECOND OPTION, not the default) — sample-mount spare MP-285
+
+A spare MP-285 on the DAQ PC's serial port carries the **substage Basler and
+the fluorescent slide as one rigid unit**; the objective never moves.
+
+Why you might want it:
+- **Removes a slope bias.** §6a's metric is "the spot on the film is sharpest
+  as seen by the camera". If the slide moves and the camera does not, camera
+  defocus is convolved into that sharpness curve, pulling each sub-sweep's
+  peak toward the camera's fixed focus by an amount that grows with |dz| —
+  which systematically shrinks the fitted slope, the exact number §6a exists
+  to measure. Rigid slide+camera keeps the film-to-camera distance constant,
+  so the curve is purely excitation focus.
+- **Fully DAQ-PC-local.** No `si_motor_helper`, no switch box, no touching
+  the rig's objective z (and hence no disturbing ScanImage motor coordinates)
+  during calibration.
+- **XY for free** — fresh film area as the film bleaches, and tiling multiple
+  §7 burn-mark grids on one slab.
+
+```yaml
+zstage:
+  backend: 'mp285'
+  mount: 'sample'            # gates commanded XY moves to this mount
+  direction_sign: -1         # %VERIFY — expected opposite of Option A
+  serial_port: 'COM6'        # %VERIFY the spare unit's port
+  usteps_per_um: 25          # %VERIFY on the spare unit (audit item #1)
+```
+
+Smoke test additions (sample mount only):
+```matlab
+z = tfp.hardware.makeZStage(config);
+p0 = z.getPositionXYZUm();          % [x y z]; x/y RAW stage frame, z contract frame
+z.moveToXYUm(p0(1) + 200, p0(2));   % 200 um of fresh film
+```
+`moveToXYUm` throws `tfp:hardware:MP285ZStage:xyRequiresSampleMount` on the
+objective mount — deliberately, since there it would translate the objective.
+
+**XY discipline (the one real hazard).** Both lateral affines (§4a DMD→camera
+and §4b scan→camera) are anchored to the camera frame. Moving XY translates
+BOTH, and the composition cannot see it. So:
+- Do **not** move XY between §4a, §4b, and the §4c verify.
+- Stamp the position into both fits so the tripwire can fire:
+  ```matlab
+  calibA = tfp.calibration.alignDMDtoCamera(dmd, cam, ...
+             struct('stagePositionUm', z.getPositionXYZUm()));
+  calib  = tfp.calibration.crossRegisterScanImage(cam, calibA, ...
+             struct('stagePositionUm', z.getPositionXYZUm()));
+  ```
+  `composeCalibration` then warns
+  (`tfp:calibration:composeCalibration:stagePositionMismatch`) if the two
+  were measured more than ~1 µm apart.
+- After any deliberate XY move (fresh film, burn-grid tiling), re-run §4a/§4b
+  or at minimum re-run the §4c verify before trusting targeting.
+
+- [ ] mount/`direction_sign` recorded in the audit doc, XY gate confirmed
+- [ ] audit items #7 (XY framing, shared µsteps/µm) and #8 (payload, sag,
+      camera-to-film focus invariance) done before trusting this mount
+
+**What Option B does not change:** the §7 burn/bleach verify still wants the
+thick fluorescent slab — a film cannot hold marks at multiple depths, so the
+volumetric cross-check of the z-calibration is slab-only either way.
 
 ---
 
@@ -478,7 +554,7 @@ should add ≤ ~5 ms per depth change).
 | SLM masks (shared engine) | `src/+tfp/+slm/` (`computeDefocusMask`, `computeDefocusStack`, `buildMaskSpec`) |
 | SLM server / proxy / real driver | `scripts/slm_pc_setup/slm_server.m`, `tfp.hardware.MeadowlarkSLM`, `tfp.hardware.BlinkSLM` |
 | Objectives / optics | `tfp.optics.objectives`, `buildDefocusSys`, `dmdToDispersionUm` |
-| Z ruler | `tfp.hardware.ZStage` + `MP285ZStage` / `RelayZStage` / `ManualZStage`, `scripts/imaging_pc_setup/si_motor_helper.m` |
+| Z ruler | `tfp.hardware.ZStage` + `MP285ZStage` (`mount: objective`\|`sample`, `direction_sign`) / `RelayZStage` / `ManualZStage`, `scripts/imaging_pc_setup/si_motor_helper.m` |
 | Lateral calibration | `tfp.calibration.alignDMDtoCamera`, `crossRegisterScanImage`, `composeCalibration`, `verifyScanFieldComposition` |
 | Z calibration (indirect) | `tfp.calibration.calibrateSlmDefocus`, `calibrateEtlPlanes`, `composeZCalibration`, `throughFocusSweep` |
 | Z calibration (direct) | `tfp.calibration.markFluorescentSlab`, `locateMarksInStack`, `verifyZCalibration` |

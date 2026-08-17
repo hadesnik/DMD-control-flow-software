@@ -47,6 +47,12 @@ function calib = crossRegisterScanImage(camera, dmdCalib, options)
 %                      detection (default 0.3); decrease for dim signal
 %       .showFigure  — display diagnostic figure (default true)
 %       .notes       — char string appended to calib.notes
+%       .stagePositionUm — 1×3 [x y z] position of the sample-mount stage
+%                      (tfp.hardware.MP285ZStage.getPositionXYZUm) at THIS
+%                      registration; default []. Always stamped from this
+%                      option — never inherited from dmdCalib — so
+%                      composeCalibration can detect an XY move between
+%                      the DMD fit and this scan fit.
 %
 %   Output calib:
 %     .scanToCam_affine      3x3: [x;y;1] = A * [fast;slow;1].
@@ -58,6 +64,7 @@ function calib = crossRegisterScanImage(camera, dmdCalib, options)
 %     .fastAxisIsHorizontal  logical; true when fast axis is wider on cam.
 %     .timestamp             datetime('now').
 %     .notes                 updated note string.
+%     .stagePositionUm       echo of THIS call's option ([] when not given).
 %
 %   Requires: Image Processing Toolbox (bwconncomp, regionprops, imclose,
 %   imopen).
@@ -69,8 +76,16 @@ scanPixels = configField(options, 'scanPixels', [512, 256]);
 threshFrac = configField(options, 'threshFrac', 0.3);
 showFigure = logical(configField(options, 'showFigure', true));
 notes      = configField(options, 'notes', 'ScanImage cross-registration');
+stagePosUm = configField(options, 'stagePositionUm', []);
 
 % --- validate ---
+if ~isempty(stagePosUm)
+    if ~isnumeric(stagePosUm) || numel(stagePosUm) ~= 3 || ~all(isfinite(stagePosUm))
+        error('tfp:calibration:crossRegisterScanImage:badStagePosition', ...
+            'options.stagePositionUm must be a 1x3 finite [x y z] in um (or []).');
+    end
+    stagePosUm = double(stagePosUm(:)');
+end
 if ~isnumeric(scanPixels) || numel(scanPixels) ~= 2 || any(scanPixels < 1)
     error('tfp:calibration:crossRegisterScanImage:badOptions', ...
         'options.scanPixels must be [nFast nSlow], both positive integers.');
@@ -135,6 +150,10 @@ calib.scan_slow_axis_sign = NaN;
 calib.rectBboxPx          = bbox;
 calib.fastAxisIsHorizontal = fastIsHoriz;
 calib.timestamp           = datetime('now');
+% Unconditional: when dmdCalib was copied in above it may carry ITS OWN
+% stage stamp — inheriting that would make composeCalibration's stage
+% check compare a value against itself and never fire.
+calib.stagePositionUm     = stagePosUm;
 if isfield(calib, 'notes') && ~isempty(calib.notes)
     calib.notes = [calib.notes '; ' notes];
 else

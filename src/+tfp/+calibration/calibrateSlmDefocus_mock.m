@@ -17,6 +17,10 @@ function [calib, truth] = calibrateSlmDefocus_mock(options)
 %     .dzCmdUm          — command list (default -60:20:60, small for speed)
 %     .mRelay           — config m_relay (default 1.2)
 %     .cameraNoise      — mock camera noise level (default 0.005)
+%     .zstage           — an already-initialized tfp.hardware.ZStage to use
+%                         as the ruler instead of a fresh MockZStage (lets
+%                         tests drive the real calibration through another
+%                         backend, e.g. a mock-transport MP285ZStage)
 
 if nargin < 1 || isempty(options)
     options = struct();
@@ -36,8 +40,11 @@ slm = tfp.hardware.MockSLM();
 % carried by sys, not by the array size.
 slm.initialize(struct('nRows', 128, 'nCols', 128, 'settle_s', 0));
 
-zstage = tfp.hardware.MockZStage();
-zstage.initialize(struct('startZUm', 0));
+zstage = tfp.util.configField(options, 'zstage', []);
+if isempty(zstage)
+    zstage = tfp.hardware.MockZStage();
+    zstage.initialize(struct('startZUm', 0));
+end
 
 camera = tfp.hardware.MockSubstageCamera();
 camera.initialize(struct( ...

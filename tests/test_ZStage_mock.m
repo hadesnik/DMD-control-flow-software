@@ -69,9 +69,28 @@ classdef test_ZStage_mock < matlab.unittest.TestCase
             z.moveToUm(3);
             testCase.verifyEqual(z.getPositionUm(), 3);
 
+            cfg.zstage = struct('backend', 'mp285', ...
+                'mockTransport', true, 'timeoutS', 0.5);
+            z = tfp.hardware.makeZStage(cfg);
+            testCase.verifyClass(z, 'tfp.hardware.MP285ZStage');
+            z.moveToUm(12);
+            testCase.verifyEqual(z.getPositionUm(), 12, 'AbsTol', 0.02);
+
             cfg.zstage = struct('backend', 'hoverboard');
             testCase.verifyError(@() tfp.hardware.makeZStage(cfg), ...
                 'tfp:hardware:makeZStage:badBackend');
+        end
+
+        function rulerIdDefaultsToClassName(testCase)
+            % Backends without mount/sign variants keep the bare class name —
+            % the calibration tests assert these strings literally.
+            z = tfp.hardware.MockZStage();
+            z.initialize(struct());
+            testCase.verifyEqual(z.rulerId(), 'tfp.hardware.MockZStage');
+
+            zm = tfp.hardware.ManualZStage();
+            zm.initialize(struct('promptFcn', @(msg) '0'));
+            testCase.verifyEqual(zm.rulerId(), 'tfp.hardware.ManualZStage');
         end
     end
 end

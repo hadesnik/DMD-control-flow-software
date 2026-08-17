@@ -458,5 +458,95 @@ classdef test_calibration_mock < matlab.unittest.TestCase
                 'AbsTol', 1e-12, ...
                 'dmdToScan_affine must be corrFast * base after fast_sign=-1');
         end
+
+        function composeStagePositionTripwire(testCase)
+            %composeStagePositionTripwire Both affines are anchored to the
+            %   camera, so a sample-mount XY move between the two fits
+            %   translates the composition invisibly. composeCalibration
+            %   warns when the two stage stamps disagree.
+            dmdCalib.dmdToSample_affine = [0.5 0 20; 0 0.5 10; 0 0 1];
+            dmdCalib.notes              = 'stage tripwire dmd';
+            scanReg.scanToCam_affine    = [2.0 0 50; 0 2.0 25; 0 0 1];
+            scanReg.scan_fast_axis_sign = NaN;
+            scanReg.scan_slow_axis_sign = NaN;
+
+            % --- same position: silent, and the scan stamp is carried out ---
+            dmdMatched  = dmdCalib;  dmdMatched.stagePositionUm  = [100 200 0];
+            scanMatched = scanReg;   scanMatched.stagePositionUm = [100 200 0];
+            composed = testCase.verifyWarningFree( ...
+                @() tfp.calibration.composeCalibration(dmdMatched, scanMatched));
+            testCase.verifyEqual(composed.stagePositionUm,     [100 200 0]);
+            testCase.verifyEqual(composed.scanStagePositionUm, [100 200 0]);
+
+            % --- 8 um apart: warns ---
+            scanMoved = scanReg;  scanMoved.stagePositionUm = [108 200 0];
+            testCase.verifyWarning( ...
+                @() tfp.calibration.composeCalibration(dmdMatched, scanMoved), ...
+                'tfp:calibration:composeCalibration:stagePositionMismatch');
+
+            % --- same 8 um, but a 20 um tolerance: silent ---
+            testCase.verifyWarningFree( ...
+                @() tfp.calibration.composeCalibration(dmdMatched, scanMoved, ...
+                    struct('stageTolUm', 20)));
+
+            % --- one side unstamped (old saved calibs): silent ---
+            testCase.verifyWarningFree( ...
+                @() tfp.calibration.composeCalibration(dmdCalib, scanMoved));
+            testCase.verifyWarningFree( ...
+                @() tfp.calibration.composeCalibration(dmdMatched, scanReg));
+
+            % --- empty stamps are treated as absent ---
+            dmdEmpty = dmdCalib;  dmdEmpty.stagePositionUm = [];
+            testCase.verifyWarningFree( ...
+                @() tfp.calibration.composeCalibration(dmdEmpty, scanMoved));
+        end
+
+        function lateralCalibsStampStagePosition(testCase)
+            %lateralCalibsStampStagePosition The stamp is present on both
+            %   lateral calibrations, defaults to [], and — critically —
+            %   crossRegisterScanImage never INHERITS the dmd-side stamp
+            %   (that would compare a value against itself at compose time).
+            dmd = tfp.hardware.MockDMD();
+            dmd.initialize(struct('nRows', 200, 'nCols', 320, ...
+                'loadLatencyMsPerPattern', 0));
+            cam = tfp.hardware.MockSubstageCamera();
+            cam.initialize(struct('nRows', 256, 'nCols', 320, ...
+                'dmd', dmd, 'truthAffine', [0.5 0 20; 0 0.5 10; 0 0 1], ...
+                'noiseLevel', 0.02, 'spotSigmaPx', 4));
+
+            optsBase = struct('nGridPoints', 3, 'gridSpacing', 50, ...
+                'spotRadius', 14, 'exposureS', 0, 'showFigure', false);
+
+            % default: field present, empty
+            calibNoStamp = tfp.calibration.alignDMDtoCamera(dmd, cam, optsBase);
+            testCase.verifyTrue(isfield(calibNoStamp, 'stagePositionUm'));
+            testCase.verifyEmpty(calibNoStamp.stagePositionUm);
+
+            % stamped
+            optsStamped = optsBase;
+            optsStamped.stagePositionUm = [11 22 33];
+            calibStamped = tfp.calibration.alignDMDtoCamera(dmd, cam, optsStamped);
+            testCase.verifyEqual(calibStamped.stagePositionUm, [11 22 33]);
+
+            % bad stamp rejected
+            optsBad = optsBase;
+            optsBad.stagePositionUm = [1 2];
+            testCase.verifyError( ...
+                @() tfp.calibration.alignDMDtoCamera(dmd, cam, optsBad), ...
+                'tfp:calibration:alignDMDtoCamera:badStagePosition');
+
+            % anti-leak: dmdCalib carries a stamp, this call passes none ->
+            % the scan-side output must be [], not the inherited value.
+            nFast = 512; nSlow = 256;
+            scanCam = tfp.hardware.MockSubstageCamera();
+            scanCam.initialize(struct('nRows', 400, 'nCols', 700, ...
+                'noiseLevel', 0.01, ...
+                'scanRect', [52, 32, nFast - 1, nSlow - 1]));
+            scanReg = tfp.calibration.crossRegisterScanImage(scanCam, ...
+                calibStamped, struct('scanPixels', [nFast nSlow], ...
+                                     'showFigure', false));
+            testCase.verifyEmpty(scanReg.stagePositionUm, ...
+                'crossRegisterScanImage must not inherit the DMD-side stamp');
+        end
     end
 end

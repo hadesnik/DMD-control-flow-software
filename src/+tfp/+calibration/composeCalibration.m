@@ -1,7 +1,8 @@
-function composed = composeCalibration(dmdCalib, scanReg)
+function composed = composeCalibration(dmdCalib, scanReg, options)
 %composeCalibration Compose DMD→camera and scan-field→camera into DMD→scan-field.
 %
 %   composed = composeCalibration(dmdCalib, scanReg)
+%   composed = composeCalibration(dmdCalib, scanReg, options)
 %
 %   Combines two separately-measured affines to produce the full
 %   DMD-pixel → ScanImage scan-field coordinate mapping required to aim
@@ -18,6 +19,10 @@ function composed = composeCalibration(dmdCalib, scanReg)
 %                  .scanToCam_affine    (3×3)
 %                  .scan_fast_axis_sign (±1 scalar)
 %                  .scan_slow_axis_sign (±1 scalar)
+%     options  - optional struct:
+%                  .stageTolUm — max per-axis disagreement between the two
+%                                inputs' .stagePositionUm stamps before
+%                                warning (default 1.0 µm)
 %
 %   Output — all dmdCalib fields are preserved and the following are added
 %   (or overwritten if already present):
@@ -25,7 +30,16 @@ function composed = composeCalibration(dmdCalib, scanReg)
 %     .dmdToScan_affine    — 3×3: DMD pixels → scan-field coords (composed)
 %     .scan_fast_axis_sign — ±1 from scanReg; update to ±1 after verify step
 %     .scan_slow_axis_sign — ±1 from scanReg; update to ±1 after verify step
+%     .scanStagePositionUm — scanReg's stage stamp, when it carries one
+%                            (dmdCalib's own stamp rides along in
+%                            .stagePositionUm via the field copy)
 %     .composedAt          — datetime of this composition
+%
+%   BOTH affines are anchored to the substage camera, so if the camera
+%   rides a sample-mount stage (BRINGUP_GUIDE §5 Option B) an XY move
+%   BETWEEN the two fits translates the composition. When both inputs
+%   carry .stagePositionUm stamps and they disagree, this warns
+%   (tfp:calibration:composeCalibration:stagePositionMismatch).
 %
 %   Axis signs default to +1 in crossRegisterScanImage because the sign
 %   cannot be resolved from a single passive camera image.  Run
@@ -34,6 +48,10 @@ function composed = composeCalibration(dmdCalib, scanReg)
 %   See also tfp.calibration.alignDMDtoCamera,
 %            tfp.calibration.crossRegisterScanImage,
 %            tfp.patterns.calibratedAffine.
+
+if nargin < 3 || isempty(options)
+    options = struct();
+end
 
 validateDmdCalib(dmdCalib);
 validateScanReg(scanReg);
@@ -48,6 +66,23 @@ if condNum > 1e6
         condNum);
 end
 
+% Both affines are anchored to the camera frame; a sample-mount stage move
+% between the two fits shifts them by a pure translation the composition
+% cannot see. Only checkable when both sides were stamped.
+stageTolUm = configField(options, 'stageTolUm', 1.0);
+dmdStage   = stageStamp(dmdCalib);
+scanStage  = stageStamp(scanReg);
+if ~isempty(dmdStage) && ~isempty(scanStage)
+    if numel(dmdStage) ~= numel(scanStage) || any(abs(dmdStage - scanStage) > stageTolUm)
+        warning('tfp:calibration:composeCalibration:stagePositionMismatch', ...
+            ['dmdCalib was measured at stage [%s] um but scanReg at [%s] um ' ...
+             '(tolerance %.2f um). An XY move between the two fits shifts ' ...
+             'dmdToScan by a pure translation — re-measure the stale affine ' ...
+             'or re-run the verify step before trusting this composition.'], ...
+            num2str(dmdStage, '%.2f '), num2str(scanStage, '%.2f '), stageTolUm);
+    end
+end
+
 dmdToScan = scanToCam \ dmdToCam;   % inv(scanToCam) * dmdToCam, numerically preferred
 
 % Enforce exact projective bottom row — floating-point errors from the
@@ -59,12 +94,34 @@ composed.scanToCam_affine    = scanToCam;
 composed.dmdToScan_affine    = dmdToScan;
 composed.scan_fast_axis_sign = scanReg.scan_fast_axis_sign;
 composed.scan_slow_axis_sign = scanReg.scan_slow_axis_sign;
+if ~isempty(scanStage)
+    composed.scanStagePositionUm = scanStage;
+end
 composed.composedAt          = datetime('now');
 end
 
 % =========================================================================
 % Local validation helpers
 % =========================================================================
+
+function value = configField(s, name, default)
+if isfield(s, name)
+    value = s.(name);
+else
+    value = default;
+end
+end
+
+function p = stageStamp(s)
+%stageStamp Row-vector stage position, or [] when absent/empty/unusable.
+p = [];
+if isfield(s, 'stagePositionUm')
+    v = s.stagePositionUm;
+    if isnumeric(v) && ~isempty(v) && all(isfinite(v(:)))
+        p = double(v(:)');
+    end
+end
+end
 
 function validateDmdCalib(s)
 if ~isstruct(s)

@@ -135,6 +135,8 @@ etl:
   plane_calibration_file: '' # from composeZCalibration (saveCalibration)
 
 # Axial ground-truth ruler (Sutter MP-285).
+# DEFAULT (Option A): the rig MP-285 moves the Sutter MOM objective; the
+# sample stays put. A second option (sample-mount) is commented out below.
 zstage:
   backend: 'relay'           # 'relay' (via imaging-PC si_motor_helper) |
                              # 'mp285' (serial switch box to this PC) |
@@ -143,6 +145,28 @@ zstage:
   relay_port: 3047
   serial_port: 'COM5'        # mp285 backend (%VERIFY port + usteps_per_um)
   usteps_per_um: 25
+  mount: 'objective'         # 'objective' (DEFAULT: stage moves the MOM
+                             # objective) | 'sample' (Option B below).
+                             # Gates commanded XY moves to the sample mount.
+  direction_sign: 1          # +1|-1: which RAW MP-285 z direction is
+                             # "deeper into sample" (the ZStage contract).
+                             # DEPENDS ON THE MOUNT — the two mounts are
+                             # opposite. Bench-check per the sign section of
+                             # docs/mp285-protocol-audit.md.
+  # --- OPTION B (SECOND OPTION — NOT the default) --------------------------
+  # A spare MP-285 on this PC's serial port carries the substage Basler AND
+  # the fluorescent slide as one rigid unit; the objective stays fixed. The
+  # camera then stays focused on the film through every through-focus sweep
+  # (removes a systematic bias in the fitted defocus slope) and calibration
+  # is fully DAQ-PC-local (no si_motor_helper). Its XY axes give fresh film
+  # area / burn-grid tiling — but XY moves translate BOTH lateral affines.
+  # See docs/BRINGUP_GUIDE.md §5 Option B before enabling.
+  # backend: 'mp285'
+  # mount: 'sample'
+  # direction_sign: -1       # %VERIFY on bench — expected opposite of the
+  #                          # objective mount, but confirm, do not assume.
+  # serial_port: 'COM6'      # %VERIFY the spare unit's port
+  # usteps_per_um: 25        # %VERIFY on the spare unit (audit item #1)
 
 # 3D photostimulation mode (exp_3d_ensemble; optional flag on experiments).
 threeD:
