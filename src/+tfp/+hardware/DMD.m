@@ -61,6 +61,25 @@ classdef DMD < handle
                          'large solid region.'], k, 100 * frac, 100 * cap);
                 end
             end
+
+            % Containment is the OTHER half of the rule (§4: "write nothing
+            % outside the patch"). It WARNS rather than throws, on purpose:
+            % measuring where the Gaussian actually lands requires lighting
+            % mirrors past the design edge, and that measurement is how the
+            % patch centre gets established in the first place. Making it
+            % fatal here would forbid the calibration that validates it.
+            % Experiment code that should never leave the patch calls
+            % tfp.util.assertPatternInPatch directly, where it throws.
+            try
+                tfp.util.assertPatternInPatch(patterns, ...
+                    struct('mode', 'warn', 'label', 'DMD.loadPatternSequence'));
+            catch err
+                % A missing/!unparseable handoff already failed the cap check
+                % above, so anything here is a bug in the checker rather than
+                % an unsafe pattern. Surface it without blocking the load.
+                warning('tfp:hardware:DMD:patchCheckUnavailable', ...
+                    'patch containment not checked: %s', err.message);
+            end
         end
     end
 end
