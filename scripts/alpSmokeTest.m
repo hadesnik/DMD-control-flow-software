@@ -26,7 +26,10 @@ if nargin < 1, mode = 'on'; end
 ALP_OK      = int32(0);
 ALP_DEFAULT = int32(0);
 
-cleanup = onCleanup(@() doCleanup(LIB_ALIAS));
+% Ids land in a handle container so the cleanup closure sees them. See
+% alpCleanup for why the order there matters.
+st = containers.Map({'devId','seqId'}, {[], []});
+cleanup = onCleanup(@() alpCleanup(LIB_ALIAS, st));
 
 % --- Load library ---------------------------------------------------------
 if ~exist(DLL_PATH, 'file')
@@ -47,6 +50,7 @@ devIdPtr = libpointer('uint32Ptr', uint32(0));
 ret = calllib(LIB_ALIAS, 'AlpDevAlloc', int32(0), ALP_DEFAULT, devIdPtr);
 checkRet(ret, ALP_OK, 'AlpDevAlloc');
 devId = devIdPtr.Value;
+st('devId') = devId;
 fprintf('Device allocated  (id=0x%08X)\n', devId);
 
 % --- Query DMD type and dimensions from board ------------------------------
@@ -68,6 +72,7 @@ seqIdPtr = libpointer('uint32Ptr', uint32(0));
 ret = calllib(LIB_ALIAS, 'AlpSeqAlloc', devId, int32(1), int32(1), seqIdPtr);
 checkRet(ret, ALP_OK, 'AlpSeqAlloc');
 seqId = seqIdPtr.Value;
+st('seqId') = seqId;
 fprintf('Sequence allocated (id=0x%08X)\n', seqId);
 
 % --- Build pattern data ---------------------------------------------------
@@ -100,14 +105,9 @@ checkRet(ret, ALP_OK, 'AlpProjStartCont');
 fprintf('Projecting %s. Press any key to stop...\n', modeStr);
 pause;
 
-% --- Halt projection ------------------------------------------------------
-calllib(LIB_ALIAS, 'AlpProjHalt', devId);
-fprintf('Projection halted.\n');
-
-% --- Free sequence and device are handled by onCleanup -------------------
-calllib(LIB_ALIAS, 'AlpSeqFree', devId, seqId);
-calllib(LIB_ALIAS, 'AlpDevFree', devId);
-fprintf('Resources freed.\n');
+% --- Halt and free are handled by alpCleanup ------------------------------
+% It runs on the normal exit below, on error, and on Ctrl-C alike, so doing
+% any of it here as well would only double-free on the way out.
 
 end
 
@@ -115,12 +115,6 @@ end
 function checkRet(ret, ALP_OK, fnName)
     if ret ~= ALP_OK
         error('alpSmokeTest:alpError', '%s returned error code %d', fnName, ret);
-    end
-end
-
-function doCleanup(libAlias)
-    if libisloaded(libAlias)
-        unloadlibrary(libAlias);
     end
 end
 
