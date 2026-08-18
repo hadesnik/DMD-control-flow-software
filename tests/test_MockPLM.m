@@ -11,7 +11,9 @@ classdef test_MockPLM < matlab.unittest.TestCase
             config.pitchX_um     = 16.2;
             config.pitchY_um     = 10.8;
             config.nPhaseStates  = 32;
-            config.lambda_nm     = 1030;
+            % 1038 = measured CARBIDE wavelength [CERT]; 1030 was the
+            % setpoint myth — see docs/optics_handoff.md
+            config.lambda_nm     = 1038;
             config.loadLatencyMs = 0;    % fast tests
             plm.initialize(config);
         end
@@ -37,7 +39,7 @@ classdef test_MockPLM < matlab.unittest.TestCase
             config.pitchX_um     = 16.2;
             config.pitchY_um     = 10.8;
             config.nPhaseStates  = 32;
-            config.lambda_nm     = 1030;
+            config.lambda_nm     = 1038;
             config.loadLatencyMs = 0;
             plm.initialize(config);
 
@@ -46,7 +48,7 @@ classdef test_MockPLM < matlab.unittest.TestCase
             testCase.verifyEqual(plm.pitchX_um,    16.2);
             testCase.verifyEqual(plm.pitchY_um,    10.8);
             testCase.verifyEqual(plm.nPhaseStates, 32);
-            testCase.verifyEqual(plm.lambda_nm,    1030);
+            testCase.verifyEqual(plm.lambda_nm,    1038);
             testCase.verifyTrue(plm.isInitialized);
         end
 

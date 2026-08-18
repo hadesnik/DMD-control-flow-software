@@ -49,6 +49,14 @@ classdef MockScanImageBridge < handle
         activePattern_     % logical mask, set by setActivePattern
         simulateLatency_   % logical; if false, waitForCompletion skips pause
 
+        % 3D / free-run fields
+        freeRun_            % logical; beginFreeRunSession sets true
+        nPlanes_            % ETL planes per volume (free-run mode)
+        planeZUm_           % 1 x nPlanes plane depths (µm) for visibility
+        activeDefocusUm_    % commanded SLM defocus (setActiveDefocus)
+        stimZInfo_          % struct forwarded to SyntheticImaging (3D mock)
+        imagingSigmaZUm_    % detection axial sigma for plane visibility
+
         % Episodic API fields (T-EP-1c, SYNC_EPISODIC §9)
         state_              % 'idle' | 'armed' | 'acquiring' | 'completed'
         sessionActive_      % logical; gates the episodic state machine
@@ -99,6 +107,14 @@ classdef MockScanImageBridge < handle
             obj.stimDurationSec_ = 0;
             obj.activePattern_   = [];
             obj.log_ = struct('timestamp', {}, 'eventType', {}, 'payload', {});
+
+            % 3D / free-run initialisation
+            obj.freeRun_          = false;
+            obj.nPlanes_          = 1;
+            obj.planeZUm_        = configField(config, 'planeZUm', []);
+            obj.activeDefocusUm_  = NaN;
+            obj.stimZInfo_        = [];
+            obj.imagingSigmaZUm_  = configField(config, 'imagingSigmaZUm', 8);
 
             % Episodic-API initialisation
             obj.state_            = 'idle';
@@ -204,6 +220,12 @@ classdef MockScanImageBridge < handle
             %   frameTimestamps: 1 × nFrames linspace from 0 to nFrames/frameRate
             %
             %   Also populates obj.lastResult_ via tfp.sim.SyntheticImaging.
+            %   In free-run 3D mode the stimZInfo (commanded SLM defocus +
+            %   tilt) is forwarded so cells respond depth-selectively, and
+            %   each cell's F is windowed by per-plane visibility: frame k
+            %   images plane mod(k-1, nPlanes)+1 (the
+            %   tfp.io.assignFramePlanes convention) and a cell is visible
+            %   in a plane per exp(-(planeZ - cellZ)^2 / (2*sigmaDet^2)).
             %   Retrieve the result with getSyntheticResult().
             framesPath      = '';
             frameTimestamps = linspace(0, obj.nFrames_ / obj.frameRate_, obj.nFrames_);
@@ -211,7 +233,11 @@ classdef MockScanImageBridge < handle
             if ~isempty(obj.cells_) && ~isempty(obj.activePattern_)
                 obj.lastResult_ = tfp.sim.SyntheticImaging( ...
                     obj.cells_, obj.activePattern_, frameTimestamps, ...
-                    obj.stimOnsetSec_, obj.stimDurationSec_);
+                    obj.stimOnsetSec_, obj.stimDurationSec_, [], ...
+                    obj.stimZInfo_);
+                if obj.freeRun_ && obj.nPlanes_ > 1
+                    obj.lastResult_ = obj.applyPlaneVisibility_(obj.lastResult_);
+                end
             else
                 obj.lastResult_ = [];
             end
@@ -255,6 +281,75 @@ classdef MockScanImageBridge < handle
             %getLog Return the in-memory session log.
             %   entries is a struct array with fields {timestamp, eventType, payload}.
             entries = obj.log_;
+        end
+
+        % ============================================================
+        % 3D / free-run API
+        % ============================================================
+
+        function sessionInfo = beginFreeRunSession(obj, nPlanes)
+            %beginFreeRunSession Start a free-running multi-plane session.
+            %   The 3D (async) session model: ScanImage free-runs nPlanes
+            %   ETL volumes for the whole session; there are NO per-trial
+            %   TIFFs, so the episodic state machine stays disabled
+            %   (sessionActive_ = false) and per-trial
+            %   armForExternalTrigger calls take the legacy branch (they
+            %   just record nFrames for the synthetic result).
+            if ~isnumeric(nPlanes) || ~isscalar(nPlanes) || nPlanes < 1 || ...
+                    nPlanes ~= round(nPlanes)
+                error('tfp:hardware:ScanImageBridge:badNPlanes', ...
+                    'nPlanes must be a positive integer scalar.');
+            end
+            obj.freeRun_ = true;
+            obj.nPlanes_ = double(nPlanes);
+            if isempty(obj.planeZUm_)
+                % Default plane depths: span the handoff's tilt walk.
+                c = tfp.util.readHandoffConstants();
+                half = c.walk_um / 2;
+                obj.planeZUm_ = linspace(-half, half, obj.nPlanes_);
+            end
+            sessionInfo = struct('freeRun', true, 'nPlanes', obj.nPlanes_, ...
+                'planeZUm', obj.planeZUm_, ...
+                'sessionStartDatetime', datetime('now'));
+            obj.logEvent('beginFreeRunSession', sessionInfo);
+        end
+
+        function noteTrialFrames(obj, nFrames)
+            %noteTrialFrames Record the expected frame count (free-run mode).
+            %   The free-run replacement for armForExternalTrigger's
+            %   bookkeeping: nothing is armed — SI is already running — but
+            %   the synthetic result needs the trial's frame span.
+            if ~isnumeric(nFrames) || ~isscalar(nFrames) || ...
+                    ~isfinite(nFrames) || nFrames < 1
+                error('tfp:hardware:ScanImageBridge:badNFrames', ...
+                    'nFrames must be a positive finite scalar.');
+            end
+            obj.nFrames_ = round(nFrames);
+            obj.logEvent('noteTrialFrames', struct('nFrames', obj.nFrames_));
+        end
+
+        function setActiveDefocus(obj, dzUm, zInfo)
+            %setActiveDefocus Record the commanded SLM defocus for this trial.
+            %   zInfo (optional): tilt terms {gradientUmPerUm, gradientSign}
+            %   merged into the stimZInfo forwarded to the response model.
+            obj.activeDefocusUm_ = double(dzUm);
+            info.commandedDefocusUm = obj.activeDefocusUm_;
+            if nargin >= 3 && ~isempty(zInfo)
+                if isfield(zInfo, 'gradientUmPerUm')
+                    info.gradientUmPerUm = double(zInfo.gradientUmPerUm);
+                end
+                if isfield(zInfo, 'gradientSign')
+                    info.gradientSign = double(zInfo.gradientSign);
+                end
+            end
+            obj.stimZInfo_ = info;
+            obj.logEvent('setActiveDefocus', info);
+        end
+
+        function shape = getVolumeShape(obj)
+            %getVolumeShape [nPlanes, planeZUm] of the free-run session.
+            shape = struct('nPlanes', obj.nPlanes_, 'planeZUm', obj.planeZUm_, ...
+                'freeRun', obj.freeRun_);
         end
 
         % ============================================================
@@ -393,6 +488,24 @@ classdef MockScanImageBridge < handle
             entry.eventType = eventType;
             entry.payload   = payload;
             obj.log_(end+1) = entry;
+        end
+
+        function result = applyPlaneVisibility_(obj, result)
+            %applyPlaneVisibility_ Window each cell's F by its plane's frames.
+            %   Frame k images plane mod(k-1, nPlanes)+1; a cell at depth
+            %   zC contributes to plane p with weight
+            %   exp(-(planeZ(p) - zC)^2 / (2*sigmaDet^2)). Baseline (1000)
+            %   is preserved; only the response modulation is windowed.
+            BASELINE = 1000;   % matches SyntheticImaging
+            T        = size(result.F, 2);
+            planeOfFrame = tfp.io.assignFramePlanes(1:T, obj.nPlanes_);
+            for i = 1:numel(obj.cells_)
+                zC  = obj.cells_{i}.positionZUm;
+                vis = exp(-(obj.planeZUm_(planeOfFrame) - zC).^2 ...
+                          / (2 * obj.imagingSigmaZUm_^2));
+                result.F(i, :) = BASELINE + ...
+                    (result.F(i, :) - BASELINE) .* vis;
+            end
         end
 
         function writeEpisodicSidecar_(obj)

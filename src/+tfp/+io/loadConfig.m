@@ -12,6 +12,15 @@ function config = loadConfig(yamlPath)
 %             val: 1
 %           - tag: bar
 %             val: 2
+%     - lists of scalars (block sequences), under a top-level OR a
+%       one-level-nested key — so per-item '#' comments survive, which is
+%       how the DAQ line assignments document themselves:
+%         daq:
+%           digitalOutChannels:
+%             - 'port0/line10'   # ScanImage acquisition trigger
+%             - 'port0/line8'    # SLM sequence-advance TTL
+%       Yields the same shape as the inline form: a numeric row vector when
+%       every item is numeric, otherwise a cell array.
 %     - scalar values: numbers, true/false, bare strings, quoted strings
 %     - inline arrays: [a, b, c]
 %     - '#' line comments
@@ -81,14 +90,20 @@ end
 
 function config = parseLines(lines)
 %parseLines Convert a cell/string array of YAML lines into a struct.
-%   Handles flat keys, one-level nested mappings, and lists of mappings.
+%   Handles flat keys, one-level nested mappings, and block sequences whose
+%   items are either mappings (- key: val) or scalars (- val).
 
 config        = struct();
 currentParent = '';  % key of the currently open mapping section
 inListMode    = false;
-listParent    = '';  % key under which the list will be stored
+listPath      = {};  % {key} or {parent, key} — where the sequence is stored
+listIndent    = 0;   % indent of the key that opened the sequence
+listKind      = '';  % 'map' | 'scalar', decided by the first item
+listOpenLine  = 0;   % remembered so an item-less key reports the old error
+listOpenText  = '';
 currentItem   = struct();
-allItems      = {};  % cell array of per-item structs
+allItems      = {};  % cell array of per-item structs   (map kind)
+scalarItems   = {};  % cell array of parsed scalars     (scalar kind)
 
 for i = 1:numel(lines)
     line = char(lines(i));
@@ -104,42 +119,52 @@ for i = 1:numel(lines)
 
     trimmedLeft = regexprep(line, '^\s+', '');
     indent      = numel(line) - numel(trimmedLeft);
+    isItem      = strncmp(trimmedLeft, '- ', 2) || strcmp(trimmedLeft, '-');
 
     % ------------------------------------------------------------------
-    % Branch 1: currently inside a list-of-mappings block.
+    % Branch 1: currently inside a block sequence.
     % ------------------------------------------------------------------
     if inListMode
-        if indent == 0
-            % A top-level key closes the list.  Save and fall through.
-            allItems = appendItem(allItems, currentItem);
-            config.(listParent) = cellToStructArray(allItems);
-            inListMode  = false;
-            listParent  = '';
-            currentItem = struct();
-            allItems    = {};
-            % Fall through to top-level handling of this line.
-
-        elseif strncmp(trimmedLeft, '- ', 2)
-            % A new list item at the same indent level.
-            allItems    = appendItem(allItems, currentItem);
-            currentItem = struct();
-            rest = strtrim(trimmedLeft(3:end));
-            if ~isempty(rest) && ~isempty(strfind(rest, ':'))
-                [k, v]        = parseKeyValue(rest);
+        if isItem && indent > listIndent
+            rest = strtrim(trimmedLeft(2:end));
+            if isMappingItem(rest)
+                listKind    = requireKind(listKind, 'map', i, line);
+                allItems    = appendItem(allItems, currentItem);
+                currentItem = struct();
+                [k, v]      = parseKeyValue(rest);
                 currentItem.(k) = parseValue(v);
+            else
+                listKind = requireKind(listKind, 'scalar', i, line);
+                scalarItems{end+1} = parseValue(rest); %#ok<AGROW>
             end
             continue;
 
-        else
-            % Continuation key-value within the current list item.
-            [k, v]        = parseKeyValue(strtrim(line));
+        elseif ~isItem && indent > listIndent && strcmp(listKind, 'map')
+            % Continuation key-value within the current mapping item.
+            [k, v]          = parseKeyValue(strtrim(line));
             currentItem.(k) = parseValue(v);
             continue;
         end
+
+        % Anything else closes the sequence; fall through and reprocess
+        % this line as ordinary content.
+        [config, opened] = closeList(config, listPath, listKind, ...
+            allItems, currentItem, scalarItems);
+        if ~opened
+            % The key opened nothing at all — it was a deeper mapping.
+            error('Nested mappings beyond one level not supported on line %d: %s', ...
+                listOpenLine, listOpenText);
+        end
+        inListMode  = false;
+        listPath    = {};
+        listKind    = '';
+        currentItem = struct();
+        allItems    = {};
+        scalarItems = {};
     end
 
     % ------------------------------------------------------------------
-    % Branch 2: normal (non-list) processing.
+    % Branch 2: normal (non-sequence) processing.
     % ------------------------------------------------------------------
     if indent == 0
         [key, value] = parseKeyValue(strtrim(line));
@@ -151,38 +176,63 @@ for i = 1:numel(lines)
             config.(key)  = parseValue(value);
         end
 
-    elseif strncmp(trimmedLeft, '- ', 2)
-        % Start of a list under currentParent.
+    elseif isItem
+        % Block sequence directly under a top-level section key.
         if isempty(currentParent)
             error('List item without a parent section on line %d: %s', i, line);
         end
-        inListMode  = true;
-        listParent  = currentParent;
-        currentItem = struct();
-        allItems    = {};
-        rest = strtrim(trimmedLeft(3:end));
-        if ~isempty(rest) && ~isempty(strfind(rest, ':'))
-            [k, v]        = parseKeyValue(rest);
+        inListMode   = true;
+        listPath     = {currentParent};
+        listIndent   = 0;
+        listKind     = '';
+        listOpenLine = i;
+        listOpenText = line;
+        currentItem  = struct();
+        allItems     = {};
+        scalarItems  = {};
+        rest = strtrim(trimmedLeft(2:end));
+        if isMappingItem(rest)
+            listKind        = 'map';
+            [k, v]          = parseKeyValue(rest);
             currentItem.(k) = parseValue(v);
+        elseif ~isempty(rest)
+            listKind           = 'scalar';
+            scalarItems{end+1} = parseValue(rest); %#ok<AGROW>
         end
 
     else
-        % Indented key-value under currentParent (one-level nested mapping).
+        % Indented key under currentParent.
         if isempty(currentParent)
             error('Indented line without a parent section on line %d: %s', i, line);
         end
         [key, value] = parseKeyValue(strtrim(line));
         if isempty(value)
-            error('Nested mappings beyond one level not supported on line %d: %s', i, line);
+            % The only legal continuation is a block sequence on the lines
+            % below; if none arrives this is a >1-level nested mapping and
+            % closeList reports it as such.
+            inListMode   = true;
+            listPath     = {currentParent, key};
+            listIndent   = indent;
+            listKind     = '';
+            listOpenLine = i;
+            listOpenText = line;
+            currentItem  = struct();
+            allItems     = {};
+            scalarItems  = {};
+        else
+            config.(currentParent).(key) = parseValue(value);
         end
-        config.(currentParent).(key) = parseValue(value);
     end
 end
 
-% Close any list still open at end of file.
+% Close any sequence still open at end of file.
 if inListMode
-    allItems = appendItem(allItems, currentItem);
-    config.(listParent) = cellToStructArray(allItems);
+    [config, opened] = closeList(config, listPath, listKind, ...
+        allItems, currentItem, scalarItems);
+    if ~opened
+        error('Nested mappings beyond one level not supported on line %d: %s', ...
+            listOpenLine, listOpenText);
+    end
 end
 end
 
@@ -192,6 +242,62 @@ function items = appendItem(items, item)
 %appendItem Append item struct to the items cell array (skip if empty).
 if ~isempty(fieldnames(item))
     items{end+1} = item;
+end
+end
+
+function tf = isMappingItem(rest)
+%isMappingItem True when a sequence item reads as `key: value`.
+%   Matched on a leading identifier + colon rather than "contains a colon",
+%   so quoted scalars ('- ''a: b''') and paths ('- port0/line10') are not
+%   mistaken for mappings.
+tf = ~isempty(regexp(rest, '^[A-Za-z_]\w*\s*:', 'once'));
+end
+
+function kind = requireKind(kind, want, i, line)
+%requireKind Lock a sequence to its first item's kind; reject mixtures.
+if isempty(kind)
+    kind = want;
+elseif ~strcmp(kind, want)
+    error('Mixed scalar and mapping items in one list on line %d: %s', i, line);
+end
+end
+
+function [config, opened] = closeList(config, listPath, listKind, ...
+                                      allItems, currentItem, scalarItems)
+%closeList Store a finished block sequence at listPath.
+%   opened is false when the key that opened this sequence never received
+%   an item — meaning it was not a sequence at all, and the caller reports
+%   the unsupported-nesting error against the opening line.
+opened = true;
+switch listKind
+    case 'map'
+        allItems = appendItem(allItems, currentItem);
+        value    = cellToStructArray(allItems);
+    case 'scalar'
+        value    = scalarsToArray(scalarItems);
+    otherwise
+        opened = false;
+        return;
+end
+if numel(listPath) == 1
+    config.(listPath{1}) = value;
+else
+    config.(listPath{1}).(listPath{2}) = value;
+end
+end
+
+function v = scalarsToArray(items)
+%scalarsToArray Numeric row vector when every item is numeric, else a cell
+%   array — the same shapes parseValue produces for the inline form.
+if isempty(items)
+    v = {};
+    return;
+end
+isNum = cellfun(@(x) isnumeric(x) && isscalar(x), items);
+if all(isNum)
+    v = [items{:}];
+else
+    v = items;
 end
 end
 

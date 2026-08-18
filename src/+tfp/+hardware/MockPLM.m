@@ -41,7 +41,9 @@ classdef MockPLM < tfp.hardware.PLM
             obj.pitchX_um     = configField(config, 'pitchX_um',     16.2);
             obj.pitchY_um     = configField(config, 'pitchY_um',     10.8);
             obj.nPhaseStates  = configField(config, 'nPhaseStates',  32);
-            obj.lambda_nm     = configField(config, 'lambda_nm',     1030);
+            % default tracks DLPC900_PLM: 1038 nm measured [CERT], not the
+            % 1030 setpoint — see docs/optics_handoff.md
+            obj.lambda_nm     = configField(config, 'lambda_nm',     1038);
             obj.loadLatencyMs_ = configField(config, 'loadLatencyMs', 0);
 
             obj.pattern_      = [];

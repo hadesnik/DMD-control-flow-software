@@ -1,14 +1,25 @@
 classdef PLM < handle
-    %PLM Abstract interface for PLM remote-focusing phase modulators.
-    %   Subclasses include MockPLM (simulator) and DLPC900_PLM (real TI NIR
-    %   PLM via DLPC900 Pre-stored Pattern Mode + I2C trigger). Experiment
-    %   code talks to this interface, never to a concrete class.
+    %PLM Abstract interface for pupil phase modulators (remote focusing).
+    %   Subclasses: MockPLM (TI-PLM simulator), DLPC900_PLM (real TI NIR
+    %   PLM via DLPC900), MockSLM (Meadowlark simulator) and MeadowlarkSLM
+    %   (DAQ-PC proxy to the SLM-PC Blink server). Experiment code talks to
+    %   this interface, never to a concrete class — that is what keeps the
+    %   Meadowlark <-> TI-PLM swap a config change.
     %
     %   computeDefocusPattern is implemented here on the base because it
     %   depends only on the abstract pixel-geometry and phase-spec properties
     %   (nRows, nCols, pitchX_um, pitchY_um, nPhaseStates, lambda_nm) that
-    %   every subclass must define. Both MockPLM and DLPC900_PLM inherit it
-    %   without re-implementing the physics.
+    %   every subclass must define. The physics itself lives in
+    %   tfp.slm.computeDefocusMask (shared with the SLM-PC server); this
+    %   method is a thin adapter that applies the TI-PLM wrap convention.
+    %
+    %   Defocus-SEQUENCE interface (Meadowlark path): concrete methods with
+    %   default tfp:hardware:PLM:notSupported errors, so legacy subclasses
+    %   (MockPLM, DLPC900_PLM) compile unchanged. Sequence-capable
+    %   subclasses (MockSLM, MeadowlarkSLM) override all of them.
+    %   Sequence order is the contract: masks are preloaded in depth-group
+    %   order and advanceToIndex steps through them (TTL pulse or network
+    %   'ADV' depending on the armed trigger mode).
 
     properties (Abstract, SetAccess = protected)
         nRows           % pixel rows (y dimension), e.g. 800
@@ -16,7 +27,7 @@ classdef PLM < handle
         pitchX_um       % pixel pitch along x (columns), µm; e.g. 16.2
         pitchY_um       % pixel pitch along y (rows), µm; e.g. 10.8
         nPhaseStates    % quantized phase levels, e.g. 32 (5-bit)
-        lambda_nm       % design wavelength, nm; e.g. 1030
+        lambda_nm       % design wavelength, nm; e.g. 1038 (measured CARBIDE [CERT])
         isInitialized
     end
 
@@ -53,57 +64,89 @@ classdef PLM < handle
             %
             %   Pupil mask: pixels outside r_PLM = f_obj_um * NA / (n * M_relay) are
             %   set to state 0. Phase is wrapped modulo max_phase = 2*pi*(N-1)/N
-            %   (~6.09 rad for N=32), then quantized into N uniform bins.
+            %   (~6.09 rad for N=32, the TI-PLM double-pass piston full scale),
+            %   then quantized into N uniform bins.
+            %
+            %   Delegates to tfp.slm.computeDefocusMask (the shared engine);
+            %   output is byte-identical to the pre-refactor implementation,
+            %   pinned by tests/test_slm_mask_engine.m.
 
             if nargin < 3 || isempty(sys)
                 sys = struct();
             end
 
-            M_relay   = configField(sys, 'M_relay',  2.4);
-            n         = configField(sys, 'n',         1.33);
-            f_um      = configField(sys, 'f_obj_um',  16800);
-            NA        = configField(sys, 'NA',        0.6);
-            lambda_um = obj.lambda_nm / 1000;
+            engineSys = struct( ...
+                'nRows',        obj.nRows, ...
+                'nCols',        obj.nCols, ...
+                'pitchXUm',     obj.pitchX_um, ...
+                'pitchYUm',     obj.pitchY_um, ...
+                'nStates',      obj.nPhaseStates, ...
+                'lambdaNm',     obj.lambda_nm, ...
+                'mRelay',       tfp.util.configField(sys, 'M_relay',  2.4), ...
+                'nImm',         tfp.util.configField(sys, 'n',        1.33), ...
+                'fObjUm',       tfp.util.configField(sys, 'f_obj_um', 16800), ...
+                'NA',           tfp.util.configField(sys, 'NA',       0.6), ...
+                'wrapPhaseRad', 2 * pi * (obj.nPhaseStates - 1) / obj.nPhaseStates);
 
-            % Pupil radius at the PLM plane (µm); paraxial BFP radius / relay mag
-            r_BFP_um = f_um * NA / n;
-            r_PLM_um = r_BFP_um / M_relay;
+            pattern = tfp.slm.computeDefocusMask(dz_um, engineSys);
+        end
 
-            % Physical pixel coordinates centred on the array (µm)
-            cx = (obj.nCols + 1) / 2;
-            cy = (obj.nRows + 1) / 2;
-            [jj, ii] = meshgrid(1:obj.nCols, 1:obj.nRows);
-            x_um = (jj - cx) * obj.pitchX_um;
-            y_um = (ii - cy) * obj.pitchY_um;
-            r2   = x_um.^2 + y_um.^2;          % squared radial distance, µm^2
+        % ============================================================
+        % Defocus-sequence interface (Meadowlark / sequence-capable
+        % devices override; legacy subclasses inherit the errors).
+        % ============================================================
 
-            % Paraxial defocus phase (radians)
-            phi = (pi * n * dz_um * M_relay^2) / (lambda_um * f_um^2) * r2;
+        function tf = supportsDefocusSequence(obj) %#ok<MANU>
+            %supportsDefocusSequence True when prepare/advance sequencing works.
+            %   Default false: legacy per-trial loadPattern devices.
+            tf = false;
+        end
 
-            % max_phase: full-scale phase for nPhaseStates states
-            %   max piston = lambda/2 * (nPhaseStates-1)/nPhaseStates
-            %   max OPD    = 2 * max_piston = lambda * (nPhaseStates-1)/nPhaseStates
-            %   max_phase  = 2*pi * max_OPD / lambda = 2*pi*(N-1)/N
-            max_phase = 2 * pi * (obj.nPhaseStates - 1) / obj.nPhaseStates;
+        function prepareDefocusSequence(obj, dzListUm, sys) %#ok<INUSD>
+            %prepareDefocusSequence Compute + upload masks in dzListUm order.
+            %   Sequence order = depth-group order (the TTL contract).
+            error('tfp:hardware:PLM:notSupported', ...
+                '%s does not support defocus sequences.', class(obj));
+        end
 
-            phi_wrap = mod(phi, max_phase);
+        function armSequenceTrigger(obj, mode) %#ok<INUSD>
+            %armSequenceTrigger Arm advance mode: 'ttl' | 'software'.
+            error('tfp:hardware:PLM:notSupported', ...
+                '%s does not support defocus sequences.', class(obj));
+        end
 
-            % Pixels outside the pupil are set to flat (state 0)
-            phi_wrap(r2 > r_PLM_um^2) = 0;
+        function advanceToIndex(obj, idx) %#ok<INUSD>
+            %advanceToIndex Step to sequence position idx (1-based) and settle.
+            error('tfp:hardware:PLM:notSupported', ...
+                '%s does not support defocus sequences.', class(obj));
+        end
 
-            state   = uint8(floor(phi_wrap * obj.nPhaseStates / max_phase));
-            pattern = min(state, uint8(obj.nPhaseStates - 1));  % clamp numerical edge
+        function idx = getSequenceIndex(obj) %#ok<MANU>
+            %getSequenceIndex Current 1-based sequence position (0 = none).
+            error('tfp:hardware:PLM:notSupported', ...
+                'getSequenceIndex requires a sequence-capable device.');
+        end
+
+        function t = settleTimeS(obj) %#ok<MANU>
+            %settleTimeS Phase-settle budget after an advance, seconds.
+            %   Meadowlark LC response is 3.4 ms (docs/optics_handoff.md §6);
+            %   legacy devices default to 0.
+            t = 0;
         end
 
         function [patterns, dz_um, sys] = generatePatternLibrary(obj, n_planes, dz_range_um, obj_name)
-            %generatePatternLibrary Generate a defocus pattern stack for PLM remote focusing.
+            %generatePatternLibrary Generate a defocus pattern stack for remote focusing.
             %   n_planes:    integer number of axial planes
             %   dz_range_um: total axial range in µm, symmetric about 0
-            %   obj_name:    string key into objective table:
-            %                  'Avocado'    (f=16.8 mm, NA=0.6)
-            %                  'Nikon16x'   (f=11.25 mm, NA=0.8)
-            %                  'Olympus20x' (f=9.0 mm, NA=1.0)
-            %                All entries assume a 180 mm tube lens.
+            %   obj_name:    objective name resolved by tfp.optics.objectives
+            %                ('nikon10x045', 'olympus20x', 'nikon16x',
+            %                'avocado10x'; legacy aliases 'Avocado',
+            %                'Nikon16x', 'Olympus20x' still accepted).
+            %
+            %   NOTE: the old in-method table assumed a 180 mm tube lens and
+            %   quoted Nikon16x at 11.25 mm EFL; the registry carries the
+            %   rig-correct 12.5 mm (Nikon 200 mm tube). See
+            %   tfp.optics.objectives.
             %
             %   Returns:
             %     patterns    nRows × nCols × n_planes uint8 (states 0..nPhaseStates-1)
@@ -113,23 +156,14 @@ classdef PLM < handle
             %
             %   Prints a system summary to the console on each call.
 
-            % Objective lookup table (tube lens = 180 mm for all entries)
-            OBJ = struct();
-            OBJ.Avocado    = struct('f_obj_um', 16800, 'NA', 0.6);
-            OBJ.Nikon16x   = struct('f_obj_um', 11250, 'NA', 0.8);
-            OBJ.Olympus20x = struct('f_obj_um',  9000, 'NA', 1.0);
+            objSpec = resolveObjective(obj_name);
 
-            if ~isfield(OBJ, obj_name)
-                error('tfp:hardware:PLM:unknownObjective', ...
-                    'Unknown objective "%s". Valid keys: Avocado, Nikon16x, Olympus20x.', ...
-                    obj_name);
-            end
-            objSpec = OBJ.(obj_name);
-
-            % Build sys struct for computeDefocusPattern (uses its own defaults for
-            % M_relay and n when not supplied, so pass explicit values to match here)
-            phySys.f_obj_um = objSpec.f_obj_um;
+            % Build sys struct for computeDefocusPattern. M_relay stays the
+            % TI-PLM default here; the Meadowlark path builds its sys via
+            % tfp.optics.buildDefocusSys instead.
+            phySys.f_obj_um = objSpec.fObjUm;
             phySys.NA       = objSpec.NA;
+            phySys.n        = objSpec.nImm;
 
             % Axial sample positions
             dz_um = linspace(-dz_range_um / 2, dz_range_um / 2, n_planes);
@@ -142,9 +176,9 @@ classdef PLM < handle
 
             % System summary metrics — use same defaults as computeDefocusPattern
             M_relay   = 2.4;
-            n         = 1.33;
+            n         = objSpec.nImm;
             lambda_um = obj.lambda_nm / 1000;
-            f_um      = objSpec.f_obj_um;
+            f_um      = objSpec.fObjUm;
             NA        = objSpec.NA;
 
             r_PLM_um  = (f_um * NA / n) / M_relay;
@@ -172,7 +206,7 @@ classdef PLM < handle
             fprintf('\nPLM pattern library: %d planes, %.1f µm range\n', ...
                     n_planes, dz_range_um);
             fprintf('Objective:           %s  NA=%.2f  f_obj=%.1f mm\n', ...
-                    obj_name, NA, f_um / 1000);
+                    objSpec.label, NA, f_um / 1000);
             fprintf('PLM aperture radius: %.1f µm  (%d px)\n', r_PLM_um, N_radius);
             fprintf('Axial Nyquist step:  %.2f µm\n', dz_nyquist_um);
             fprintf('3-px quantization:   %.2f µm\n', dz_3px_um);
@@ -185,7 +219,11 @@ classdef PLM < handle
             %   outputDir: char or string; created if absent
             %   filePaths: 1×N cell array of written absolute file paths
             %
-            %   Each state is scaled: gray = uint8(state × 8), clamped to 255.
+            %   States are scaled to full 8-bit range:
+            %     gray = round(255 * state / (nPhaseStates - 1))
+            %   For an 8-bit device (nPhaseStates=256) this is the identity;
+            %   the old hardwired ×8 scaling was 5-bit-only and wrong for
+            %   the Meadowlark.
             %   Files are named pattern_0001.png, pattern_0002.png, ...
             %   Import into TI LightCrafter GUI → Firmware tab to flash Pre-stored
             %   Pattern Mode sequences to the DLPC900.
@@ -218,7 +256,8 @@ classdef PLM < handle
             N = size(patterns, 3);
             filePaths = cell(1, N);
             for k = 1:N
-                gray  = min(uint8(255), patterns(:,:,k) .* uint8(8));
+                gray  = uint8(round(255 * double(patterns(:,:,k)) ...
+                                    / double(obj.nPhaseStates - 1)));
                 fname = fullfile(outputDir, sprintf('pattern_%04d.png', k));
                 imwrite(gray, fname);
                 filePaths{k} = fname;
@@ -228,12 +267,22 @@ classdef PLM < handle
     end
 end
 
-% --- Local helper ---
+% --- Local helpers ---
 
-function value = configField(config, name, default)
-if isfield(config, name)
-    value = config.(name);
-else
-    value = default;
+function spec = resolveObjective(obj_name)
+%resolveObjective Map legacy aliases onto the tfp.optics.objectives registry.
+name = char(obj_name);
+switch name
+    case 'Avocado',    name = 'avocado10x';
+    case 'Nikon16x',   name = 'nikon16x';
+    case 'Olympus20x', name = 'olympus20x';
+end
+try
+    spec = tfp.optics.objectives(name);
+catch
+    error('tfp:hardware:PLM:unknownObjective', ...
+        ['Unknown objective "%s". Valid: nikon10x045, olympus20x, ' ...
+         'nikon16x, avocado10x (legacy aliases Avocado/Nikon16x/' ...
+         'Olympus20x).'], char(obj_name));
 end
 end

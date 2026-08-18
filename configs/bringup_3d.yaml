@@ -1,0 +1,116 @@
+# 3D bringup config: mock end-to-end 3D photostimulation (exp_3d_ensemble).
+# This is the template for the real 3D session — flip hardwareKind to real,
+# slm.backend to remote (+ host), zstage.backend to relay/mp285, and point
+# the calibration_file keys at real runs. Mock defaults exercise the whole
+# depth-grouped pipeline: 3 targets across the FOV -> ~3 depth groups ->
+# MockSLM sequence advance -> per-plane synthetic responses.
+hardwareKind: mock
+
+dmd:
+  nRows: 800
+  nCols: 1280
+  maxPatternRate: 12500
+  loadLatencyMsPerPattern: 0
+  debugFigure: false
+
+daq:
+  sampleRate: 10000
+  analogInChannels: [0, 1]
+  analogOutChannels: [0]
+  digitalOutChannels: [port0/line0, port0/line8]
+  digitalInChannels: [port0/line2]   # ScanImage frame clock
+  aiRangeV: [-5, 5]
+
+paths:
+  dataDir: ./data
+
+calibration_file: ""
+
+imaging:
+  frameRate: 30
+  fovSizePx: 512
+  fovSizeUm: 800
+  simulateLatency: false
+
+slm:
+  enabled: true
+  backend: 'mock'            # real rig: 'remote' + host of the SLM PC
+  host: ''
+  port: 3046
+  nRows: 1024
+  nCols: 1024
+  pitch_um: 17.0
+  nStates: 256
+  lambda_nm: 1038
+  lut_file: ''
+  wfc_file: ''
+  m_relay: 1.2               # %VERIFY on the rig (no handoff key yet)
+  trigger_mode: 'software'   # 'ttl' after the Blink audit confirms sequencing
+  trigger_line: 'port0/line8'
+  trigger_pulse_s: 0.0002
+  settle_s: 0.0
+  uniform_blob_fraction: 0.02
+  calibration_file: ''
+
+objective:
+  name: 'nikon10x045'
+
+etl:
+  n_planes: 3
+  plane_calibration_file: ''
+
+zstage:
+  backend: 'mock'
+  startZUm: 0
+
+threeD:
+  enabled: true
+  dz_bin_um: 10
+  depth_gradient_sign: 1
+  pace_trials: false         # mock; real rig sets true
+  nReps: 2
+  powerMw: 5
+  radiusPx: 15
+
+# Mock 3D targets: [col row planeIdx zTargetUm]. Depths oppose the tilt's
+# native depth at each lateral position, so required defocus values spread
+# across multiple depth groups (a cell sitting exactly ON the tilted
+# excitation plane needs ~zero correction).
+mockTargets3D:
+  - [400, 400, 3, 15]
+  - [640, 400, 2, 0]
+  - [900, 400, 1, -15]
+
+# Fake cells co-located with the targets, each at its target depth.
+fakeCells:
+  - tag: cell_p3
+    dmdCol: 400
+    dmdRow: 400
+    radiusDmd: 8
+    amplitude: 1.5
+    sigma: 10
+    aiChannel: 0
+    dmdZUm: 15
+  - tag: cell_p2
+    dmdCol: 640
+    dmdRow: 400
+    radiusDmd: 8
+    amplitude: 1.5
+    sigma: 10
+    aiChannel: 1
+    dmdZUm: 0
+  - tag: cell_p1
+    dmdCol: 900
+    dmdRow: 400
+    radiusDmd: 8
+    amplitude: 1.5
+    sigma: 10
+    aiChannel: 2
+    dmdZUm: -15
+
+laser:
+  fs50_ao_channel: 'ao3'
+  modulation_voltage_max: 5.0
+  modulation_voltage_min: 0.0
+  calibration_file: ''
+  default_power_mw: 1.0

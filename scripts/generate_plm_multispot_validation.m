@@ -44,7 +44,7 @@ function generate_plm_multispot_validation()
     pitchX_um    = plm.pitchX_um;      % 16.2
     pitchY_um    = plm.pitchY_um;      % 10.8
     nPhaseStates = plm.nPhaseStates;   % 32
-    lambda_nm    = plm.lambda_nm;      % 1030
+    lambda_nm    = plm.lambda_nm;      % 1038, measured CARBIDE [CERT]
     plm.cleanup();
     lambda_um    = lambda_nm / 1000;
 

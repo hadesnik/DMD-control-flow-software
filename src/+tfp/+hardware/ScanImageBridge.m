@@ -105,6 +105,11 @@ classdef ScanImageBridge < handle
         streamSocket_    % msocket handle for F streaming (port 3044; separate from siSocket_)
         firstFrameNum_   % absolute frame number of this trial's first streamed frame (relative-index anchor)
 
+        % 3D / free-run session (async ETL multi-plane) ---------------------
+        freeRun_            % logical; beginFreeRunSession sets true
+        nPlanes_            % ETL planes per volume (free-run mode)
+        activeDefocusUm_    % last commanded SLM defocus (log/metadata only)
+
         % Episodic API (per docs/SYNC_EPISODIC.md §9) -----------------------
         state_              % char: 'idle' | 'armed' | 'completed'
         sessionActive_      % logical; true between beginSession and disconnect
@@ -156,6 +161,10 @@ classdef ScanImageBridge < handle
             obj.firstFrameNum_  = [];
 
             % Episodic API state (see docs/SYNC_EPISODIC.md §9.1)
+            obj.freeRun_         = false;
+            obj.nPlanes_         = 1;
+            obj.activeDefocusUm_ = NaN;
+
             obj.state_           = 'idle';
             obj.sessionActive_   = false;
             obj.startAcqNum_     = uint32(0);
@@ -347,6 +356,56 @@ classdef ScanImageBridge < handle
                 struct('nFrames', obj.nFrames_, ...
                        'trialIndex', obj.trialCounter_, ...
                        'sessionActive', obj.sessionActive_));
+        end
+
+        function sessionInfo = beginFreeRunSession(obj, nPlanes)
+            %beginFreeRunSession Start a free-running multi-plane 3D session.
+            %   The async 3D model: ScanImage free-runs continuous nPlanes
+            %   ETL volumes for the WHOLE session (operator starts the
+            %   grab, or one TTL starts it); there are no per-trial
+            %   arms/TIFFs. This method only records the session shape —
+            %   the DAQ side assigns frame -> plane post-hoc from the
+            %   frame clock (tfp.io.assignFramePlanes /
+            %   tfp.io.alignTrialsFreeRun).
+            %
+            %   Before the session, run probe_scanimage_config('3d') on
+            %   the imaging PC to confirm hStackManager.numSlices ==
+            %   nPlanes. Reading numSlices/zs from here must go through an
+            %   imaging-PC helper over msocket, NOT local evalin — hSI
+            %   does not exist in this MATLAB process (see
+            %   docs/SYNC_EPISODIC.md).
+            if ~isnumeric(nPlanes) || ~isscalar(nPlanes) || nPlanes < 1 || ...
+                    nPlanes ~= round(nPlanes)
+                error('tfp:hardware:ScanImageBridge:badNPlanes', ...
+                    'nPlanes must be a positive integer scalar.');
+            end
+            obj.freeRun_ = true;
+            obj.nPlanes_ = double(nPlanes);
+            sessionInfo = struct('freeRun', true, 'nPlanes', obj.nPlanes_, ...
+                'sessionStartDatetime', datetime('now'));
+            obj.logEvent('beginFreeRunSession', sessionInfo);
+        end
+
+        function noteTrialFrames(obj, nFrames)
+            %noteTrialFrames Record the expected frame count (free-run mode).
+            %   No ScanImage interaction — SI free-runs; this is metadata
+            %   parity with the mock bridge.
+            obj.nFrames_ = round(double(nFrames));
+            obj.logEvent('noteTrialFrames', struct('nFrames', obj.nFrames_));
+        end
+
+        function setActiveDefocus(obj, dzUm, ~)
+            %setActiveDefocus Record the commanded SLM defocus (metadata only).
+            %   No-op toward ScanImage on the real bridge — the SLM lives on
+            %   its own PC; this exists for interface parity with the mock,
+            %   which uses it to synthesise depth-selective responses.
+            obj.activeDefocusUm_ = double(dzUm);
+            obj.logEvent('setActiveDefocus', struct('dzUm', double(dzUm)));
+        end
+
+        function shape = getVolumeShape(obj)
+            %getVolumeShape [nPlanes] of the free-run session (as declared).
+            shape = struct('nPlanes', obj.nPlanes_, 'freeRun', obj.freeRun_);
         end
 
         function setActivePattern(obj, ~, stimOnsetSec, stimDurationSec)

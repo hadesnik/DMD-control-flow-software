@@ -237,6 +237,145 @@ classdef TrialSequence < handle
                 nTargets, nDz, nReps);
         end
 
+        function [seq, groups] = generate3DEnsemble(targets3D, opts)
+            %generate3DEnsemble Build a depth-grouped 3D stimulation sequence.
+            %
+            %   [seq, groups] = generate3DEnsemble(targets3D, opts)
+            %
+            %   targets3D: N x 4 numeric [col row planeIdx zTargetUm] — DMD
+            %     pixel coords plus the imaging plane the cell was found in
+            %     and its physical depth (µm, from the composed
+            %     z-calibration; NaN allowed when opts.planeZUm supplies a
+            %     per-plane depth lookup).
+            %
+            %   The tilted excitation plane means each target needs the SLM
+            %   defocus
+            %       dz_i = zTarget_i - sign * gradient * x_disp_i
+            %   (gradient = handoff depth_gradient_um_per_um READ AT RUN
+            %   TIME; sign from config.threeD.depth_gradient_sign; x_disp
+            %   via tfp.optics.dmdToDispersionUm). Targets are binned into
+            %   depth groups of width opts.dzBinUm; ONE TRIAL = ONE GROUP
+            %   stimulation (multiSpot union pattern, built by the
+            %   experiment), trials ordered rep-outer / group-inner so the
+            %   SLM sequence (prepared in group order) is walked forward.
+            %
+            %   opts fields:
+            %     .dmdSize      [nRows nCols] (REQUIRED — dispersion mapping)
+            %     .dzBinUm      depth-group bin width, µm (default 10)
+            %     .nReps        reps per group (default 2)
+            %     .powerMw      per-trial power (default 5)
+            %     .gradientSign ±1 (default +1; resolved on the rig)
+            %     .planeZUm     1 x nPlanes depth lookup for NaN zTargetUm
+            %     .constants    handoff constants (default: read fresh)
+            %
+            %   Per-trial metadata: .slmGroupIdx, .slmDefocusUm (group mean
+            %   dz), .repIdx, .targetRows (rows of targets3D in this
+            %   group), .planeIdx / .zTargetUm / .dzResidualUm (per member).
+            %   targetSpec.dmdCoords carries the group's K x 2 coords;
+            %   targetSpec.slmSequenceIdx = group index.
+            %
+            %   groups: 1 x G struct (.dzUm, .targetRows) — pass
+            %   [groups.dzUm] to slm.prepareDefocusSequence (SEQUENCE ORDER
+            %   CONTRACT: same order as the trials walk).
+
+            if nargin < 2 || ~isstruct(opts)
+                error('tfp:trial:TrialSequence:badOpts', ...
+                    'generate3DEnsemble: opts struct is required (.dmdSize at minimum).');
+            end
+            if ~isnumeric(targets3D) || ndims(targets3D) > 2 || ...
+                    size(targets3D, 2) ~= 4 || isempty(targets3D)
+                error('tfp:trial:TrialSequence:badTargets', ...
+                    'generate3DEnsemble: targets3D must be non-empty N x 4 [col row planeIdx zUm]; got [%s].', ...
+                    num2str(size(targets3D)));
+            end
+            if ~isfield(opts, 'dmdSize') || numel(opts.dmdSize) ~= 2
+                error('tfp:trial:TrialSequence:badOpts', ...
+                    'generate3DEnsemble: opts.dmdSize = [nRows nCols] is required.');
+            end
+
+            dzBinUm  = double(tfp.util.configField(opts, 'dzBinUm', 10));
+            nReps    = double(tfp.util.configField(opts, 'nReps', 2));
+            powerMw  = double(tfp.util.configField(opts, 'powerMw', 5));
+            gradSign = double(tfp.util.configField(opts, 'gradientSign', 1));
+            planeZ   = tfp.util.configField(opts, 'planeZUm', []);
+            consts   = tfp.util.configField(opts, 'constants', []);
+            if isempty(consts)
+                consts = tfp.util.readHandoffConstants();
+            end
+            validatePosInt(nReps, 'nReps', 'generate3DEnsemble');
+            validateScalarPos(dzBinUm, 'dzBinUm', 'generate3DEnsemble');
+
+            coords  = double(targets3D(:, 1:2));
+            planeIx = double(targets3D(:, 3));
+            zTarget = double(targets3D(:, 4));
+
+            % Fill NaN depths from the per-plane lookup when available.
+            needZ = ~isfinite(zTarget);
+            if any(needZ)
+                if isempty(planeZ)
+                    error('tfp:trial:TrialSequence:missingZ', ...
+                        ['generate3DEnsemble: %d targets have NaN zTargetUm ' ...
+                         'and no opts.planeZUm lookup was given.'], nnz(needZ));
+                end
+                zTarget(needZ) = planeZ(planeIx(needZ));
+            end
+
+            % Required per-target SLM defocus, tilt-corrected.
+            xDisp = tfp.optics.dmdToDispersionUm(coords, opts.dmdSize, consts);
+            dzReq = zTarget - gradSign * consts.depth_gradient_um_per_um * xDisp;
+
+            % Bin into depth groups (group defocus = mean of members).
+            % round() centres bins on multiples of dzBinUm so near-zero
+            % residuals on either side of 0 share a group (floor() would
+            % split -0.1 from +0.1 into different groups).
+            binIdx = round(dzReq / dzBinUm);
+            [uniqueBins, ~, groupOf] = unique(binIdx, 'sorted');
+            G = numel(uniqueBins);
+            groups = struct('dzUm', cell(1, G), 'targetRows', cell(1, G));
+            for g = 1:G
+                rows = find(groupOf == g);
+                groups(g).dzUm       = mean(dzReq(rows));
+                groups(g).targetRows = rows(:)';
+            end
+
+            nExpected = G * nReps;
+            trials(nExpected, 1) = tfp.trial.Trial();
+            idx = 0;
+            for rep = 1:nReps
+                for g = 1:G
+                    idx  = idx + 1;
+                    rows = groups(g).targetRows;
+                    tr   = trials(idx);
+                    tr.trialIdx   = idx;
+                    tr.targetSpec = struct( ...
+                        'cellIds',        [], ...
+                        'dmdCoords',      coords(rows, :), ...
+                        'patternRef',     [], ...
+                        'slmSequenceIdx', g);
+                    tr.powerMw    = powerMw;
+                    tr.duration_s = 2.0;
+                    tr.pulseTrain = struct( ...
+                        'nPulses', 1, 'interPulse_s', 0, 'pulseWidth_s', 0.1);
+                    tr.preStim_s  = 0.5;
+                    tr.postStim_s = 1.0;
+                    tr.metadata   = struct( ...
+                        'slmGroupIdx',  g, ...
+                        'slmDefocusUm', groups(g).dzUm, ...
+                        'repIdx',       rep, ...
+                        'targetRows',   rows, ...
+                        'planeIdx',     planeIx(rows)', ...
+                        'zTargetUm',    zTarget(rows)', ...
+                        'dzResidualUm', (dzReq(rows) - groups(g).dzUm)');
+                end
+            end
+
+            seq = tfp.trial.TrialSequence();
+            seq.trials = trials;
+            seq.description = sprintf( ...
+                '3DEnsemble: %d targets in %d depth groups (bin %.1f um) x %d reps', ...
+                size(targets3D, 1), G, dzBinUm, nReps);
+        end
+
         function offsets = gaussianGrid2D(maxUm, nPointsPerHalfAxis, sigmaPsfUm)
             %gaussianGrid2D Gaussian-spaced 2D offset grid for PPSF experiments.
             %
@@ -266,8 +405,73 @@ classdef TrialSequence < handle
     end
 
     methods
+        function obj = shuffleWithinGroups(obj, seed, opts)
+            %shuffleWithinGroups Shuffle trials without breaking depth groups.
+            %
+            %   obj = shuffleWithinGroups(obj, seed)
+            %   obj = shuffleWithinGroups(obj, seed, struct('shuffleBlocks', true))
+            %
+            %   Plain shuffle() is INCOMPATIBLE with a depth-grouped 3D
+            %   sequence: the SLM sequence is preloaded in group order and
+            %   the group structure amortises the LC settle (3.4 ms per
+            %   advance); a full permutation would force an SLM advance on
+            %   nearly every trial. This variant permutes trials WITHIN
+            %   each contiguous block of equal metadata.slmGroupIdx, and —
+            %   with opts.shuffleBlocks — also permutes the block ORDER
+            %   (blocks stay intact; advanceToIndex handles out-of-order
+            %   groups by wrapping, at the cost of extra TTL steps).
+            %
+            %   Uses a local RandStream; seed is stored in obj.randSeed.
+            if ~isnumeric(seed) || ~isscalar(seed) || ~isfinite(seed)
+                error('tfp:trial:TrialSequence:badSeed', ...
+                    'seed must be a finite numeric scalar.');
+            end
+            if nargin < 3 || isempty(opts)
+                opts = struct();
+            end
+            shuffleBlocks = logical(tfp.util.configField(opts, 'shuffleBlocks', false));
+
+            n = numel(obj.trials);
+            groupIds = nan(1, n);
+            for k = 1:n
+                md = obj.trials(k).metadata;
+                if isstruct(md) && isfield(md, 'slmGroupIdx')
+                    groupIds(k) = md.slmGroupIdx;
+                end
+            end
+            if any(isnan(groupIds))
+                error('tfp:trial:TrialSequence:noGroups', ...
+                    ['shuffleWithinGroups requires metadata.slmGroupIdx on ' ...
+                     'every trial (build the sequence with generate3DEnsemble).']);
+            end
+
+            % Contiguous runs of equal group id.
+            runStart = [1, find(diff(groupIds) ~= 0) + 1];
+            runEnd   = [runStart(2:end) - 1, n];
+            nRuns    = numel(runStart);
+
+            s = RandStream('twister', 'Seed', seed);
+            perm = zeros(1, n);
+            pos  = 0;
+            runOrder = 1:nRuns;
+            if shuffleBlocks
+                runOrder = randperm(s, nRuns);
+            end
+            for r = runOrder
+                block = runStart(r):runEnd(r);
+                block = block(randperm(s, numel(block)));
+                perm(pos + (1:numel(block))) = block;
+                pos = pos + numel(block);
+            end
+            obj.trials = obj.trials(perm);
+            obj.randSeed = seed;
+        end
+
         function obj = shuffle(obj, seed)
             %shuffle Randomly permute trials in place using seed.
+            %
+            %   NOTE: incompatible with depth-grouped 3D sequences — use
+            %   shuffleWithinGroups there (see its help for why).
             %
             %   Uses a local RandStream so the global rng state is not
             %   modified. seed is stored in obj.randSeed.

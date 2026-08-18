@@ -1,10 +1,11 @@
 function result = SyntheticImaging(cells, patternMask, frameTimestamps, ...
-                                    stimOnsetSec, stimDurationSec, calibration)
+                                    stimOnsetSec, stimDurationSec, calibration, stimZInfo)
 %SyntheticImaging Build a mock suite2p Fall.mat-like struct for one trial.
 %
 %   result = SyntheticImaging(cells, patternMask, frameTimestamps,
 %                             stimOnsetSec, stimDurationSec)
 %   result = SyntheticImaging(..., calibration)
+%   result = SyntheticImaging(..., calibration, stimZInfo)
 %
 %   cells:           array of tfp.sim.CellResponseModel objects
 %   patternMask:     logical(nRows, nCols), active DMD pattern for this trial
@@ -13,6 +14,9 @@ function result = SyntheticImaging(cells, patternMask, frameTimestamps, ...
 %   stimDurationSec: scalar, stim on-duration (s)
 %   calibration:     (optional) calibration struct; if absent, a linear
 %                    DMD-to-imaging-pixel scale is used for stat.med coords
+%   stimZInfo:       (optional) 3D-mock struct forwarded to
+%                    CellResponseModel.computeTrace (commanded SLM defocus
+%                    + tilt terms); empty = 2D behaviour
 %
 %   Returns result struct mirroring suite2p's Fall.mat:
 %     result.F      nCells × T   raw fluorescence (arb. units; baseline 1000)
@@ -36,6 +40,9 @@ BASELINE = 1000;
 if nargin < 6
     calibration = [];
 end
+if nargin < 7
+    stimZInfo = [];
+end
 if ~iscell(cells)
     cells = num2cell(cells);
 end
@@ -53,8 +60,13 @@ result.ops.Lx = LX;
 %   F(i,t) = BASELINE + dff(i,t) * BASELINE so F is always positive
 F = zeros(nCells, T);
 for i = 1:nCells
-    dff       = cells{i}.computeTrace(patternMask, frameTimestamps, ...
-                                       stimOnsetSec, stimDurationSec);
+    if isempty(stimZInfo)
+        dff = cells{i}.computeTrace(patternMask, frameTimestamps, ...
+                                    stimOnsetSec, stimDurationSec);
+    else
+        dff = cells{i}.computeTrace(patternMask, frameTimestamps, ...
+                                    stimOnsetSec, stimDurationSec, stimZInfo);
+    end
     F(i, :)   = BASELINE + dff(:)' * BASELINE;
 end
 result.F = F;

@@ -40,9 +40,42 @@ imaging:
   fovSizeUm: 800         # approximate FOV in microns
   simulateLatency: false # set true to add real acquisition pauses
 
+# --- 3D / SLM sections (disabled by default; mirror real.yaml schema) ---
+slm:
+  enabled: false
+  backend: 'mock'            # MockSLM (Meadowlark-shaped simulator)
+  nRows: 1024
+  nCols: 1024
+  pitch_um: 17.0
+  nStates: 256
+  lambda_nm: 1038
+  m_relay: 1.2               # mock value; real rig must measure (%VERIFY)
+  trigger_mode: 'software'
+  settle_s: 0.0
+  uniform_blob_fraction: 0.02
+  calibration_file: ''
+
+objective:
+  name: 'nikon10x045'
+
+etl:
+  n_planes: 3
+  plane_calibration_file: ''
+
+zstage:
+  backend: 'mock'
+  startZUm: 0
+
+threeD:
+  enabled: false
+  dz_bin_um: 10
+  depth_gradient_sign: 1
+  pace_trials: false         # mock: never wall-clock-pace trials
+
 # Fake cells for the all-optical mock pipeline (Phase 1.5).
 # Parsed by tfp.io.loadConfig into a 1×N struct array.
 # Converted to tfp.sim.CellResponseModel objects in the experiment script.
+# Optional per-cell dmdZUm (µm depth) feeds the 3D response chain.
 fakeCells:
   - tag: cell_01
     dmdCol: 400

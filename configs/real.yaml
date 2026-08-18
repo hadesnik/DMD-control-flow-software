@@ -36,6 +36,7 @@ daq:
   analogOutChannels: [0, 3]
   digitalOutChannels:
     - 'port0/line10'   # ScanImage acquisition trigger
+    - 'port0/line8'    # SLM sequence-advance TTL (Meadowlark; was Masato's spare)
   digitalInChannels:
     - 'port0/line1'    # ScanImage frame clock (rising edge = frame acquired)
 
@@ -51,13 +52,20 @@ session:
   dataDir: 'C:\data'
   calibration_file: ''   # fill in after first alignDMDtoCamera run
 
-# Laser modulation (NKT FS-50). Analog output ao3 on the NI PCIe-6323.
+# Laser modulation. FS-50 path is the legacy rig (ao3); the CARBIDE bringup
+# arm uses an external modulator on a TBD analog output — set the channel
+# once the modulator is wired, then run scripts/run_powerMeterSweep.m to
+# calibrate volts -> mW into carbide_calibration_file.
 laser:
   fs50_ao_channel: 'ao3'
   modulation_voltage_max: 5.0
   modulation_voltage_min: 0.0     # 0 V = laser off
   calibration_file: ''
   default_power_mw: 1.0
+  carbide_modulator_ao_channel: ''   # TBD — e.g. 'ao1' when the modulator lands
+  carbide_voltage_max: 5.0
+  carbide_voltage_min: 0.0
+  carbide_calibration_file: ''
 
 # Power meter — Thorlabs PM100D, serial P0004058.
 # Accessed via TLPM_64.dll (vendor/thorlabs/TLPM.m); no config fields needed,
@@ -85,4 +93,85 @@ fakeCells: []
 scanimage:
   streamLiveF: true          # enable real-time F packet polling in waitForCompletion
   nExpectedCells: 10         # pre-allocate liveF_ accumulator rows
-  frameStreamPort: 3043      # same socket as control channel
+  frameStreamPort: 3044      # F-stream socket (3043 is the CONTROL channel;
+                             # this key previously said 3043 "same socket as
+                             # control", contradicting the bridge's 3044
+                             # constant — see docs/PORTS.md)
+
+# --- Meadowlark 1K SLM (remote focusing) — see docs/PORTS.md, slm_pc_setup/ ---
+slm:
+  enabled: false             # flip true once the SLM PC server is up
+  backend: 'remote'          # 'remote' (SLM PC via msocket) | 'mock' | 'dlpc900'
+  host: ''                   # SLM PC address (REQUIRED for backend remote)
+  port: 3046
+  msocketPath: ''
+  nRows: 1024
+  nCols: 1024
+  pitch_um: 17.0
+  nStates: 256
+  lambda_nm: 1038            # measured CARBIDE [CERT], not the 1030 setpoint
+  lut_file: ''               # wavelength LUT on the SLM PC ('' until located)
+  wfc_file: ''               # per-device wavefront map ('' = flat)
+  m_relay: 0.0               # SLM->objective-BFP pupil relay mag. REQUIRED
+                             # when enabled; no handoff key yet (%VERIFY —
+                             # requested as slm_bfp_relay_mag at the f7=300
+                             # regen). The z-calibration fits the true scale.
+  trigger_mode: 'software'   # 'software' until the Blink audit confirms
+                             # this unit's external-trigger sequencing; then 'ttl'
+  trigger_line: 'port0/line8'
+  trigger_pulse_s: 0.0002
+  settle_s: 0.0034           # Meadowlark LC response (handoff §6)
+  uniform_blob_fraction: 0.02
+  calibration_file: ''       # from calibrateSlmDefocus (saveCalibration)
+
+# Objective on the rig — registry names in tfp.optics.objectives.
+objective:
+  name: 'nikon10x045'        # nikon10x045 | olympus20x | nikon16x | avocado10x
+
+# Optotune ETL multi-plane imaging (ScanImage fastZ). The ETL's um scale is
+# NOT trusted — calibrateEtlPlanes puts planes on the MP-285 ruler.
+etl:
+  n_planes: 3
+  plane_calibration_file: '' # from composeZCalibration (saveCalibration)
+
+# Axial ground-truth ruler (Sutter MP-285).
+# DEFAULT (Option A): the rig MP-285 moves the Sutter MOM objective; the
+# sample stays put. A second option (sample-mount) is commented out below.
+zstage:
+  backend: 'relay'           # 'relay' (via imaging-PC si_motor_helper) |
+                             # 'mp285' (serial switch box to this PC) |
+                             # 'manual' | 'mock'
+  host: ''                   # imaging PC address (relay backend)
+  relay_port: 3047
+  serial_port: 'COM5'        # mp285 backend (%VERIFY port + usteps_per_um)
+  usteps_per_um: 25
+  mount: 'objective'         # 'objective' (DEFAULT: stage moves the MOM
+                             # objective) | 'sample' (Option B below).
+                             # Gates commanded XY moves to the sample mount.
+  direction_sign: 1          # +1|-1: which RAW MP-285 z direction is
+                             # "deeper into sample" (the ZStage contract).
+                             # DEPENDS ON THE MOUNT — the two mounts are
+                             # opposite. Bench-check per the sign section of
+                             # docs/mp285-protocol-audit.md.
+  # --- OPTION B (SECOND OPTION — NOT the default) --------------------------
+  # A spare MP-285 on this PC's serial port carries the substage Basler AND
+  # the fluorescent slide as one rigid unit; the objective stays fixed. The
+  # camera then stays focused on the film through every through-focus sweep
+  # (removes a systematic bias in the fitted defocus slope) and calibration
+  # is fully DAQ-PC-local (no si_motor_helper). Its XY axes give fresh film
+  # area / burn-grid tiling — but XY moves translate BOTH lateral affines.
+  # See docs/BRINGUP_GUIDE.md §5 Option B before enabling.
+  # backend: 'mp285'
+  # mount: 'sample'
+  # direction_sign: -1       # %VERIFY on bench — expected opposite of the
+  #                          # objective mount, but confirm, do not assume.
+  # serial_port: 'COM6'      # %VERIFY the spare unit's port
+  # usteps_per_um: 25        # %VERIFY on the spare unit (audit item #1)
+
+# 3D photostimulation mode (exp_3d_ensemble; optional flag on experiments).
+threeD:
+  enabled: false
+  dz_bin_um: 10              # depth-group bin width (um)
+  depth_gradient_sign: 1     # +/-1, resolved on the rig; MAGNITUDE always
+                             # comes from the handoff at runtime
+  pace_trials: true          # real-time pacing of free-run trials

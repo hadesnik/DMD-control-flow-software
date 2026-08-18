@@ -28,7 +28,7 @@ tfp.io.sessionLog(sessionDir, 'session-start', struct( ...
     'experiment', 'exp_axial_ppsf', 'sessionName', char(sessionName)));
 
 [dmd, daq] = makeHardware(config);
-plm        = makePlm(config);
+plm        = makePlm(config, daq);
 cleanupHw  = onCleanup(@() teardownHardware(dmd, daq, plm)); %#ok<NASGU>
 
 aiSE = []; if isfield(config.daq,'aiSingleEndedChannels'), aiSE = config.daq.aiSingleEndedChannels; end
@@ -63,22 +63,47 @@ if isfield(config, 'bringupMode') && config.bringupMode
     end
 end
 
-% Compute PLM patterns once per unique dz; attach patternRef and plmPattern
-% to each trial. Both are needed: DMD fires the lateral stim; PLM shifts focus.
-sys = struct();
-if isfield(config, 'plm') && isfield(config.plm, 'sys')
-    sys = config.plm.sys;
-end
-plmCache = containers.Map('KeyType', 'double', 'ValueType', 'any');
-for k = 1:numel(sequence.trials)
-    tr = sequence.trials(k);
-    dz = tr.metadata.dzUm;
-    if ~isKey(plmCache, dz)
-        plmCache(dz) = plm.computeDefocusPattern(dz, sys);
+% Two modulator styles (see tfp.hardware.PLM):
+%   Sequence-capable (MockSLM / MeadowlarkSLM): masks are prepared ONCE in
+%   unique-dz order on the device (spec-not-pixels — shipping ~1 MB pixel
+%   masks per trial over the SLM-PC link would be slow and wrong); trials
+%   carry only metadata.slmGroupIdx and the Sequencer advances the device.
+%   Legacy pixel devices (MockPLM / DLPC900_PLM): the original per-trial
+%   plmPattern cache.
+usesSequence = plm.supportsDefocusSequence();
+if usesSequence
+    dzSeq = unique(dzUm, 'stable');   % sequence order = first appearance
+    for k = 1:numel(sequence.trials)
+        tr  = sequence.trials(k);
+        dz  = tr.metadata.dzUm;
+        tr.metadata.slmGroupIdx  = find(abs(dzSeq - dz) < 1e-9, 1);
+        tr.metadata.slmDefocusUm = dz;
+        tr.targetSpec.patternRef = tfp.patterns.singleSpot( ...
+            dmd, tr.targetSpec.dmdCoords, radiusPx);
     end
-    tr.targetSpec.plmPattern = plmCache(dz);
-    tr.targetSpec.patternRef = tfp.patterns.singleSpot( ...
-        dmd, tr.targetSpec.dmdCoords, radiusPx);
+    plm.prepareDefocusSequence(dzSeq, tfp.optics.buildDefocusSys(config));
+    slmCfg = struct();
+    if isfield(config, 'slm'), slmCfg = config.slm; end
+    plm.armSequenceTrigger(char(configFieldLocal(slmCfg, 'trigger_mode', 'software')));
+else
+    % Compute PLM patterns once per unique dz; attach patternRef and
+    % plmPattern to each trial. Both are needed: DMD fires the lateral
+    % stim; PLM shifts focus.
+    sys = struct();
+    if isfield(config, 'plm') && isfield(config.plm, 'sys')
+        sys = config.plm.sys;
+    end
+    plmCache = containers.Map('KeyType', 'double', 'ValueType', 'any');
+    for k = 1:numel(sequence.trials)
+        tr = sequence.trials(k);
+        dz = tr.metadata.dzUm;
+        if ~isKey(plmCache, dz)
+            plmCache(dz) = plm.computeDefocusPattern(dz, sys);
+        end
+        tr.targetSpec.plmPattern = plmCache(dz);
+        tr.targetSpec.patternRef = tfp.patterns.singleSpot( ...
+            dmd, tr.targetSpec.dmdCoords, radiusPx);
+    end
 end
 
 % Build mock ScanImage bridge from fakeCells if defined in config.
@@ -92,7 +117,12 @@ if isfield(config, 'fakeCells') && ~isempty(config.fakeCells)
     siBridge = tfp.hardware.MockScanImageBridge(cells, siCfg);
 end
 
-sequencerOpts.plm = plm;
+if usesSequence
+    sequencerOpts.slm = plm;
+else
+    sequencerOpts.plm = plm;
+end
+sequencerOpts.config = config;
 if ~isempty(siBridge)
     sequencerOpts.siBridge = siBridge;
 end
@@ -156,13 +186,34 @@ if strcmp(lower(char(config.hardwareKind)), 'mock')
 end
 end
 
-function plm = makePlm(config)
+function plm = makePlm(config, daq)
+%makePlm Resolve the phase modulator for this session.
+%   When config.slm is present and enabled, the makeModulator factory
+%   provides the device (MockSLM / MeadowlarkSLM / TI-PLM backends) — the
+%   old "real PLM hardware is Phase 4" throw is gone. Without an slm
+%   section, the legacy MockPLM path is preserved for the original mock
+%   tests (real hardware now always goes through config.slm.backend).
+slmCfg = struct();
+if isfield(config, 'slm')
+    slmCfg = config.slm;
+end
+if isfield(slmCfg, 'enabled') && logical(slmCfg.enabled)
+    opts = struct();
+    if strcmpi(char(configFieldLocal(slmCfg, 'trigger_mode', 'software')), 'ttl')
+        line   = char(configFieldLocal(slmCfg, 'trigger_line', 'port0/line8'));
+        pulseS = double(configFieldLocal(slmCfg, 'trigger_pulse_s', 2e-4));
+        opts.ttlPulseFcn = @() daq.sendDigitalPulse(line, pulseS);
+    end
+    plm = tfp.hardware.makeModulator(config, opts);
+    return
+end
 switch lower(char(config.hardwareKind))
     case 'mock'
         plm = tfp.hardware.MockPLM();
     case 'real'
-        error('tfp:experiments:exp_axial_ppsf:notImplemented', ...
-            'real PLM hardware is Phase 4.');
+        error('tfp:experiments:exp_axial_ppsf:noModulatorConfig', ...
+            ['Real hardware requires a config.slm section ' ...
+             '(backend remote/dlpc900) — see configs/bringup_3d.yaml.']);
     otherwise
         error('tfp:experiments:exp_axial_ppsf:badKind', ...
             'unknown hardwareKind: %s.', config.hardwareKind);
@@ -172,6 +223,14 @@ if isfield(config, 'plm')
     plmConfig = config.plm;
 end
 plm.initialize(plmConfig);
+end
+
+function value = configFieldLocal(s, name, default)
+if isstruct(s) && isfield(s, name)
+    value = s.(name);
+else
+    value = default;
+end
 end
 
 function teardownHardware(dmd, daq, plm)

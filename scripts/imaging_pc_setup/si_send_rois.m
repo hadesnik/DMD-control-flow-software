@@ -56,10 +56,59 @@ for k = 1:nROIs
     centroids(k, :) = rois(k).scanfields(1).centerXY;
 end
 
-fprintf('Extracted %d ROI centroids (scan-field coords):\n', nROIs);
-fprintf('  %5s  %10s  %10s\n', 'ROI', 'x', 'y');
-for k = 1:nROIs
-    fprintf('  %5d  %10.4f  %10.4f\n', k, centroids(k,1), centroids(k,2));
+% ------------------------------------------------------------------------
+% 3D mode: when ScanImage is configured for a multi-plane (ETL) stack, tag
+% each ROI with the fastZ plane it was drawn on and send Nx4
+% [x y planeIdx zUm]. Single-plane sessions keep the legacy Nx2 payload —
+% receiveROIsFromScanImage / tfp.io.parseRoiPayload accept both widths.
+% zUm here is ScanImage's (ETL-uncalibrated) z value; the scope PC maps
+% planeIdx onto physical um via the composed z-calibration
+% (tfp.calibration.composeZCalibration), so an uncalibrated zUm is fine.
+% ------------------------------------------------------------------------
+nSlices = 1;
+try
+    nSlices = hSI.hStackManager.numSlices;   % %VERIFY property on SI2019bR0
+catch
+end
+
+if nSlices > 1
+    % Session plane list. %VERIFY on SI2019bR0: hStackManager.zs carries the
+    % per-slice z values for arbitrary-z / fastZ stacks.
+    zsList = [];
+    try
+        zsList = hSI.hStackManager.zs;
+    catch
+    end
+    payload = zeros(nROIs, 4);
+    payload(:, 1:2) = centroids;
+    for k = 1:nROIs
+        % %VERIFY: Roi.zs is the z (or z list) the roi's scanfields sit at.
+        roiZ = NaN;
+        try
+            roiZ = rois(k).zs(1);
+        catch
+        end
+        if ~isempty(zsList) && isfinite(roiZ)
+            [~, planeIdx] = min(abs(double(zsList) - double(roiZ)));
+        else
+            planeIdx = NaN;
+        end
+        payload(k, 3) = planeIdx;
+        payload(k, 4) = roiZ;
+    end
+    fprintf('Extracted %d ROI centroids (3D: %d planes):\n', nROIs, nSlices);
+    fprintf('  %5s  %10s  %10s  %6s  %10s\n', 'ROI', 'x', 'y', 'plane', 'z (SI)');
+    for k = 1:nROIs
+        fprintf('  %5d  %10.4f  %10.4f  %6g  %10.4f\n', k, ...
+            payload(k,1), payload(k,2), payload(k,3), payload(k,4));
+    end
+else
+    payload = centroids;
+    fprintf('Extracted %d ROI centroids (scan-field coords):\n', nROIs);
+    fprintf('  %5s  %10s  %10s\n', 'ROI', 'x', 'y');
+    for k = 1:nROIs
+        fprintf('  %5d  %10.4f  %10.4f\n', k, centroids(k,1), centroids(k,2));
+    end
 end
 
 % =========================================================================
@@ -71,10 +120,10 @@ fprintf('(Scope PC must already be running run_ensemble_activation)\n');
 
 try
     sock = msconnect(SCOPE_PC_IP, ROI_PORT);
-    % Send a bare Nx2 double, NOT a struct: this msocket build does not
+    % Send a bare Nx2/Nx4 double, NOT a struct: this msocket build does not
     % round-trip structs reliably on this path (a struct payload arrived as a
     % plain double on the scope PC). receiveROIsFromScanImage accepts the matrix.
-    mssend(sock, centroids);
+    mssend(sock, payload);
     % Wait for the scope PC to acknowledge receipt BEFORE closing. Closing
     % immediately after mssend races the receiver — msocket drops un-read data
     % on an early client close, so the scope would see an empty payload.

@@ -36,7 +36,8 @@ classdef test_exp_axial_ppsf_mock < matlab.unittest.TestCase
             config.plm.pitchX_um     = 16.2;
             config.plm.pitchY_um     = 10.8;
             config.plm.nPhaseStates  = 32;
-            config.plm.lambda_nm     = 1030;
+            % 1038 = measured CARBIDE wavelength [CERT], not the setpoint
+            config.plm.lambda_nm     = 1038;
             config.plm.loadLatencyMs = 0;
 
             config.paths.dataDir       = tempDataDir;

@@ -98,6 +98,10 @@ classdef Sequencer < handle
         daq
         siBridge
         plm              % optional PLM for per-trial defocus (axial PPSF)
+        slm              % optional sequence-capable modulator (3D mode):
+                         % prepared + armed by the experiment; the Sequencer
+                         % advances it on depth-group changes (dedupe +
+                         % settle live in advanceToIndex)
         sequence
         log              % path to session directory
         sessionStartTime % datetime set at the top of run()
@@ -119,6 +123,13 @@ classdef Sequencer < handle
         aoChannelIdx_      % AO channel index used by queueClockedAO
         haveStartAcqLine_  % logical — true iff startAcqLine_ is configured on the DAQ
         runtimeStash_      % cell array of per-trial scratch structs (aligned by index)
+
+        % 3D mode state
+        threeD_            % logical: config.threeD.enabled
+        nPlanes_           % config.etl.n_planes (free-run volume shape)
+        paceTrials_        % logical: real-time pause per trial in free-run mode
+        currentSlmGroup_   % last SLM group advanced to (0 = none)
+        gradientSign_      % config.threeD.depth_gradient_sign
     end
 
     methods
@@ -140,6 +151,12 @@ classdef Sequencer < handle
             else
                 obj.plm = [];
             end
+            if isfield(opts, 'slm')
+                obj.slm = opts.slm;
+            else
+                obj.slm = [];
+            end
+            obj.currentSlmGroup_ = 0;
             if isfield(opts, 'nStreamCells')
                 obj.nStreamCells_ = opts.nStreamCells;
             else
@@ -198,6 +215,12 @@ classdef Sequencer < handle
             obj.frameRate_       = double(configField(cfg, 'imaging.frameRate', 30));
             obj.aoChannelIdx_    = double(configField(cfg, 'daq.aoChannelIdx',   1));
 
+            % 3D (free-run) mode wiring
+            obj.threeD_       = logical(configField(cfg, 'threeD.enabled', false));
+            obj.nPlanes_      = double(configField(cfg, 'etl.n_planes', 3));
+            obj.paceTrials_   = logical(configField(cfg, 'threeD.pace_trials', true));
+            obj.gradientSign_ = double(configField(cfg, 'threeD.depth_gradient_sign', 1));
+
             % --- Build sessionCfg ---
             obj.sessionCfg_ = obj.buildSessionCfg();
 
@@ -216,8 +239,17 @@ classdef Sequencer < handle
             % TIFF paths are deterministic (see SYNC_EPISODIC.md §9.2).
             % MUST be called before any armForExternalTrigger; the mock
             % bridge enforces sessionActive_ as a precondition.
+            %
+            % 3D mode instead opens a FREE-RUN session: ScanImage runs
+            % continuous nPlanes ETL volumes for the whole session, no
+            % per-trial arming/TIFFs; frames are plane-tagged post-hoc
+            % (alignTrialsFreeRun).
             if ~isempty(obj.siBridge)
-                bridgeSessionInfo = obj.siBridge.beginSession(struct());
+                if obj.threeD_
+                    bridgeSessionInfo = obj.siBridge.beginFreeRunSession(obj.nPlanes_);
+                else
+                    bridgeSessionInfo = obj.siBridge.beginSession(struct());
+                end
                 obj.sessionInfo_.bridgeSession = bridgeSessionInfo;
             end
 
@@ -364,6 +396,7 @@ classdef Sequencer < handle
             try, obj.ensureSessionStopped(); catch, end %#ok<CTCH>
             try, obj.dmd.cleanup(); catch, end %#ok<CTCH>
             try, if ~isempty(obj.plm), obj.plm.cleanup(); end; catch, end %#ok<CTCH>
+            try, if ~isempty(obj.slm), obj.slm.cleanup(); end; catch, end %#ok<CTCH>
             tfp.io.sessionLog(obj.log, 'abort', []);
         end
     end
@@ -375,6 +408,23 @@ classdef Sequencer < handle
             %   See class-doc step list. trialIdxInSeq is the position of
             %   `trial` inside obj.sequence.trials and is used to index
             %   into runtimeStash_ for the end-of-session AI slice.
+
+            % --- (Optional) SLM depth-group advance (3D mode) ---------
+            % Consecutive trials in the same group skip the advance (and
+            % its 3.4 ms LC settle) entirely; advanceToIndex also dedupes
+            % internally, but tracking here keeps the session log honest.
+            if ~isempty(obj.slm) && isstruct(trial.metadata) && ...
+                    isfield(trial.metadata, 'slmGroupIdx')
+                g = trial.metadata.slmGroupIdx;
+                if g ~= obj.currentSlmGroup_
+                    obj.slm.advanceToIndex(g);
+                    obj.currentSlmGroup_ = g;
+                    tfp.io.sessionLog(obj.log, 'slm-advance', struct( ...
+                        'trialIdx', trial.trialIdx, 'groupIdx', g, ...
+                        'dzUm', trial.metadata.slmDefocusUm, ...
+                        'settleS', obj.slm.settleTimeS()));
+                end
+            end
 
             % --- (Optional) Load PLM defocus for axial PPSF -----------
             if ~isempty(obj.plm) && isfield(trial.targetSpec, 'plmPattern') && ...
@@ -402,10 +452,28 @@ classdef Sequencer < handle
             % --- 3) Arm ScanImage for the episodic capture (S2) -----
             % nFrames derives from config.imaging.frameRate + 2 frames of
             % cushion (one for the trigger/exposure latency, one tail).
+            % In 3D free-run mode there is NO per-trial arming — SI is
+            % already running continuous volumes; the bridge just gets the
+            % pattern/defocus context (mock synthesis + logs). nFrames in
+            % free-run counts VOLUME slices over the trial window
+            % (frameRate is the per-frame rate; every plane produces a
+            % frame, so the count is unchanged — only the interpretation).
             nFrames = max(1, uint32(ceil(trial.duration_s * obj.frameRate_) + 2));
             if ~isempty(obj.siBridge)
                 obj.siBridge.setPendingPower(trial.powerMw);
-                obj.siBridge.armForExternalTrigger(double(nFrames));
+                if ~obj.threeD_
+                    obj.siBridge.armForExternalTrigger(double(nFrames));
+                else
+                    obj.siBridge.noteTrialFrames(double(nFrames));
+                    if isstruct(trial.metadata) && ...
+                            isfield(trial.metadata, 'slmDefocusUm')
+                        caps = tfp.util.readHandoffConstants();
+                        obj.siBridge.setActiveDefocus( ...
+                            trial.metadata.slmDefocusUm, struct( ...
+                            'gradientUmPerUm', caps.depth_gradient_um_per_um, ...
+                            'gradientSign',    obj.gradientSign_));
+                    end
+                end
                 obj.siBridge.setActivePattern(patternMask, ...
                     trial.preStim_s, trial.pulseTrain.pulseWidth_s);
                 if obj.siBridge.supportsStreaming()
@@ -438,6 +506,12 @@ classdef Sequencer < handle
             % TODO C2 / T-EP-3d: trial.powerMw -> volts via
             % tfp.patterns.powerLUT before queueing. For now treat
             % powerMw as a direct voltage proxy.
+            %
+            % SLM LC safety (handoff §7b, live): near-uniform patterns are
+            % power-capped when the SLM is in the path. No-op when
+            % config.slm.enabled is false.
+            tfp.util.assertSlmPowerSafe(trial.targetSpec.patternRef, ...
+                trial.powerMw, obj.config_struct);
             stimWaveform   = obj.buildStimWaveform(trial);
             onsetSample    = obj.daq.queueClockedAO(stimWaveform, ...
                                                     obj.sampleRate_, 'immediate');
@@ -463,8 +537,19 @@ classdef Sequencer < handle
             % call then returns the synth struct on the mock and [] on
             % the real bridge with no isa() check (resolves S3).
             if ~isempty(obj.siBridge)
-                obj.siBridge.waitForCompletion(trial.duration_s * 1.5);
-                tiffPath = obj.siBridge.getLastTiffPath();
+                if obj.threeD_
+                    % Free-run: no per-trial completion event or TIFF — the
+                    % session is one long acquisition. Pace real time so
+                    % trials don't overlap on the rig (mock tests disable
+                    % via threeD.pace_trials = false).
+                    if obj.paceTrials_
+                        pause(trial.preStim_s + trial.duration_s + trial.postStim_s);
+                    end
+                    tiffPath = '';
+                else
+                    obj.siBridge.waitForCompletion(trial.duration_s * 1.5);
+                    tiffPath = obj.siBridge.getLastTiffPath();
+                end
                 try
                     [~, ~] = obj.siBridge.getLastAcquisition();   %#ok<NCOMMA>
                 catch ME
@@ -490,6 +575,13 @@ classdef Sequencer < handle
                 stash.plmLog = obj.plm.getLog();
             else
                 stash.plmLog = [];
+            end
+            if ~isempty(obj.slm)
+                stash.slmLog      = obj.slm.getLog();
+                stash.slmGroupIdx = obj.currentSlmGroup_;
+            else
+                stash.slmLog      = [];
+                stash.slmGroupIdx = NaN;
             end
             stash.commandedPowerMw   = trial.powerMw;
             stash.completedAt        = datetime('now');
@@ -530,6 +622,8 @@ classdef Sequencer < handle
             data.dmdLog            = stash.dmdLog;
             data.daqLog            = stash.daqLog;
             data.plmLog            = stash.plmLog;
+            data.slmLog            = stash.slmLog;
+            data.slmGroupIdx       = stash.slmGroupIdx;
             data.trialIdx          = trial.trialIdx;
             data.commandedPowerMw  = stash.commandedPowerMw;
             data.completedAt       = stash.completedAt;
@@ -643,6 +737,24 @@ classdef Sequencer < handle
             catch ME
                 warning('tfp:trial:Sequencer:decodeFrameClockFailed', ...
                     'decodeFrameClock failed: %s', ME.message);
+                return
+            end
+
+            % 3D free-run sessions align differently: one long acquisition,
+            % frames plane-tagged from the clock train, no per-trial TIFF
+            % cross-check. See tfp.io.alignTrialsFreeRun.
+            if obj.threeD_
+                try
+                    [perTrialAlignment, perFrame, alignReport] = ...
+                        tfp.io.alignTrialsFreeRun(trials, frameStartSamples, ...
+                            sr, obj.nPlanes_);
+                catch ME
+                    warning('tfp:trial:Sequencer:alignTrialsFailed', ...
+                        'alignTrialsFreeRun failed: %s', ME.message);
+                    alignReport = struct('fatal', true, ...
+                        'fatalReason', string(sprintf('%s: %s', ...
+                            ME.identifier, ME.message)));
+                end
                 return
             end
 

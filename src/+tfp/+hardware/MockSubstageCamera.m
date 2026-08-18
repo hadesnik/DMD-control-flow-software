@@ -14,7 +14,23 @@ classdef MockSubstageCamera < tfp.hardware.SubstageCamera
     %     .truthAffine    — 3x3 affine, DMD [col,row] → camera [x,y] (optional;
     %                       required if dmd is set)
     %
-    %   See also tfp.calibration.alignDMDtoCamera.
+    %   Defocus-blur model (z-calibration mock; all optional — with none of
+    %   these set, behaviour is identical to the pre-3D camera):
+    %     .slm          — handle with getCurrentDefocusUm() (MockSLM)
+    %     .zstage       — tfp.hardware.ZStage handle (objective z, um)
+    %     .slmUmPerCmd  — TRUTH slope: um of focal shift per commanded
+    %                     defocus um (default 1.0). calibrateSlmDefocus
+    %                     must recover this.
+    %     .filmZUm      — z of the fluorescent film (default 0)
+    %     .zRUm         — blur "Rayleigh range" (default 10): the spot
+    %                     sigma grows as sigma0*sqrt(1+(dEff/zR)^2) with
+    %                     dEff = slmUmPerCmd*dzCmd - (zStage - filmZUm),
+    %                     so best focus sits at zStage = filmZUm +
+    %                     slmUmPerCmd*dzCmd. Peak drops as 1/(1+(dEff/zR)^2)
+    %                     (energy conservation).
+    %
+    %   See also tfp.calibration.alignDMDtoCamera,
+    %   tfp.calibration.throughFocusSweep.
 
     properties (SetAccess = protected)
         nRows         = []
@@ -29,6 +45,12 @@ classdef MockSubstageCamera < tfp.hardware.SubstageCamera
         spotSigmaPx_  = 4
         scanRect_     = []   % [x1 y1 width height] 1-indexed px; renders scan rectangle
         lastFrame_    = []
+        % Defocus-blur model refs (z-calibration mock; [] = disabled)
+        slm_          = []
+        zstage_       = []
+        slmUmPerCmd_  = 1.0
+        filmZUm_      = 0
+        zRUm_         = 10
         log_          = struct('timestamp', {}, 'eventType', {}, 'payload', {})
     end
 
@@ -47,6 +69,11 @@ classdef MockSubstageCamera < tfp.hardware.SubstageCamera
             if isfield(config, 'dmd')
                 obj.dmd_ = config.dmd;
             end
+            if isfield(config, 'slm'),    obj.slm_    = config.slm;    end
+            if isfield(config, 'zstage'), obj.zstage_ = config.zstage; end
+            obj.slmUmPerCmd_ = configField(config, 'slmUmPerCmd', 1.0);
+            obj.filmZUm_     = configField(config, 'filmZUm',     0);
+            obj.zRUm_        = configField(config, 'zRUm',        10);
             if isfield(config, 'scanRect')
                 r = config.scanRect;
                 if ~isnumeric(r) || numel(r) ~= 4 || any(r < 1)
@@ -135,6 +162,8 @@ classdef MockSubstageCamera < tfp.hardware.SubstageCamera
             obj.truthAffine_  = [];
             obj.scanRect_     = [];
             obj.lastFrame_    = [];
+            obj.slm_          = [];
+            obj.zstage_       = [];
             obj.logEvent('cleanup', []);
         end
 
@@ -146,8 +175,28 @@ classdef MockSubstageCamera < tfp.hardware.SubstageCamera
     methods (Access = private)
         function spot = gaussianSpot(obj, cx, cy)
             [cols, rows] = meshgrid(1:obj.nCols, 1:obj.nRows);
-            s   = obj.spotSigmaPx_;
-            spot = exp(-((cols - cx).^2 + (rows - cy).^2) / (2 * s^2));
+            % Defocus blur: widen sigma + drop peak by the effective
+            % defocus between the excitation focus and the film.
+            dEff = obj.effectiveDefocusUm();
+            grow = 1 + (dEff / obj.zRUm_)^2;
+            s    = obj.spotSigmaPx_ * sqrt(grow);
+            amp  = 1 / grow;
+            spot = amp * exp(-((cols - cx).^2 + (rows - cy).^2) / (2 * s^2));
+        end
+
+        function dEff = effectiveDefocusUm(obj)
+            %effectiveDefocusUm Excitation focus minus film plane (um).
+            dEff = 0;
+            dzCmd = 0;
+            if ~isempty(obj.slm_)
+                dzCmd = obj.slm_.getCurrentDefocusUm();
+                if isnan(dzCmd), dzCmd = 0; end
+            end
+            zPos = obj.filmZUm_;
+            if ~isempty(obj.zstage_)
+                zPos = obj.zstage_.getPositionUm();
+            end
+            dEff = obj.slmUmPerCmd_ * dzCmd - (zPos - obj.filmZUm_);
         end
 
         function logEvent(obj, eventType, payload)

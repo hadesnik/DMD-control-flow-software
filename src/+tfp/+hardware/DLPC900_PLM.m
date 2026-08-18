@@ -1,5 +1,5 @@
 classdef DLPC900_PLM < tfp.hardware.PLM
-%DLPC900_PLM Real driver for the TI NIR PLM (904×800, 5-bit, 1030 nm).
+%DLPC900_PLM Real driver for the TI NIR PLM (904×800, 5-bit, NIR ~1 µm).
 %   Controller: dual DLPC900 (same chip as DLP6500 LightCrafter; confirmed
 %   by TI FAE 2026-05-21). Pixel pitch is rectangular: 16.2 µm (x/columns)
 %   × 10.8 µm (y/rows). 32 phase states (5-bit); max piston displacement =
@@ -43,7 +43,13 @@ classdef DLPC900_PLM < tfp.hardware.PLM
         pitchX_um     = 16.2
         pitchY_um     = 10.8
         nPhaseStates  = 32
-        lambda_nm     = 1030
+        % 1038 nm is the CARBIDE's MEASURED wavelength [factory test
+        % certificate, s/n C264570] — see docs/optics_handoff.md. The old
+        % default of 1030 was the front-panel SETPOINT, real on no build:
+        % the current rig's FS-50 runs ~1040 nm (run_powerMeterSweep.m).
+        % Pattern libraries flashed at 1030 are ~0.8% off in defocus scale;
+        % regenerate them. test_optics_handoff_constants pins this value.
+        lambda_nm     = 1038
         isInitialized = false
     end
 
