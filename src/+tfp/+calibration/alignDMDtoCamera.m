@@ -21,7 +21,9 @@ function calib = alignDMDtoCamera(dmd, camera, options)
 %              initialised.
 %     options - optional struct:
 %       .nGridPoints  — grid points per axis, must be odd (default 5)
-%       .gridSpacing  — spacing in DMD pixels (default 100)
+%       .gridSpacing  — spacing in DMD pixels. Default is DERIVED so the
+%                       grid's CORNER spots stay inside the illuminated
+%                       patch (see below); ~77 px for a O463 px patch.
 %       .spotRadius   — spot radius in DMD pixels (default 8)
 %       .exposureS    — pause after each advanceToPattern before snap (default 0.1)
 %       .showFigure   — show diagnostic figure after fit (default true)
@@ -52,8 +54,31 @@ if nargin < 3
 end
 
 nGridPoints = configField(options, 'nGridPoints', 5);
-gridSpacing = configField(options, 'gridSpacing', 100);
 spotRadius  = configField(options, 'spotRadius',  8);
+
+% Grid spacing is DERIVED from the illuminated patch, not a fixed 100 px.
+% The grid is square but the patch is a disc, so the CORNER points set the
+% limit: they sit at half*spacing*sqrt(2) from centre. With the old fixed
+% 100 px default and a O463 px patch, the four corners landed 59 px outside
+% it -- in the Gaussian tail or unlit -- so the affine was being fitted
+% against spots that were dim, distorted, or missing at exactly the field
+% edge where the fit needs them most. Deriving it means the next handoff
+% regeneration cannot silently reintroduce that.
+half = floor(nGridPoints / 2);
+defaultSpacing = 100;
+if half > 0
+    try
+        hc = tfp.util.readHandoffConstants();
+        patchR = double(hc.patch_diameter_px) / 2;
+        % Keep the whole spot inside, with a few px of margin for centroiding.
+        defaultSpacing = floor((patchR - spotRadius - 5) / (half * sqrt(2)));
+        defaultSpacing = max(10, defaultSpacing);
+    catch
+        % No handoff (bare checkout / mock test): keep the historical value.
+        defaultSpacing = 100;
+    end
+end
+gridSpacing = configField(options, 'gridSpacing', defaultSpacing);
 exposureS   = configField(options, 'exposureS',   0.1);
 showFigure  = logical(configField(options, 'showFigure', true));
 umPerPixel  = configField(options, 'umPerPixel',  1.56);
