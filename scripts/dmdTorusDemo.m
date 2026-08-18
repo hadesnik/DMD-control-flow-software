@@ -39,7 +39,7 @@ function dmdTorusDemo(mode, fps, sizePx, tiltDeg)
 
 if nargin < 1 || isempty(mode),    mode    = 'project'; end
 if nargin < 2 || isempty(fps),     fps     = 20;   end
-if nargin < 3 || isempty(sizePx),  sizePx  = 340;  end
+if nargin < 3 || isempty(sizePx),  sizePx  = 440;  end
 if nargin < 4 || isempty(tiltDeg), tiltDeg = -45;  end
 
 N_FRAMES = 24;
@@ -222,6 +222,16 @@ bayer = [ 0  8  2 10
 
 frames = false(H, W, nFrames);
 
+% Clip to the illuminated patch: mirrors outside it are dark downstream and
+% throw stray light into unanalysed field angles (handoff section 4).
+try
+    patchR = double(tfp.util.readHandoffConstants().patch_diameter_px) / 2;
+catch
+    patchR = 231.5;   % O463 px, handoff rev 4
+end
+[PX, PY] = meshgrid(1:W, 1:H);
+inPatch = hypot(PX - (W+1)/2, PY - (H+1)/2) <= patchR;
+
 for k = 1:nFrames
     % Two tumble axes at 1 and 2 cycles per loop -- both integer, so the
     % animation closes seamlessly when AlpProjStartCont wraps the sequence.
@@ -260,7 +270,7 @@ for k = 1:nFrames
     % 4x4 ordered dither -- coarse on purpose. A finer kernel would carry more
     % tone but is the first thing lost to blur downstream of the relay.
     thr = repmat(bayer, ceil(H/4), ceil(W/4));
-    frames(:,:,k) = grey > thr(1:H, 1:W);
+    frames(:,:,k) = (grey > thr(1:H, 1:W)) & inPatch;
 end
 end
 

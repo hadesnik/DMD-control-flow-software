@@ -12,15 +12,34 @@ if nargin < 3, secondsPerPattern = 0.2; end
 
 [DLL_PATH, HEADER_PATH, LIB_ALIAS] = alpPaths();
 
-% DLP7000 pixel scale: 13.68 µm pitch, ~40× optical demag → 0.342 µm/px.
-% Central 6×6 mm active region: 6 mm / 13.68 µm/px = 439 px half = 219 px.
-% 150 µm effective FOV → 0.342 µm/px → 10 µm cell body = 15 px radius.
-% SPOT_RADIUS and ROI_HALF_PX need re-verification once optical path is measured.
-SPOT_RADIUS = 15;    % pixels — ~5 µm radius at 0.342 µm/px (10 µm cell body)
-ROI_HALF_PX = 219;   % pixels — half of 6 mm central region at 13.68 µm/px
+% Geometry comes from docs/optics_handoff.md at runtime. The figures hard-coded
+% here before were DLP7000 numbers on a superseded path (13.68 um pitch,
+% 0.342 um/px, a 6x6 mm SQUARE ROI) and were wrong on all three counts for the
+% DLP650LNIR merged arm.
+%
+% The patch is a DISC, not a square: handoff section 4 is explicit that a square
+% presents sqrt(2) of its side to the grating and the SLM fill, and its corners
+% sit where the Gaussian is dimmest. Spots are placed by radius below.
+CELL_RADIUS_UM = 5;    % 10 um soma
+try
+    hc          = tfp.util.readHandoffConstants();
+    PATCH_R_PX  = double(hc.patch_diameter_px) / 2;
+    umPerPx     = mean([hc.um_per_px_groove, hc.um_per_px_disp]);
+    constSrc    = sprintf('handoff rev %g', hc.handoff_rev);
+catch
+    PATCH_R_PX  = 231.5;   % O463 px, handoff rev 4
+    umPerPx     = 2.4469;  % mean of 2.3040 / 2.5897
+    constSrc    = 'built-in fallback (src/ not on path)';
+end
+% ~2 px, not the old 15: this arm trades resolution for a 1067x1199 um field,
+% so one DMD pixel is ~2.4 um at the sample and a soma is only ~4 px across.
+SPOT_RADIUS = max(2, round(CELL_RADIUS_UM / umPerPx));
 
 rng('shuffle');     % different pattern each run
-cleanup = onCleanup(@() doCleanup(LIB_ALIAS));
+% Ids land in a handle container so the cleanup closure sees them. See
+% alpCleanup for why the order there matters.
+st = containers.Map({'devId','seqId'}, {[], []});
+cleanup = onCleanup(@() alpCleanup(LIB_ALIAS, st));
 
 if ~libisloaded(LIB_ALIAS)
     loadlibrary(DLL_PATH, HEADER_PATH, 'alias', LIB_ALIAS);
@@ -30,30 +49,32 @@ devIdPtr = libpointer('uint32Ptr', uint32(0));
 ret = calllib(LIB_ALIAS, 'AlpDevAlloc', int32(0), int32(0), devIdPtr);
 if ret ~= int32(0), error('AlpDevAlloc failed: %d', ret); end
 devId = devIdPtr.Value;
+st('devId') = devId;
 
 dimPtr = libpointer('int32Ptr', int32(0));
 calllib(LIB_ALIAS, 'AlpDevInquire', devId, int32(2058), dimPtr); W = double(dimPtr.Value);
 calllib(LIB_ALIAS, 'AlpDevInquire', devId, int32(2057), dimPtr); H = double(dimPtr.Value);
 fprintf('DMD: %d x %d  |  %d patterns  |  %d spots each  |  %.1f s/pattern\n', ...
     W, H, nPatterns, nSpotsPerPattern, secondsPerPattern);
-fprintf('Active region: central %d x %d px (6 x 6 mm)  |  spot radius: %d px (~%.0f µm)\n', ...
-    2*ROI_HALF_PX, 2*ROI_HALF_PX, SPOT_RADIUS, SPOT_RADIUS * 0.342);
+fprintf('Patch: O%.0f px disc  |  spot radius %d px (~%.1f um)  [%s]\n', ...
+    2*PATCH_R_PX, SPOT_RADIUS, SPOT_RADIUS * umPerPx, constSrc);
 
-% Build patterns — spots placed only within central 6×6 mm ROI.
+% Spot centres are drawn inside the patch DISC, with the spot's own radius held
+% back from the edge so no lit mirror crosses it.
 cxC = round(W/2);
 cyC = round(H/2);
-cxMin = cxC - ROI_HALF_PX + SPOT_RADIUS + 1;
-cxMax = cxC + ROI_HALF_PX - SPOT_RADIUS;
-cyMin = cyC - ROI_HALF_PX + SPOT_RADIUS + 1;
-cyMax = cyC + ROI_HALF_PX - SPOT_RADIUS;
+placeR = max(1, PATCH_R_PX - SPOT_RADIUS);
 
 [XX, YY] = meshgrid(1:W, 1:H);
 allData  = uint8([]);
 fprintf('\nPatterns:\n');
 for p = 1:nPatterns
     img = zeros(H, W);
-    cx  = randi([cxMin, cxMax], 1, nSpotsPerPattern);
-    cy  = randi([cyMin, cyMax], 1, nSpotsPerPattern);
+    % Uniform over the disc: sqrt() on the radius, else points bunch at centre.
+    ang = 2*pi*rand(1, nSpotsPerPattern);
+    rad = placeR * sqrt(rand(1, nSpotsPerPattern));
+    cx  = round(cxC + rad .* cos(ang));
+    cy  = round(cyC + rad .* sin(ang));
     for s = 1:nSpotsPerPattern
         img = img | (sqrt((XX-cx(s)).^2 + (YY-cy(s)).^2) <= SPOT_RADIUS);
     end
@@ -66,6 +87,9 @@ seqIdPtr = libpointer('uint32Ptr', uint32(0));
 ret = calllib(LIB_ALIAS, 'AlpSeqAlloc', devId, int32(1), int32(nPatterns), seqIdPtr);
 if ret ~= int32(0), error('AlpSeqAlloc failed: %d', ret); end
 seqId = seqIdPtr.Value;
+% alpCleanup reads seqId from st; Code Analyzer cannot see the handle held
+% by the cleanup closure, so it flags this as unused.
+st('seqId') = seqId;   %#ok<NASGU>
 
 dataPtr = libpointer('uint8Ptr', allData);
 ret = calllib(LIB_ALIAS, 'AlpSeqPut', devId, seqId, int32(0), int32(nPatterns), dataPtr);
@@ -81,12 +105,7 @@ if ret ~= int32(0), error('AlpProjStartCont failed: %d', ret); end
 fprintf('\nCycling. Press any key to stop...\n');
 pause;
 
-calllib(LIB_ALIAS, 'AlpProjHalt', devId);
-calllib(LIB_ALIAS, 'AlpSeqFree', devId, seqId);
-calllib(LIB_ALIAS, 'AlpDevFree', devId);
+% Halting and freeing is left to alpCleanup, which runs on the normal exit
+% below, on error, and on Ctrl-C alike.
 
-end
-
-function doCleanup(alias)
-    if libisloaded(alias), unloadlibrary(alias); end
 end

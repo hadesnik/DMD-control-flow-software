@@ -211,10 +211,22 @@ function frames = buildRunCycle(W, H, nFrames, figH, thick, tiltDeg)
 
 frames = false(H, W, nFrames);
 
+% Everything is clipped to the illuminated patch. Mirrors outside it are not
+% lit, so drawing there achieves nothing at best and throws stray light into
+% unanalysed field angles at worst (docs/optics_handoff.md section 4).
+try
+    patchR = double(tfp.util.readHandoffConstants().patch_diameter_px) / 2;
+catch
+    patchR = 231.5;   % O463 px, handoff rev 4
+end
+
 % Rotation about the chip centre, applied to every point before rasterising.
 th  = -tiltDeg * pi / 180;
 ccx = (W + 1) / 2;
 ccy = (H + 1) / 2;
+[PX, PY] = meshgrid(1:W, 1:H);
+inPatch = hypot(PX - (W+1)/2, PY - (H+1)/2) <= patchR;
+
 rot = @(p) [ccx + (p(1)-ccx)*cos(th) - (p(2)-ccy)*sin(th), ...
             ccy + (p(1)-ccx)*sin(th) + (p(2)-ccy)*cos(th)];
 
@@ -233,7 +245,9 @@ bob     = 0.035 * figH;
 lean    = 0.06  * figH;                 % shoulders forward of hips
 
 tickSpacing = round(0.42 * figH);
-groundHalf  = round(0.95 * figH);
+% Ground line stops at the patch edge rather than running off into dark
+% mirrors, so it reads as a ground line and not a clipped stub.
+groundHalf  = round(min(0.95 * figH, patchR - thick));
 
 d2r = @(deg) deg * pi / 180;
 
@@ -286,7 +300,7 @@ for k = 1:nFrames
         img = drawSeg(img, rot(elb), rot(hand), thick);
     end
 
-    frames(:,:,k) = img;
+    frames(:,:,k) = img & inPatch;
 end
 end
 
