@@ -6,7 +6,7 @@
 %
 % Usage:
 %   alpSmokeTest43                % 'checker' — visually unmistakable, low fill
-%   alpSmokeTest43('disc')        % Ø324 px disc = the 3.5 mm optical patch
+%   alpSmokeTest43('disc')        % disc at the design patch diameter
 %   alpSmokeTest43('off')         % all mirrors off (dark reference)
 %   alpSmokeTest43('on')          % REFUSED by the 50% cap — see safety note
 %   alpSmokeTest43('checker', 5)  % project 5 s then halt (batch-safe)
@@ -23,8 +23,8 @@
 % 'on' (uniform full-field) is the single worst pattern for this optical
 % train, not merely a dull one. Every 4f relay of a collimated DMD forms a
 % real focus at its pupil; with a uniform ON field the entire pulse lands in
-% one ~29 um spot in air there — 2.9e14 W/cm² at the 400 uJ the CARBIDE
-% delivers at 100 kHz, above where air ionises for a 200 fs pulse.
+% one ~33 um spot in air there, above where air ionises, at the pulse energy
+% the CARBIDE delivers at 100 kHz (1038 nm, 205 fs -- docs/optics_handoff.md).
 %
 % This script therefore enforces the handoff §7 rule: NEVER MORE THAN 50% OF
 % THE CHIP ON. 'on' is refused by that cap, deliberately. Pupil intensity
@@ -69,26 +69,28 @@ ALP_MASTER              = 2301;    % alp.h:322  internal timing
 EXPECT_W = 1280;
 EXPECT_H = 800;
 
-% Usable patch, from docs/dmd_control_handoff.md §4 (build 3.5mm 50/400 250/60).
-% NOT 556 px: that was the Ø6 mm patch of an earlier revision that assumed the
-% periscope demagnified. The periscope order was measured 2026-07-27 and it
-% magnifies, which shrank the patch to Ø3.5 mm. Mirrors outside it are not
-% illuminated, so lighting them achieves nothing.
+% Usable patch and ON-fraction cap are READ FROM THE HANDOFF at runtime, not
+% hard-coded. docs/optics_handoff.md carries a machine-readable
+% ```handoff-constants block that tfp.util.readHandoffConstants() parses, and
+% the optics repo regenerates it whenever the build changes. This script has
+% already been wrong twice by pasting the number of the day -- Ø6 mm/556 px,
+% then Ø3.5 mm/324 px -- so it now asks rather than remembers.
 %
-% STALE 2026-08-06: that handoff revision assumes a Nikon CFI75 LWD 16x/0.8,
-% which is not the objective on the bench. Patch size and both um/px constants
-% move with the objective. Regenerate the handoff before trusting this for
-% calibrated work. It remains fine for a smoke test: undersizing the patch is
-% harmless (fewer mirrors lit, all of them inside any plausible footprint) and
-% it keeps the ON fraction well under the 50% cap either way.
-PATCH_DIAM_PX = 324;               % 3.5 mm / 10.8 um pitch -- PROVISIONAL
-
-% Hard software rule, handoff §7: never load a frame with >50% of the chip ON.
-% Pupil intensity scales as the SQUARE of the ON fraction for a contiguous
-% region, so 50% buys ~4x margin against air breakdown at the operating point.
-MAX_ON_FRACTION = 0.50;
+% Falls back to the current generated values if src/ is not on the path, so
+% the script still runs standalone from scripts/.
+try
+    hc            = tfp.util.readHandoffConstants();
+    PATCH_DIAM_PX = hc.patch_diameter_px;
+    MAX_ON_FRACTION = hc.on_fraction_cap;
+    constSrc      = sprintf('handoff rev %g', hc.handoff_rev);
+catch
+    PATCH_DIAM_PX   = 463;    % Ø5.0 mm at 10.8 um pitch, handoff rev 4
+    MAX_ON_FRACTION = 0.50;   % handoff §7
+    constSrc        = 'built-in fallback (src/ not on path)';
+end
 
 fprintf('=== ALP-4.3 smoke test (%s) ===\n', mode);
+fprintf('patch %g px, ON cap %.0f%%  [%s]\n', PATCH_DIAM_PX, 100*MAX_ON_FRACTION, constSrc);
 
 % MinGW is needed because loadlibrary compiles a thunk from the header. The
 % precompiled proto file is deliberately not used: it mismarshals the void*
@@ -182,7 +184,7 @@ fprintf('Pattern       : %s  (%.2f%% of mirrors ON)\n', label, fillPct);
 if fillPct > 100 * MAX_ON_FRACTION
     error('alpSmokeTest43:onFractionTooHigh', ...
         ['Pattern lights %.1f%% of the chip; the cap is %.0f%% ' ...
-         '(docs/dmd_control_handoff.md §7).\n' ...
+         '(docs/optics_handoff.md §7).\n' ...
          'Pupil intensity scales as the SQUARE of the ON fraction, so a ' ...
          'full-field frame\nsits above air breakdown at the CARBIDE ' ...
          'operating point. If you genuinely need\na solid high-fill target, ' ...
@@ -260,7 +262,7 @@ switch lower(mode)
     case 'disc'
         [X, Y] = meshgrid(1:W, 1:H);
         img = (X - cx).^2 + (Y - cy).^2 <= r^2;
-        label = sprintf('filled disc, O%d px = 3.5 mm patch', patchDiam);
+        label = sprintf('filled disc, O%d px = %.1f mm patch', patchDiam, patchDiam*10.8e-3);
 
     case 'off'
         label = 'all mirrors OFF';

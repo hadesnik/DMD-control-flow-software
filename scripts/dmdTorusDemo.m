@@ -24,7 +24,7 @@
 % SIZING drives both impressiveness and brightness, and the right value
 % depends on where you are looking:
 %   340 (default)  fits inside the illuminated patch -- correct downstream of
-%                  the relay, where only the central Ø324-370 px is passed.
+%                  the relay, where only the central Ø463 px is passed.
 %   700            fills the chip's short axis. Use when viewing the DMD
 %                  directly, where the Gaussian covers all 800 rows. Renders
 %                  slower (sample count scales with size) and lights ~4x the

@@ -7,8 +7,15 @@
 %       The Gaussian illumination falls off with radius, so the last ring still
 %       visibly lit gives the footprint radius as a NUMBER, not an eyeballed
 %       blob edge. Every 5th ring is drawn double-thick as a counting aid.
-%       This is the measurement that should replace the stale Ø3.5 mm / 324 px
-%       figure in docs/dmd_control_handoff.md.
+%       This measures the real footprint against the design patch
+%       (Ø5.0 mm / 463 px, docs/optics_handoff.md §4).
+%
+%       NOTE this pattern deliberately draws rings PAST the design patch edge
+%       (out to 400 px radius vs the patch's 231 px), because finding where
+%       the illumination actually ends is the whole point. For routine
+%       downstream alignment prefer tfp.patterns.alignmentTarget, which stays
+%       inside the patch on purpose -- mirrors outside it throw stray light
+%       into field angles the apertures were never sized for.
 %
 %   DIAGONALS along (1,1) and (1,-1).
 %       The chip is mounted clocked 45°, so the optical axes -- dispersion and

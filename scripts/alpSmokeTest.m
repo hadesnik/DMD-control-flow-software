@@ -2,7 +2,7 @@
 %
 % Version-agnostic: alpPaths() resolves whichever SDK is installed. For the
 % DLP650LNIR on ALP-4.3 prefer alpSmokeTest43, which checks the DMD type and
-% enforces the 50% ON-fraction cap of docs/dmd_control_handoff.md §7. This
+% enforces the 50% ON-fraction cap of docs/optics_handoff.md §7. This
 % script projects a full-field frame with no such check.
 %
 % Confirms the ALP DLL loads, the device allocates, and the DMD responds.

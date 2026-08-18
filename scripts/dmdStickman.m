@@ -2,7 +2,7 @@
 %
 % A demo, not an instrument routine: a 16-frame run cycle uploaded as an ALP
 % sequence and looped continuously with AlpProjStartCont. Fill is ~1-3%, far
-% under the 50% cap of docs/dmd_control_handoff.md §7, so it is safe on either
+% under the 50% cap of docs/optics_handoff.md §7, so it is safe on either
 % laser and needs no override.
 %
 % Usage:
@@ -33,7 +33,7 @@
 % tilted. Tilted preview, level on the bench -- that is right, not a bug.
 %
 % SIZING. Default figure height is 320 px so the whole animation lands inside
-% the illuminated patch (Ø324-370 px depending on which build is on the bench),
+% the illuminated patch (Ø463 px on the merged arm, docs/optics_handoff.md),
 % which is what you want when viewing downstream of the relay. Viewing the chip
 % directly, the Gaussian covers the full 800 px height, so pass figHeightPx up
 % to ~700 for a much bigger figure.

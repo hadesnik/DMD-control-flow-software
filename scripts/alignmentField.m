@@ -2,9 +2,9 @@
 %
 % Lights the whole chip and holds it, so the Gaussian illumination footprint is
 % directly visible. That is the measurement that establishes where the usable
-% patch actually is -- worth doing independently, since the Ø3.5 mm / 324 px
-% figure in docs/dmd_control_handoff.md is known stale (it assumes a Nikon
-% CFI75 16×/0.8 and an Olympus 180 mm tube; neither matches the bench).
+% patch actually is. The handoff's design patch (Ø5.0 mm / 463 px,
+% docs/optics_handoff.md §4) is design intent; what the Gaussian actually
+% lays on the chip is what this measures.
 %
 % Usage:
 %   alignmentField                % all-ON, hold until stopped
@@ -17,7 +17,7 @@
 % ---------------------------------------------------------------------------
 % SAFETY -- this deliberately overrides the 50% ON-fraction cap
 % ---------------------------------------------------------------------------
-% docs/dmd_control_handoff.md §7 caps ON fraction at 50% because a uniform
+% docs/optics_handoff.md §7 caps ON fraction at 50% because a uniform
 % field focuses the whole pulse into one ~29 µm spot in air at the relay pupil.
 % That cap is set by the CARBIDE, and does not bind on an oscillator:
 %
