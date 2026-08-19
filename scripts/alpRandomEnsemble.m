@@ -31,8 +31,13 @@ catch
     umPerPx     = 2.4469;  % mean of 2.3040 / 2.5897
     constSrc    = 'built-in fallback (src/ not on path)';
 end
-% ~2 px, not the old 15: this arm trades resolution for a 1067x1199 um field,
-% so one DMD pixel is ~2.4 um at the sample and a soma is only ~4 px across.
+% ~2 px, not the old 15: this arm trades resolution for a field of order 1 mm,
+% so one DMD pixel is ~2 um at the sample and a soma is only ~4 px across.
+% Both branches above inherit rev 4's f7=250 scale, which the bench has since
+% contradicted (f7 is a 300 -- USER 2026-08-19), so the true figure is 1.2x
+% smaller: ~2.0 um/px over ~889x999 um. SPOT_RADIUS is 2 px either way, so
+% nothing here changes; the numbers correct themselves when the optics repo
+% regenerates. Do not hand-patch them -- see CLAUDE.md "Provisional f7 = 300".
 SPOT_RADIUS = max(2, round(CELL_RADIUS_UM / umPerPx));
 
 rng('shuffle');     % different pattern each run

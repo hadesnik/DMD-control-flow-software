@@ -55,11 +55,15 @@ checks it per trial), laser at minimum power until Phase 4, and the power meter
 
 ### Optics bench (from `docs/optics_handoff.md` — the merged arm)
 
-- [ ] **Lens swaps confirmed installed: f7 = 300 mm, f6 = 80 mm.** ⚠ VERIFY —
-      the committed handoff (rev 4) still describes f7 = 250; the **ratified**
-      build (BOM 2026-08-10) is f7 = 300. Until the optics repo regenerates
-      `docs/optics_handoff.md` (rev ≥ 5), every "expected value" below is
-      provisional and the software warns instead of failing.
+- [x] **f7 = 300 mm — CONFIRMED on the bench [USER 2026-08-19].**
+      The committed handoff (rev 4) still describes f7 = 250, so its lateral
+      scales are **1.2× too large** — known-wrong now, not merely unverified.
+      Expect **1.9200 µm/px groove, 2.1581 dispersion** over an **889 × 999 µm**
+      field; derivation and caveats in CLAUDE.md, "Provisional f7 = 300 scale".
+      Every "expected value" below stays provisional and the software warns
+      instead of failing until the optics repo regenerates (rev ≥ 5).
+- [ ] **f6 = 80 mm confirmed installed** ⚠ VERIFY — the other swap of the pair
+      (bench of record carried 150 mm). Not covered by the f7 confirmation.
 - [ ] **3D-SHOT zero-order block at I1 REMOVED** (handoff §6 — where it sits it
       shadows the middle of the merged field; the SLM zero-order ghost is
       accepted, not blocked).
@@ -75,9 +79,13 @@ checks it per trial), laser at minimum power until Phase 4, and the power meter
 
 - [ ] Repo cloned + up to date on **all three PCs**; `addpath('src')` in each MATLAB.
 - [ ] msocket library on the path of all three (set `msocketPath` config keys).
-- [ ] **Optics repo regen** (owner action): in `TF optics simulator`, ratify the
-      f7=300 build and run `python -m configs.dmd_handoff` → commit the new
-      `docs/optics_handoff.md` here. This flips the sanity bands from warn to live.
+- [ ] **Optics repo regen** (owner action, now unblocked — the f7 seat is
+      confirmed 300 as of 2026-08-19): in `TF optics simulator`, re-pin the
+      default build to f7=300 and run `python -m configs.dmd_handoff` → commit
+      the new `docs/optics_handoff.md` here. This flips the sanity bands from
+      warn to live, and is the only thing that fixes the axial numbers
+      (`axial_fwhm_um`, `walk_um`, `remote_focus_um`), which — unlike the
+      lateral scale — cannot be hand-corrected.
 - [ ] `configs/real.yaml` reviewed: `slm:` (host = SLM PC IP), `zstage:`,
       `etl:`, `threeD:`, `laser.carbide_modulator_ao_channel` (once wired).
 - [ ] Full mock suite green on the DAQ PC (pre-flight):
@@ -509,7 +517,7 @@ should add ≤ ~5 ms per depth change).
 
 | # | Variable | Measured by | Expected (provisional, rev-4 handoff) |
 |---|---|---|---|
-| 1 | Lateral µm/px (both axes) | §4 affine fit | handoff §5 (rescales at f7=300 regen) |
+| 1 | Lateral µm/px (both axes) | §4 affine fit | **1.9200 groove / 2.1581 disp** at the confirmed f7=300 — *not* handoff §5's 2.3040 / 2.5897, which is 1.2× too large |
 | 2 | Volts → mW curve | §3 power sweep | — |
 | 3 | SLM defocus slope (µm/µm) | §6a fit | ≈ 1.0, r² > 0.98 |
 | 4 | ETL plane depths (µm) | §6b | your configured spacing |

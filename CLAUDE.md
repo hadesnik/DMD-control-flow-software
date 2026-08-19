@@ -159,6 +159,45 @@ adds a 180° inversion and every fold adds a flip. This fixes only chip↔bench 
 | Laser | 1038 nm, 205 fs, 100 kHz | `wavelength_nm` / `pulse_fwhm_fs` |
 | Remote focus range | 904 µm | `remote_focus_um` |
 
+## Provisional f7 = 300 scale
+
+**The table above is generated at `f7 = 250`. The bench carries a 300 mm
+[USER 2026-08-19].** Handoff §5's own sensitivity table gives lateral scale `∝ 1/f7`,
+so the published figures are **1.2× too large** on both lateral axes until the optics
+repo regenerates. Re-deriving §5's chain with only f7 changed:
+
+```
+m_i0_s = (f6/f7) * (peri2/peri1) * (EFL_obj/f_tube) = (80/300)*(200/100)*(20.0/200)
+M_gs   = 1 / (m_x * m_i0_s)  where m_x = f_Rb/f_Ra = 200/300
+```
+
+| | handoff rev 4 (`f7 250`) | expected at `f7 300` |
+|---|---|---|
+| M_gs, grating → sample | 23.438 | **28.125** |
+| µm/px groove | 2.3040 | **1.9200** |
+| µm/px dispersion | 2.5897 | **2.1581** |
+| Field at sample | 1067 × 1199 µm | **889 × 999 µm** |
+
+Substituting f7 = 250 into the same expression reproduces the published 2.3040 /
+2.5897 and 1067 × 1199 exactly, which is the check that the re-derivation is sound.
+
+**Trap — do not "restore" the old numbers.** The groove figure lands back on 1.9200,
+which is also what rev 3 carried, so it will look like the pre-rev-4 pair is simply
+correct again. It is not: rev 3's dispersion was 2.2193 on a 1.1559 anamorphic, and
+the anamorphic is now 1.1240, giving 2.1581. Same groove axis, different dispersion
+axis. Take the pair from a regenerated handoff, never from git history.
+
+**Only the lateral scale is hand-correctable.** `axial_fwhm_um`, `walk_um`,
+`depth_gradient_um_per_um` and `remote_focus_um` all depend on the beam geometry that
+f7 also sets, and do not follow a single documented proportionality — they need the
+regeneration, not arithmetic. Unchanged: `patch_diameter_px` (set by the illumination
+Gaussian at the chip, upstream of f7), the 45° rotation, and both safety caps.
+
+**One thing for the regen to check:** the SLM footprint scales with f7, so rev 4's
+12.4 × 7.2 mm at 72% worst-axis fill becomes ≈ 14.9 × 8.6 mm, ≈ 86% of the 17.4 mm
+aperture. Still inside, but close enough that clipping deserves confirming rather
+than assuming.
+
 **Dwell correction is quadratic, not linear** (`dwell_exponent: 2`). Two-photon
 excitation goes as I², so equalising *dose* across the patch needs dwell ∝ 1/I². At
 the patch edge that is (1/0.3604)² = **7.70×**, not the 1.19× an earlier revision
@@ -309,14 +348,19 @@ only.
 - **Safety caps come from it at runtime**: `on_fraction_cap` (0.50) and
   `slm_alignment_cap_mW` (44).
 
-> ⚠️ **Regeneration still owed.** The committed handoff is **rev 4 (2026-08-09)**,
-> built with `f7 = 250` (`build_label: 5.0mm Ra/Rb 300/200 f7 250 f6 80 p1 100`). It
-> predates the ratified **f7 = 300 mm** build (BOM 2026-08-10). Until the optics repo
-> regenerates at rev ≥5, all design-value sanity bands **warn rather than fail** — the
-> calibrations fit the measured truth regardless. *(A separate, older stale banner —
-> about the superseded `docs/dmd_control_handoff.md`, deleted 2026-08-17 and
-> recoverable at `git show 91ed281:docs/dmd_control_handoff.md` — is retired. Nothing
-> should cite that file.)*
+> ⚠️ **Regeneration owed, and now known to be wrong — not merely stale.**
+> **The lens in the f7 seat is a 300 mm — CONFIRMED on the bench [USER 2026-08-19].**
+> The committed handoff is **rev 4 (2026-08-09)**, built with `f7 = 250`
+> (`build_label: 5.0mm Ra/Rb 300/200 f7 250 f6 80 p1 100`), matching the ratified BOM
+> of 2026-08-10 in nothing but date order. **Every lateral scale in handoff §5 is
+> therefore 1.2× too large.** Until the optics repo regenerates at rev ≥5, design-value
+> sanity bands **warn rather than fail**, and the calibrations fit the measured truth
+> regardless — so this is a wrong-expectation bug, not a wrong-pointing bug. See
+> [Provisional f7 = 300 scale](#provisional-f7--300-scale) for what to expect instead.
+> *(A separate, older stale banner — about the superseded
+> `docs/dmd_control_handoff.md`, deleted 2026-08-17 and recoverable at
+> `git show 91ed281:docs/dmd_control_handoff.md` — is retired. Nothing should cite
+> that file.)*
 
 ---
 
@@ -615,7 +659,10 @@ once the audit confirms this unit's external-trigger sequencing.
 
 ## Open questions
 
-- [ ] **Handoff regeneration at rev ≥5** with `f7 = 300 mm` (see the warning above).
+- [ ] **Handoff regeneration at rev ≥5** with `f7 = 300 mm` — the seat is confirmed
+      300 on the bench [USER 2026-08-19], so rev 4's lateral scales are known-wrong by
+      1.2×, not merely unverified. Owner action in the optics repo: re-pin the default
+      build and `python -m configs.dmd_handoff`.
 - [ ] Reconcile `configs/real.yaml`'s isotropic 0.270 µm/px / 278 px with build B's
       anisotropic Ø5.0 mm reality — **on the rig**, not from here.
 - [ ] Resolve the duplicate `alignmentTarget`.
