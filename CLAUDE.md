@@ -1,94 +1,88 @@
 # TF-Photostim: Temporal Focusing Patterned Photostimulation Control Software
 
+MATLAB control software for a 2-photon temporal-focusing patterned photostimulation
+system, supporting a BRAIN Initiative R01 (RFA-NS-25-018). The grant proposes an NIR
+DMD + NIR PLM + temporal focusing engine targeting single-cell resolution across a
+3×3 mm FOV with simultaneous mesoscale 2p calcium imaging. Aim 1 is the
+photostimulation subsystem this software controls.
+
 ## ⚠️ Hard rule: stay inside this repo
 
 **NEVER create, edit, move, or delete any file outside this repository's folder.**
-This machine also holds the lab's shared MATLAB code (e.g. `C:\Users\scanimage\Documents\MATLAB\CodeBase\`, ScanImage, Masato's/others' scripts) and network shares (`P:\`, etc.). Those are **read-only references**: you may open them to understand the real protocol/conventions, but all writes must land under this repo. If a task seems to require changing an external file, stop and ask the user — propose the change for them to apply by hand rather than editing it yourself.
+The rig PC also holds the lab's shared MATLAB code (`C:\Users\scanimage\Documents\MATLAB\CodeBase\`,
+ScanImage, Masato's and others' scripts) and network shares (`P:\`). Those are
+**read-only references**: open them to understand the real protocol, but every write
+lands under this repo. If a task seems to require changing an external file, stop and
+propose the change for the user to apply by hand.
 
-(One designed exception runs in the *inbound* direction: the sibling `TF optics simulator` repo's generator writes exactly one file into this repo, `docs/optics_handoff.md` — see [Optics handoff](#optics-handoff-cross-repo-contract).)
-
-This repository implements MATLAB-based control software for a 2-photon temporal-focusing patterned photostimulation system being built to support a BRAIN Initiative R01 (RFA-NS-25-018). The grant proposes an NIR DMD + NIR PLM + temporal focusing photostimulation engine targeting single-cell resolution across a 3×3 mm FOV with simultaneous mesoscale 2p calcium imaging. Aim 1 of the grant is the photostimulation subsystem this software controls.
+One designed exception, inbound only: the sibling `TF optics simulator` repo writes
+exactly one file into this repo, `docs/optics_handoff.md` — see
+[Optics handoff](#optics-handoff-cross-repo-contract).
 
 ## Status
 
-Phase 1 complete as of 2026-05-17. 32/33 tests passing (`test_calibration_mock` deferred to Phase 2/3). Mock-only end-to-end pipeline working on macOS. Hardware integration deferred to Phase 2/3.
+Phases 1–2 complete; Phase 4 (SLM remote focusing + 3D) landed mock-first 2026-08-15.
+Test suite as of 2026-08-19: **298 passed / 0 failed / 1 filtered, 299 total** (the
+filtered one is `test_optics_handoff_constants/slm_relay_mag_key_is_still_pending`,
+skipped by assumption until the optics repo publishes `slm_bfp_relay_mag`). The NIR
+DLP650LNIR has **not** arrived; bring-up runs on the borrowed visible DLP7000.
 
-## Immediate goal (2-week sprint, by ~June 18)
+**Driving goal — R01 preliminary data.** The hero figure is all-optical patterned
+photostimulation of identified ChRmine+GCaMP cells in windowed mice:
 
-Produce preliminary data for the R01 submission. The hero figure is **all-optical patterned photostimulation of identified ChRmine+GCaMP cells in windowed mice**, demonstrating:
-
-1. Targeted single-cell activation with rapid pattern switching across multiple cells (the DMD's unique advantage over SLMs).
-2. Lateral PPSF — fraction of cells responding as a function of distance from the DMD target.
+1. Targeted single-cell activation with rapid pattern switching across cells (the
+   DMD's advantage over SLMs).
+2. Lateral PPSF — fraction of cells responding vs distance from the DMD target.
 3. Power-response curve at a representative target cell.
-4. (If PLM remote focusing is online in time) axial PPSF. Otherwise pseudo-axial via objective translation, clearly labeled as such.
+4. Axial PPSF if remote focusing is online; otherwise pseudo-axial via objective
+   translation, **clearly labelled as such**.
 
-The NIR DMD (TI DLP650LNIR) is not in hand yet; arrival expected second week of June. **All code must be developed and tested against mock hardware first**, then switched to real hardware via a single backend swap. Mock-first is not a workaround — it's the architecture.
+*(The original "by ~June 18" sprint date has passed — treat the figure list, not the
+date, as current. Update this line when the submission target firms up.)*
 
-## Hardware architecture (target system)
+---
 
-** current optical path**
-- NKT FS-50 with internal fast power modulation, controllable via an analog output from the daq
-- DMD (may be TI or may be from Vialux, visible, coming from Laura Waller's lab, no specs yet)
-- temporal focusing grating 
-- fills back pupil of a Sutter MOM with Olympus 20x 1.0Na water immserion objective
-- this beam path is merged with a PBS after the scan lens
-- scan path is a Spectra Physics MaiTai operated via ScanImage resonant scan galvos
+# Which rig? Three builds, three sets of numbers
 
+**This is the single biggest source of confusion in this project.** Almost every
+scale constant below is build-specific, and quoting one build's number at another is
+how the wrong µm/px reaches a calibration. Always establish which build you are in
+before using any number.
 
-** Future Optical path - don't have this hardware yet** (see `docs/optics_handoff.md` — GENERATED by the optics-model repo, the authority on these numbers):
-- Light Conversion CARBIDE CB3-40W femtosecond laser: **1038 nm measured** [factory test certificate s/n C264570 — the front panel reads its 1030 nm setpoint], 205 fs, 40 W, ~100 kHz rep rate
-- AdlOptica π-Shaper → 6 mm flat-top onto DMD
-- TI DLP650LNIR NIR DMD, 1280×800, 10.8 µm pitch, ±12° tilt, controlled via DLPC410 + DisplayPort at 1.4–12.5 kHz
-- Reflective ruled grating for temporal focusing (1200 g/mm gold-coated, Newport 33010FL01-530R or Wasatch VPH 1700 g/mm — TBD)
-- TI NIR PLM (904×800, 10.8 µm pixel pitch, ~50 µs switching) for remote focusing — **may not be functional for prelim data**
-- Pacific Optica Avocado objective (10×, 0.6 NA, f_obj = 16.8 mm, BFP = 20 mm) — for full build
-- For prelim experiments, an Olympus 20× 1.0 NA (XLUMPLFLN20XW) on the existing windowed-mouse rig
+| | **A. Today's rig** | **B. Merged arm** (being built) | **C. Full build** (grant) |
+|---|---|---|---|
+| Status | running | on the bench, partly measured | not funded/built |
+| Laser | NKT FS-50 (~1040 nm) | CARBIDE CB3-40W, **1038 nm** | CARBIDE |
+| Modulator | DLP7000, 1024×768, 13.68 µm (Waller loan, ALP-4.1) | DLP650LNIR, 1280×800, 10.8 µm (ALP-4.3) | DLP650LNIR + TI NIR PLM |
+| Objective | Olympus 20×/1.0 W (Sutter MOM) | Nikon CFI Plan Apo λD 10×/0.45 dry, 200 mm tube | Pacific Optica Avocado 10×/0.6 |
+| Remote focus | none | Meadowlark HSP1K SLM | TI NIR PLM |
+| Scale | **isotropic**, `configs/dli4130.yaml` | **anisotropic + 45° clocked** — see below | TBD |
+| Authority | `configs/*.yaml` | `docs/optics_handoff.md` | grant text |
 
-**Control hardware (two PCs)**:
-- **Ephys/control PC** ("the DAQ PC"): NI PCIe-6323, runs MATLAB, drives the DMD, generates all triggers and analog control, acquires ephys + any auxiliary signals. **DMD lives here.**
-- **Imaging PC**: runs ScanImage (MATLAB) for 2p GCaMP imaging. Triggered by TTL from the DAQ PC.
-- **Substage widefield camera**: Basler acA2500-14um (USB3 Vision, 2592×1944, 2.2 µm pixel pitch, serial 22016738). Connected to the DAQ PC. Used only for spatial calibration (DMD→camera affine and ScanImage scan-field→camera affine); not used during experiments. Driver: `tfp.hardware.BaslerSubstageCamera` via MATLAB Image Acquisition Toolbox `gentl` adaptor (requires Basler pylon 6+ with pylon GenTL Producer).
-- **No third PC.** The lab's existing LCoS SLM rig uses a separate PC; this project deliberately does not, to avoid socket-communication bugs.
+Build A's optical path: FS-50 → DMD → temporal-focusing grating → fills the back
+pupil of a Sutter MOM; merged with the scan path via a PBS after the scan lens. The
+scan path is a Spectra-Physics MaiTai on ScanImage resonant galvos.
 
-**Trigger topology**:
-- DAQ PC is the timing master.
-- DAQ generates: (a) TTL to start ScanImage acquisition on imaging PC, (b) DMD pattern-advance triggers, (c) PLM phase-state triggers (when functional), (d) analog power control of NKT FS-50 via ao3, (e) sync line(s) recorded back into the ephys channels.
-- ScanImage frame clock is fed back to the DAQ PC as a digital input for post-hoc frame-stim alignment.
+Build B's chain (from the handoff): CARBIDE → expander → DMD → 4f → grating → 4f →
+f7 → SLM → f6 → periscope → PBS → Nikon 200 mm tube → 10×/0.45.
 
-**Confirmed NI PCIe-6323 wiring (cross-referenced with Masato's DAQ code, 2026-05-29)**:
+> ⚠️ **Known inconsistency to resolve.** `configs/real.yaml` still carries
+> `umPerPixel: 0.270` / `roiHalfWidthPx: 278` with a "central 6×6 mm" comment — the
+> old *isotropic, π-Shaper-flat-top* assumption. That file now drives build B, whose
+> real numbers are anisotropic (2.3040 / 2.5897 µm/px) over a Ø5.0 mm disc (463 px).
+> The values are ~7–9× off and hide the anisotropy. The rig owns `real.yaml` (it is
+> rewritten in place during bring-up) — **do not overwrite it from a dev machine**;
+> flag it and let the rig fix it. Calibration fits from a measured grid regardless,
+> so this is a sanity-band bug, not a live pointing bug.
 
-| Line | Direction | Connected to | Notes |
-|------|-----------|--------------|-------|
-| ai2 | in | Multiclamp 700B output | primary ephys / patch electrode |
-| ai3 | in | Stim trigger monitor | reads back stimulation trigger for post-hoc alignment |
-| ao0 | out | Multiclamp 700B ch1 command | postsynaptic cell current/voltage command |
-| ao2 | out | Multiclamp 700B ch2 command | presynaptic cell command — normally unused |
-| ao3 | out | NKT FS-50 power modulator | **photostim laser power control** — 0–5 V |
-| port0/line10 | out | ScanImage acquisition trigger | rising edge starts SI acquisition |
-| port0/line8 | out | SLM trigger out | Masato's SLM rig — spare for our DMD setup |
-| port0/line1 | in | ScanImage frame clock | rising edge = frame acquired |
+---
 
-## Bring-up optical arm
+# The merged arm (build B)
 
 **Authoritative source: [`docs/optics_handoff.md`](#optics-handoff-cross-repo-contract)**,
 generated by the optics-model repo. Read it, not this section, for any number you
-intend to compute with; the summary below is a convenience copy and goes stale by
-design.
-
-> **`docs/dmd_control_handoff.md` was deleted 2026-08-17.** It was the earlier name
-> for this document, was no longer regenerated, and everything it got wrong — the
-> objective (it assumed a Nikon CFI75 16×/0.8), the tube lens, and 1030 vs 1038 nm —
-> is fixed in `optics_handoff.md`. It is recoverable from git history if ever
-> needed (`git show 91ed281:docs/dmd_control_handoff.md`), but nothing should cite
-> it: a superseded generated file left lying next to its replacement is a trap, not
-> an archive. The ⚠️ STALE banner that used to live here is retired — the
-> regeneration it was waiting for has landed.
->
-> The scale constants below have therefore **changed again** — µm/px is now
-> 2.3040 / 2.5897 (was 1.9200 / 2.2193) and the patch is Ø5.0 mm / 463 px (was
-> Ø3.5 mm / 324 px). This is the third revision in a row to move them, which is
-> exactly why control code **fits its affine from a measured grid** and treats
-> these as a sanity band, never as a calibration.
+intend to compute with — the summary here is a convenience copy and goes stale by
+design. It has moved three times already.
 
 **Do not paste these into code.** `tfp.util.readHandoffConstants()` parses the
 handoff's machine-readable `handoff-constants` block at runtime, and
@@ -96,57 +90,58 @@ handoff's machine-readable `handoff-constants` block at runtime, and
 `scripts/` read the patch diameter and the ON-fraction cap that way rather than
 carrying a copy.
 
-**The three things that bite:**
+## The three things that bite
 
-1. **The chip is mounted clocked 45°** about its own normal. The DLP650LNIR's
-   mirrors hinge on the chip diagonal, and clocking lays that diagonal in the table
-   plane. So **every sample↔DMD transform carries a 45° rotation**, and the optical
-   axes run along the chip's *diagonals*, not its rows and columns.
-2. **Sample-plane scale is anisotropic** (1.1559×), along the diagonal, because
-   that is where the grating disperses. **A circle in DMD pixels lands as an
-   ellipse at the sample.** To get a round spot, compress the DMD ellipse by
-   1.1559× along the `(1,1)` diagonal.
-3. **A uniform all-ON frame is a hardware hazard**, not just a dull pattern.
+1. **The chip is mounted clocked 45°** about its own normal. The DLP650LNIR's mirrors
+   hinge on the chip diagonal, and clocking lays that diagonal in the table plane. So
+   **every sample↔DMD transform carries a 45° rotation**, and the optical axes run
+   along the chip's *diagonals*, not its rows and columns.
+2. **Sample-plane scale is anisotropic** (1.1240×) along the diagonal, because that is
+   where the grating disperses. **A circle in DMD pixels lands as an ellipse at the
+   sample.** To get a round spot, compress the DMD ellipse along the `(1,1)` diagonal.
+3. **A uniform all-ON frame is a hardware hazard**, not just a dull pattern — see the
+   50% cap below.
 
-**Coordinate mapping.** `(dc, dr)` = pixel offset from patch centre:
+## Coordinate mapping
+
+With `(dc, dr)` the pixel offset from patch centre:
 
 ```
-d_disp   = (dc + dr) / sqrt(2)     # dispersion axis
-d_groove = (dc - dr) / sqrt(2)     # groove axis
-x_disp   = d_disp   * 2.2193       # µm at sample
-y_groove = d_groove * 1.9200       # µm at sample
+d_disp   = (dc + dr) / sqrt(2)                 # dispersion axis
+d_groove = (dc - dr) / sqrt(2)                 # groove axis
+x_disp   = d_disp   * <um_per_px_disp>         # µm at sample
+y_groove = d_groove * <um_per_px_groove>
 ```
 
-**Sign conventions are NOT specified** — which diagonal is `+disp`, and which way
-each runs at the sample, must be fixed on the bench by two-point calibration. The
-magnitudes above are what a correct fit should recover.
+Read the two scales from `readHandoffConstants()`; the literals are in the table below
+for sanity-checking only.
 
-#### Mount clocking handedness — MEASURED 2026-08-07
+**Sign conventions are NOT specified** — which diagonal is `+disp`, and which way each
+runs at the sample, must be fixed on the bench by two-point calibration. The
+magnitudes are what a correct fit should recover.
+
+## Mount clocking handedness — MEASURED 2026-08-07
 
 **To draw something upright in the lab frame, pre-rotate it by +45° about the chip
 centre in DMD pixel coordinates.** Equivalently: `scripts/dmdStickman.m` takes
-`tiltDeg = -45`, and applies a rotation of `-tiltDeg`.
-
-Measured by projecting a figure drawn upright in chip coordinates and observing it
-on the bench:
+`tiltDeg = -45` and applies a rotation of `-tiltDeg`.
 
 | pre-rotation applied | appearance on the bench |
 |---|---|
 | none | 45° uphill |
-| −45° | **90° — straight up a wall** |
+| −45° | 90° — straight up a wall |
 | **+45°** | **level** ✅ |
 
-The −45° case is what makes it unambiguous: it took the tilt from 45° to 90°, so
-that correction *adds* to the mount rotation rather than cancelling it. One sign,
-settled by three observations rather than assumed.
+The −45° case is what makes it unambiguous: it took the tilt from 45° to 90°, so the
+correction *adds* to the mount rotation rather than cancelling it. One sign, settled
+by three observations rather than assumed.
 
-**This survives regeneration of the handoff.** Objective, tube lens and laser
-wavelength all change *scale*; none of them changes the mount's handedness.
+**This survives regeneration of the handoff** — objective, tube lens and wavelength
+all change *scale*; none changes the mount's handedness. It does **not** settle which
+diagonal is `+dispersion` vs `+groove`, nor either sign at the *sample*: the relay
+adds a 180° inversion and every fold adds a flip. This fixes only chip↔bench rotation.
 
-**What this does NOT settle:** which diagonal is `+dispersion` vs `+groove`, or
-either sign at the *sample*. The relay adds a 180° inversion and every fold adds a
-flip, so the sample-plane signs still need the two-point calibration above. This
-fixes only the chip↔bench rotation.
+## Design constants (handoff rev 4, 2026-08-09)
 
 | Quantity | Value | key |
 |---|---|---|
@@ -154,53 +149,90 @@ fixes only the chip↔bench rotation.
 | Field at sample | 1067 × 1199 µm ellipse | |
 | µm/px, groove / dispersion | **2.3040 / 2.5897** | `um_per_px_groove` / `_disp` |
 | Anamorphic factor | 1.1240 | `anamorphic` |
+| Axis rotation | 45° | `axis_rotation_deg` |
 | Axial FWHM | 32.6 µm | `axial_fwhm_um` |
-| Depth gradient | 0.02929 µm/µm along dispersion; 35.1 µm total across the patch | `depth_gradient_um_per_um` / `walk_um` |
+| Depth gradient | 0.02929 µm/µm along dispersion; 35.1 µm across the patch | `depth_gradient_um_per_um` / `walk_um` |
 | Binary frame rate | 12,500 Hz → 80 µs/frame | `dmd_binary_rate_hz` |
-| Illumination | **Ø7.0 mm** 1/e² Gaussian (1.75× expander, NOT a catalogue GBE) | |
-| Patch-edge intensity | **0.3604** → dwell correction **7.70×** | `patch_edge_intensity` |
+| Illumination | Ø7.0 mm 1/e² Gaussian (1.75× expander, **not** a catalogue GBE) | |
+| Patch-edge intensity | 0.3604 → dwell correction **7.70×** | `patch_edge_intensity` |
 | Safe pulse energy | 89 µJ | `safe_pulse_energy_uJ` |
 | Laser | 1038 nm, 205 fs, 100 kHz | `wavelength_nm` / `pulse_fwhm_fs` |
-| Objective | **Nikon CFI Plan Apo λD 10×/0.45 (dry)**, EFL 20.0 mm, 200 mm tube | |
+| Remote focus range | 904 µm | `remote_focus_um` |
 
-**Dwell correction is now quadratic, not linear.** `dwell_exponent: 2` — two-photon
-excitation goes as I², so equalising *dose* across the patch needs dwell ∝ 1/I².
-At the patch edge that is (1/0.3604)² = **7.70×**, not the 1.19× an earlier
-revision implied with a linear law and a flatter Gaussian. Edge targets cost
-nearly 8× the frames of centre targets; budget sequence length accordingly.
+**Dwell correction is quadratic, not linear** (`dwell_exponent: 2`). Two-photon
+excitation goes as I², so equalising *dose* across the patch needs dwell ∝ 1/I². At
+the patch edge that is (1/0.3604)² = **7.70×**, not the 1.19× an earlier revision
+implied. Edge targets cost nearly 8× the frames of centre targets — budget sequence
+length accordingly.
 
-**Depth is a tilted plane.** The excitation surface tilts 1.678° along the
-dispersion axis — deterministic, and the control code
-should *report* it: `z_um ≈ x_disp * 0.02929`. The walk across the field is
-comparable to one axial FWHM, so targets at opposite edges are genuinely not
-in the same plane. Surface this rather than hiding it. (The handoff notes the
-walk is cancelled by the sample tilt stage.)
+**Depth is a tilted plane.** The excitation surface tilts 1.678° along the dispersion
+axis: `z_um ≈ x_disp * 0.02929`. The walk across the field is comparable to one axial
+FWHM, so targets at opposite edges are genuinely not in the same plane. The control
+code should *report* this, not hide it. (The handoff notes the walk is cancelled by
+the sample tilt stage.)
 
-### Hard software rule: never illuminate more than 50% of the chip
+## Hard software rule: never illuminate more than 50% of the chip
 
-[USER 2026-07-28, supersedes the softer "sensible interlock" wording of earlier
-revisions.] Count ON mirrors over the **whole chip** and **refuse to load** any
-frame above the cap. One comparison per frame — it costs nothing.
+[USER 2026-07-28, supersedes earlier "sensible interlock" wording.] Count ON mirrors
+over the **whole chip** and **refuse to load** any frame above the cap. One comparison
+per frame — it costs nothing. Enforced in `tfp.hardware.DMD.assertPatternsSafe` on
+every `loadPatternSequence`, mock included (`tfp:hardware:DMD:onFractionExceeded`).
 
 For a contiguous ON region, pupil intensity scales as the **square** of the ON
-fraction (power rises with lit area while the DC spot area falls as its inverse).
-At the 7.1 W operating point: 100% ON = 5.2e13 W/cm², over the ~5e13 air-breakdown
+fraction (power rises with lit area while the DC spot area falls as its inverse). At
+the 7.1 W operating point: 100% ON = 5.2e13 W/cm², over the ~5e13 air-breakdown
 threshold; 50% = 1.3e13, about **4× margin**. The only thing the cap forbids is the
 full-power alignment frame, which nobody needs.
 
-The cap is conservative for sparse patterns and tight for solid ones: what actually
+The cap is conservative for sparse patterns and tight for solid ones: what
 concentrates light is the largest **contiguous** ON region, not the total count. 50%
 ON as scattered cell-sized targets is orders of magnitude safer than 50% ON as one
 filled block. For a solid alignment target, stay under 50% **and** drop the power.
 
-**Laser context matters.** These thresholds are CARBIDE numbers — CB3-40W, 200 fs,
-~400 µJ at 100 kHz, requiring ≥104 kHz. Whole-field-at-once needs 7.06 W of 40 W =
-71 µJ/pulse against the ~68 µJ ceiling, a **0.96× margin** — headroom, not comfort.
-A Ti:Sapph oscillator (Chameleon Ultra II, 80 MHz, 1 W ≈ 12.5 nJ/pulse) sits ~5000×
-below the ceiling, so the pupil hazard does not bind during oscillator bring-up.
-**Check which laser is on the arm before reasoning about power limits.**
+**Laser context matters.** These are CARBIDE numbers (200 fs, ~400 µJ at 100 kHz).
+Whole-field-at-once needs 7.06 W of 40 W = 71 µJ/pulse against a ~68 µJ ceiling — a
+0.96× margin, headroom not comfort. A Ti:Sapph oscillator (Chameleon Ultra II, 80 MHz,
+1 W ≈ 12.5 nJ/pulse) sits ~5000× below the ceiling, so the pupil hazard does not bind
+during oscillator bring-up. **Check which laser is on the arm before reasoning about
+power limits.**
 
-### What invalidates the calibration
+`tfp.util.assertSlmPowerSafe` makes the handoff §7b LC alignment cap (44 mW) live,
+with the same largest-contiguous-blob discriminator, enforced in `Sequencer.runOne`
+and the calibration paths.
+
+## The other half: write nothing outside the patch
+
+`tfp.util.assertPatternInPatch` (added 2026-08-18) enforces handoff §4 — every ON
+mirror must lie inside the illuminated disc. Mirrors past the edge still reflect,
+into field angles the lens apertures were never sized for: a misleading fuzzy beam
+edge at alignment power, watts of stray light at experiment power.
+
+**Outside the patch is *unverified*, not merely *worse*.** Every buildability gate —
+lens apertures, grating ruling, SLM fill — was checked at the design diameter, and
+"nothing larger is verified — a bigger patch is a new sweep, not a bigger bitmap."
+There is no graceful rolloff to trade against.
+
+Two call sites, deliberately different severity:
+
+- **`DMD.assertPatternsSafe` calls it in `'warn'` mode.** Making it fatal there would
+  forbid the very calibration that validates it — measuring where the Gaussian
+  actually lands *requires* lighting mirrors past the design edge.
+- **Experiment code that should never leave the patch calls it directly**, where it
+  throws `tfp:util:assertPatternInPatch:outsidePatch`.
+
+**The patch centre is an assumption, not a given** — it is centred on the
+*illumination*, which coincides with the chip centre only if the beam is centred on
+the chip (a 2 mm error in DMD mount height moves it). Measure it with
+`scripts/alignmentField.m`, read it off in 40 px rings with `scripts/alignmentTarget.m`,
+then pass `options.center`. Default diameter comes from `patch_diameter_px` at
+runtime, so a regenerated handoff propagates without a code edit.
+
+Same reason as the disc rule below: **keep the test radial, never square.** In
+row/column coordinates a square presents its diagonal — √2 of its side — to the
+grating and the SLM fill, and the 45° clocking puts the optical axes on exactly those
+diagonals, where the Gaussian is dimmest.
+
+## What invalidates the calibration
 
 Swap any of these and the µm/px figures move — silently:
 
@@ -213,78 +245,120 @@ Swap any of these and the µm/px figures move — silently:
 | Grating incidence angle | dispersion axis only, via cos(β)/cos(α) |
 
 The periscope order (150 mm first, magnifying 1.333×) was **measured on the bench
-2026-07-27** after being assumed backwards in earlier revisions — that single
-correction moved M_gs by 1.78× and both scale constants with it. If the arm is
-ever rebuilt, **re-measure it**.
+2026-07-27** after being assumed backwards in earlier revisions — that one correction
+moved M_gs by 1.78× and both scale constants with it. If the arm is rebuilt,
+**re-measure it**.
 
-## Software architecture
+---
 
-### Top-level structure
+# Control hardware
+
+- **DAQ PC** (ephys/control): NI PCIe-6323, runs MATLAB, drives the DMD, generates all
+  triggers and analog control, acquires ephys. **The DMD lives here.** Timing master.
+- **Imaging PC**: ScanImage for 2p GCaMP imaging. Triggered by TTL from the DAQ PC.
+  Also hosts `si_motor_helper` for the relay Z-stage backend.
+- **SLM PC**: PCIe + Meadowlark Blink SDK. The DAQ PC never sends pixels — it sends a
+  small **mask spec** over msocket (port 3046, see [docs/PORTS.md](docs/PORTS.md)) and
+  the SLM PC recomputes identical masks with the shared `tfp.slm` engine
+  (`scripts/slm_pc_setup/slm_server.m`). *(This supersedes an earlier "no third PC"
+  rule: the Blink SDK requires the card's own host, so the socket path was
+  unavoidable. Keep the wire protocol as thin as possible — the reason for the old
+  rule, socket bugs, has not gone away.)*
+- **Substage widefield camera**: Basler acA2500-14um (USB3 Vision, 2592×1944, 2.2 µm
+  pitch, s/n 22016738), on the DAQ PC. Calibration only, never during experiments.
+  Driver `tfp.hardware.BaslerSubstageCamera` via Image Acquisition Toolbox `gentl`
+  (needs Basler pylon 6+ with the pylon GenTL Producer).
+
+**Trigger topology.** The DAQ generates: TTL to start ScanImage acquisition, DMD
+pattern-advance triggers, SLM/PLM state triggers, analog power control of the FS-50 on
+ao3, and sync lines recorded back into the ephys channels. The ScanImage frame clock
+returns to the DAQ PC as a digital input for post-hoc frame–stim alignment.
+
+**Confirmed NI PCIe-6323 wiring** (cross-referenced with Masato's DAQ code, 2026-05-29):
+
+| Line | Dir | Connected to | Notes |
+|------|-----|--------------|-------|
+| ai2 | in | Multiclamp 700B output | primary ephys / patch electrode |
+| ai3 | in | Stim trigger monitor | read back for post-hoc alignment |
+| ao0 | out | Multiclamp 700B ch1 command | postsynaptic cell command |
+| ao2 | out | Multiclamp 700B ch2 command | presynaptic cell — normally unused |
+| ao3 | out | NKT FS-50 power modulator | **photostim laser power** — 0–5 V |
+| port0/line10 | out | ScanImage acquisition trigger | rising edge starts SI |
+| port0/line8 | out | SLM trigger out | Masato's SLM rig — spare for our DMD |
+| port0/line1 | in | ScanImage frame clock | rising edge = frame acquired |
+
+---
+
+# Optics handoff (cross-repo contract)
+
+`docs/optics_handoff.md` is **generated** by the optics-model repo (`TF optics
+simulator`, a sibling folder: `python -m configs.dmd_handoff` there writes the file
+here). **Never hand-edit it** — change the model, regenerate, commit the result here.
+This is the single documented exception to the stay-inside-this-repo rule, inbound
+only.
+
+- It describes **build B**, the merged arm. Build A's numbers in `configs/*.yaml` stay
+  authoritative for today's rig; the handoff's "Which build this describes" section
+  says so explicitly.
+- Its fenced `handoff-constants` block is machine-readable via
+  `tfp.util.readHandoffConstants()`, and `tests/test_optics_handoff_constants.m`
+  asserts this repo's constants against it. That tripwire ended the era of silent
+  cross-repo drift — the two repos held 1030 vs 1038 nm for months (1030 is the
+  CARBIDE's front-panel setpoint; the measured value on factory certificate
+  s/n C264570 is 1038, and even the FS-50 runs ~1040).
+- **Safety caps come from it at runtime**: `on_fraction_cap` (0.50) and
+  `slm_alignment_cap_mW` (44).
+
+> ⚠️ **Regeneration still owed.** The committed handoff is **rev 4 (2026-08-09)**,
+> built with `f7 = 250` (`build_label: 5.0mm Ra/Rb 300/200 f7 250 f6 80 p1 100`). It
+> predates the ratified **f7 = 300 mm** build (BOM 2026-08-10). Until the optics repo
+> regenerates at rev ≥5, all design-value sanity bands **warn rather than fail** — the
+> calibrations fit the measured truth regardless. *(A separate, older stale banner —
+> about the superseded `docs/dmd_control_handoff.md`, deleted 2026-08-17 and
+> recoverable at `git show 91ed281:docs/dmd_control_handoff.md` — is retired. Nothing
+> should cite that file.)*
+
+---
+
+# Software architecture
 
 ```
-tf_photostim/
-├── CLAUDE.md                      ← this file
-├── docs/
-│   ├── ARCHITECTURE.md            ← detailed design (read this next)
-│   ├── tf_photostim_bom.html      ← full BOM, optical layout, design calcs
-│   ├── BRAIN_R01_aims.pdf         ← grant text for context on what this serves
-│   ├── DLP650LNIR_datasheet.pdf
-│   └── DLPC410_programmers_guide.pdf
-├── +tfp/                          ← MATLAB package, all code lives under here
-│   ├── +hardware/                 ← hardware abstraction layer
-│   │   ├── DMD.m                  (abstract base)
-│   │   ├── MockDMD.m
-│   │   ├── DLP650LNIR_DMD.m
-│   │   ├── DAQ.m                  (abstract base)
-│   │   ├── MockDAQ.m
-│   │   ├── NI6323_DAQ.m
-│   │   └── ScanImageBridge.m      ← talks to ScanImage on imaging PC
-│   ├── +patterns/                 ← pattern generation
-│   │   ├── singleSpot.m
-│   │   ├── multiSpot.m
-│   │   ├── ppsfPattern.m
-│   │   ├── calibratedAffine.m     ← DMD→sample coordinate transform
-│   │   └── powerLUT.m
-│   ├── +trial/                    ← trial sequencing
-│   │   ├── Trial.m                ← one stim event + metadata
-│   │   ├── TrialSequence.m
-│   │   └── Sequencer.m            ← state machine that runs a session
-│   ├── +analysis/                 ← online analysis
-│   │   ├── onlineDFF.m
-│   │   ├── responseClassifier.m
-│   │   └── liveFigures.m
-│   ├── +calibration/              ← rig calibration routines
-│   │   ├── alignDMDtoCamera.m
-│   │   ├── crossRegisterScanImage.m  ← scan-field → substage-camera affine
-│   │   ├── measurePSF.m
-│   │   └── powerMeterSweep.m
-│   ├── +experiments/              ← runnable experiment scripts
-│   │   ├── exp_ppsf_lateral.m
-│   │   ├── exp_rapid_sequential.m
-│   │   ├── exp_power_curve.m
-│   │   └── exp_pseudo_axial.m
-│   ├── +io/                       ← data logging, config loading
-│   │   ├── saveTrial.m
-│   │   ├── loadConfig.m
-│   │   └── sessionLog.m
-│   └── +util/                     ← shared utilities
-├── configs/
-│   ├── default.yaml
-│   ├── mock.yaml
-│   └── windowed_mouse_v1.yaml
-├── tests/                         ← unit tests using mocks
-└── scripts/                       ← one-off scripts, alignment helpers
+├── CLAUDE.md  ARCHITECTURE.md  AGENTS.md  TASKS.md  TODO.md  README.md
+├── runtests.m                     ← shadows the builtin; `matlab -batch "runtests"`
+├── docs/                          ← optics_handoff.md, BRINGUP_GUIDE.md, PORTS.md,
+│                                     SYNC*.md, *-api-audit.md
+├── configs/                       ← mock · real (build B) · dli4130 (build A) · bringup_3d
+├── src/+tfp/                      ← ALL code lives here (note: src/, not repo root)
+│   ├── +hardware/                 ← abstraction layer: DMD/DAQ/PLM/SLM/ZStage/
+│   │                                 SubstageCamera bases + Mock* + real backends,
+│   │                                 makeModulator, makeZStage
+│   ├── +patterns/                 ← singleSpot, multiSpot, ppsfPattern,
+│   │                                 calibratedAffine, powerLUT, alignmentTarget
+│   ├── +slm/                      ← mask engine; computeDefocusMask is the one home
+│   │                                 of the defocus physics
+│   ├── +optics/                   ← objectives registry
+│   ├── +trial/                    ← Trial, TrialSequence, Sequencer
+│   ├── +calibration/              ← lateral affines, z-calibration, PSF, power sweep
+│   ├── +experiments/              ← runnable exp_* scripts
+│   ├── +analysis/  +io/  +util/  +sim/
+├── tests/                         ← mock-backed; run without hardware
+├── scripts/                       ← bring-up, alignment, ALP smoke tests, PC setup
+└── vendor/                        ← ALP + Meadowlark SDK references (read-only)
 ```
 
-### Hardware abstraction (the critical design)
+## Hardware abstraction (the critical design)
 
-Every hardware device has an **abstract base class** defining the interface, a **Mock implementation** that simulates plausible behavior, and a **real implementation** for the actual device. Experiment code talks only to the abstract interface.
+Every device has an **abstract base class**, a **Mock** that simulates plausible
+behaviour, and a **real** implementation. Experiment code talks only to the abstract
+interface, and the config chooses the backend — mock↔real is a config change, never a
+code change. Mock-first is not a workaround; it is the architecture.
 
 `tfp.hardware.DMD` minimum interface:
+
 ```matlab
 methods (Abstract)
     initialize(obj)
-    loadPatternSequence(obj, patterns)   % patterns: 3D logical array (H × W × N)
+    loadPatternSequence(obj, patterns)   % 3D logical array (H × W × N)
     armSequence(obj, triggerMode)        % 'external' | 'internal'
     softTrigger(obj)
     advanceToPattern(obj, idx)
@@ -293,175 +367,270 @@ methods (Abstract)
 end
 ```
 
-`tfp.hardware.MockDMD` implements the same interface but logs calls and (optionally) renders the active pattern to a debug figure so visual sanity-checking is possible without hardware.
+`MockDMD` logs calls and optionally renders the active pattern to a debug figure.
+`MockDAQ` generates synthetic GCaMP-like traces with a probabilistic response when the
+active pattern overlaps a fake "cell", so the sequencer and analysis pipeline run
+end-to-end without the rig.
 
-Same pattern for DAQ. `MockDAQ` generates synthetic GCaMP-like traces with a probabilistic response when the active stim pattern overlaps a fake "cell" — this lets the trial sequencer and analysis pipeline be exercised end-to-end without the rig.
+**Rule: no code outside `+hardware/` ever touches a hardware-specific API.** If you
+are tempted to call `daqmx_StartTask` or `ALP_SeqAlloc` from a trial script, stop and
+add it to the abstraction layer.
 
-**Rule: no code outside `+hardware/` ever touches hardware-specific APIs directly.** If you're tempted to call `daqmx_StartTask` or `ALP_SeqAlloc` from a trial script, stop and add it to the abstraction layer instead.
+## Trial as the unit of work
 
-### Trial as a unit of work
+A `Trial` is one stimulation event: target spec (cell IDs, DMD coords, or pattern
+ref), power, timing (onset, duration, pulse train), metadata (trial index, session ID,
+seed), and acquired data (ephys snippet, imaging frames, sync trace). A
+`TrialSequence` is an ordered list; the `Sequencer` runs it — load pattern, arm DAQ,
+trigger ScanImage, wait, save, advance.
 
-A `Trial` is a single stimulation event with:
-- Target spec (cell ID(s), DMD coordinates, or pattern reference)
-- Power level
-- Timing (onset, duration, pulse train if any)
-- Metadata (trial index, session ID, randomization seed)
-- Acquired data (ephys snippet, imaging frames during trial, sync trace)
+## Configuration
 
-A `TrialSequence` is an ordered list of `Trial` objects. The `Sequencer` runs the sequence — for each trial: load DMD pattern, arm DAQ, trigger ScanImage, wait for completion, save data, advance.
+YAML, parsed by `tfp.io.loadConfig` (a hand-rolled parser — it handles nested maps and
+block sequences of scalars; `tests/test_loadConfig.m` covers it). Configs select
+hardware backends, calibration paths, and trial parameters.
 
-### Configuration
+---
 
-YAML configs (parsed via MATLAB's `yamlread` in R2024b+, or `yaml.loadFile` via `yamlmatlab` for earlier versions). Configs specify hardware backends (Mock vs. real), calibration paths, trial parameters. The config selects which `DMD` subclass to instantiate — no code changes needed to swap mock ↔ real.
+# Development phases
 
-## Development workflow
+**Phase 1 — mock only.** ✅ Abstraction layer, Trial/TrialSequence/Sequencer, pattern
+generation, experiment scripts, tests. Every experiment script runs in `tests/`
+without hardware.
 
-### Phase 1 — Mock-only (pre-hardware)
-1. Build the abstraction layer with `MockDMD` and `MockDAQ`.
-2. Write `Trial`, `TrialSequence`, `Sequencer` against the mocks.
-3. Build pattern-generation utilities (`singleSpot`, `multiSpot`, `ppsfPattern`).
-4. Build the experiment scripts. They should run end-to-end against mocks, producing fake data and fake figures.
-5. Write tests. Every experiment script must run in `tests/` without hardware.
+**Phase 2 — DAQ real, DMD mock.** ✅ `NI6323_DAQ`; trigger lines scoped for sub-ms
+alignment.
 
-### Phase 2 — DAQ-real, DMD-mock
-6. When the lab's NI 6323 is available, swap to `NI6323_DAQ`. DMD stays mocked.
-7. Verify timing: scope all trigger lines, confirm sub-ms alignment.
+**Phase 3 — DMD real.** In progress on the borrowed DLP7000 (`configs/dli4130.yaml`,
+ALP-4.1); `DLP650LNIR_DMD` + ALP-4.3 awaits the NIR chip. Then: two-step spatial
+calibration on a thin fluorescent film, `measurePSF` on a fluorescent slab,
+experiments on windowed mice.
 
-### Phase 3 — DMD-real
-8. Swap to `DLP650LNIR_DMD` on NIR DMD arrival.
-9. Run the two-step spatial calibration on a thin fluorescent film (see procedure below).
-10. Run `+calibration/measurePSF.m` on a fluorescent slab.
-11. Run experiments on windowed mice.
+**Phase 4 — remote focusing + 3D** (landed 2026-08-15, mock-first).
 
-#### Two-step spatial calibration procedure (Phase 3)
+- **Masks**: `tfp.slm`; `computeDefocusMask` is the one home of the defocus physics
+  (`PLM.computeDefocusPattern` delegates to it byte-identically). Objectives:
+  `tfp.optics.objectives` (`nikon10x045` default; `olympus20x`, `nikon16x`,
+  `avocado10x`). `config.slm.m_relay` is **required** and `%VERIFY` until the optics
+  repo publishes `slm_bfp_relay_mag`.
+- **Z-calibration** — three coded methods, indirect primary: `calibrateSlmDefocus`
+  (Basler through-focus against the MP-285 ruler) + `calibrateEtlPlanes` (ETL plane →
+  µm) + `composeZCalibration` (the ETL-plane↔SLM-defocus tag stamped onto ROIs).
+  Direct burn/bleach verify: `markFluorescentSlab` + `locateMarksInStack` +
+  `verifyZCalibration`. IO: `tfp.io.saveCalibration` / `loadCalibration` /
+  `updateConfigCalibrationPath`.
+- **Z ruler**: `tfp.hardware.ZStage` — backends `mp285` (serial, gated by
+  [docs/mp285-protocol-audit.md](docs/mp285-protocol-audit.md)), `relay` (via the
+  imaging PC's `si_motor_helper`), `manual`, `mock`. Two mountings via `zstage.mount`:
+  `'objective'` (**default** — the rig MP-285 moves the MOM) and `'sample'` (second
+  option — a spare MP-285 carrying camera + slide as one rigid unit, objective fixed;
+  removes a camera-defocus bias in the §6a slope and keeps calibration DAQ-PC-local).
+  `zstage.direction_sign` (±1) normalises "+z = deeper" per mount. Commanded XY moves
+  (`moveToXYUm`) are gated to the sample mount; both lateral affines take
+  `options.stagePositionUm` so `composeCalibration` warns if an XY move happened
+  between the two fits. See [docs/BRINGUP_GUIDE.md](docs/BRINGUP_GUIDE.md) §5 Option B.
+- **3D experiments**: `exp_3d_ensemble` (flag `config.threeD.enabled`).
+  `TrialSequence.generate3DEnsemble` bins targets by required SLM defocus (dz =
+  z_target − tilt-native z; gradient read from handoff constants at runtime, sign from
+  config) and the Sequencer advances the SLM per depth group (dedupe + LC settle).
+  Imaging is **async free-run**: SI runs continuous `etl.n_planes` volumes and frames
+  are plane-tagged post-hoc (`tfp.io.assignFramePlanes`, gap-aware, +
+  `alignTrialsFreeRun`). ROI link carries Nx4 `[x y planeIdx zUm]` (Nx2 still
+  accepted). **Use `shuffleWithinGroups`, never plain `shuffle`, on 3D sequences.**
 
-The full DMD → ScanImage scan-field mapping is built by composing two affines, both measured using the substage widefield camera against the same fluorescent film:
+*(A TI-PLM swap stays a config change — all modulators sit under the
+`tfp.hardware.PLM` base via the `makeModulator` factory keyed on
+`config.slm.backend`.)*
 
-**Step A — DMD → substage camera** (`alignDMDtoCamera`):
-Project a 5×5 grid of DMD spots. Camera sees each spot; fit affine from DMD pixel coords to camera pixel coords. Already implemented.
+## Two-step spatial calibration (Phase 3)
 
-**Step B — ScanImage scan field → substage camera** (`crossRegisterScanImage`):
-The 2p imaging beam rastered by ScanImage excites fluorescence on the film; the substage camera sees the scanned region as a bright rectangle. The scan field's fast (resonant) and slow (galvo) axes are identified by using a **non-square pixel count** (e.g. 256 lines × 512 pixels per line): the rectangle's long axis on the camera is the fast axis (more pixels → wider resonant sweep at the sample). Fit an affine from scan-field coordinates to camera pixel coords.
+Full procedure with bench steps: [docs/BRINGUP_GUIDE.md](docs/BRINGUP_GUIDE.md). In
+short — compose two affines measured against the same fluorescent film with the
+substage camera:
 
-**Axis sign disambiguation**: the rectangle alone does not reveal which end of each axis is positive in ScanImage's scan-field convention (the resonant scanner sweeps symmetrically so fast-axis sign cannot be observed from a passive camera image; slow-axis sign similarly isn't resolved by a single centered scan). Both signs are stored as config entries (`scan_fast_axis_sign: 1` and `scan_slow_axis_sign: 1`, each ±1) and determined empirically by the **verify step** below.
+- **A. DMD → camera** (`alignDMDtoCamera`): project a 5×5 grid of spots, fit affine.
+- **B. ScanImage scan field → camera** (`crossRegisterScanImage`): the 2p beam raster
+  excites the film and the camera sees a bright rectangle. Use a **non-square pixel
+  count** (e.g. 256 lines × 512 px/line) so the rectangle's long axis identifies the
+  fast (resonant) axis.
+- **Compose**: `dmdToScan_affine = inv(scanToCam_affine) * dmdToCam_affine`. Both new
+  fields are appended to the calibration struct; `dmdToSample_affine` is preserved.
 
-**Verify step** (mandatory after first calibration, or after any optics change):
-1. Project a single DMD spot at a known DMD coordinate.
-2. Compute the predicted ScanImage scan-field coordinate using the composed affine.
-3. Command ScanImage to scan a small mROI at that predicted coordinate.
-4. Operator confirms visually whether the spot is centered in the ScanImage live image.
-5. If not, flip `scan_fast_axis_sign` and/or `scan_slow_axis_sign` (4 combinations; typically resolved in ≤2 attempts) and re-verify.
-6. Write confirmed signs into the rig config YAML.
+**Axis signs are not observable** from a passive camera image (the resonant scanner
+sweeps symmetrically; a single centred scan does not resolve the slow axis either).
+They live in config as `scan_fast_axis_sign` / `scan_slow_axis_sign` (each ±1) and are
+resolved by the **mandatory verify step** (`verifyScanFieldComposition`): project one
+spot, predict its scan-field coordinate, command a small mROI there, confirm visually,
+and flip signs (4 combinations, usually ≤2 attempts) until centred. Write the
+confirmed signs into the rig config.
 
-**Composition**:
-```
-dmdToScan_affine = inv(scanToCam_affine) * dmdToCam_affine
-```
-Both new fields (`scanToCam_affine`, `dmdToScan_affine`) are appended to the calibration struct; the original `dmdToSample_affine` (DMD→camera) is preserved unchanged.
+---
 
-### Phase 4 — Remote focusing + 3D (bringup arm, 2026-08)
+# Conventions
 
-The Meadowlark SLM remote-focusing stack landed 2026-08-15 (mock-first, per the standing architecture):
+**Language and style.** MATLAB R2023b+ (lab standard, ScanImage-native), package
+namespacing under `src/+tfp/`. camelCase functions, PascalCase classes, snake_case
+config keys. Docstrings on every public function; a one-paragraph summary at the top
+of every class file.
 
-- **Masks**: `tfp.slm` package (shared engine; `computeDefocusMask` is the one home of the defocus physics — `PLM.computeDefocusPattern` delegates to it byte-identically). Objectives registry: `tfp.optics.objectives` (nikon10x045 default; olympus20x, nikon16x, avocado10x). `config.slm.m_relay` is **required** and `%VERIFY` until the optics repo adds `slm_bfp_relay_mag`.
-- **Z-calibration** (three coded methods, indirect primary): `tfp.calibration.calibrateSlmDefocus` (Basler through-focus vs the MP-285 ruler) + `calibrateEtlPlanes` (ETL plane → µm) + `composeZCalibration` (the ETL-plane↔SLM-defocus tag stamped onto ROIs); direct burn/bleach verify via `markFluorescentSlab` + `locateMarksInStack` + `verifyZCalibration`. Z ruler: `tfp.hardware.ZStage` (mp285 serial / relay via imaging-PC `si_motor_helper` / manual / mock; [docs/mp285-protocol-audit.md](docs/mp285-protocol-audit.md) gates the serial backend). The mp285 backend serves two mountings via `zstage.mount`: `'objective'` (DEFAULT — the rig MP-285 moves the MOM) and `'sample'` (SECOND OPTION — a spare MP-285 carrying the substage camera + slide as one rigid unit, objective fixed; removes a camera-defocus bias in the §6a slope and keeps calibration DAQ-PC-local). `zstage.direction_sign` (±1) normalizes "+z = deeper" per mount, replacing hard-coded negation; commanded XY moves (`moveToXYUm`) are gated to the sample mount, and both lateral affines accept `options.stagePositionUm` so `composeCalibration` warns when an XY move happened between the two fits. See [docs/BRINGUP_GUIDE.md](docs/BRINGUP_GUIDE.md) §5 Option B. Calibration IO: `tfp.io.saveCalibration`/`loadCalibration`/`updateConfigCalibrationPath`; `loadCalibrationOrIdentity` now actually loads.
-- **3D experiments**: `exp_3d_ensemble` (flag: `config.threeD.enabled`); `TrialSequence.generate3DEnsemble` bins targets by required SLM defocus (dz = z_target − tilt-native z; tilt gradient read from handoff constants at runtime, sign from config) and the Sequencer advances the SLM per depth group (dedupe + LC settle). Imaging is **async free-run**: SI runs continuous `etl.n_planes` volumes; frames are plane-tagged post-hoc (`tfp.io.assignFramePlanes` — gap-aware — + `alignTrialsFreeRun`). ROI link carries Nx4 `[x y planeIdx zUm]` (backward-compatible Nx2). Use `shuffleWithinGroups`, never plain `shuffle`, on 3D sequences.
-- **Safety**: `tfp.util.assertSlmPowerSafe` makes the handoff §7b LC alignment cap (44 mW) live — largest-contiguous-blob discriminator, enforced in `Sequencer.runOne` and calibration paths.
-- **⚠ Handoff regen prerequisite**: the committed handoff (rev 4) predates the ratified **f7 = 300 mm** build (BOM 2026-08-10). Until the optics repo regenerates `docs/optics_handoff.md` (rev ≥5), all design-value sanity bands warn rather than fail — the calibrations fit the truth regardless.
+**Data and time.** Trial data as `.mat` (v7.3) on a consistent schema; session
+metadata as YAML alongside. All timestamps in seconds, double, referenced to the DAQ
+master clock — convert at the boundary, not in the middle.
 
-### (old) Phase 4 — PLM integration (post-grant if needed)
+**Coordinates.** DMD pixels are integer `(col, row)`, origin top-left. Sample
+coordinates are µm `(x, y, z)`, z=0 at the focal plane during calibration. All
+transforms live in `+calibration/`.
 
-## Optics handoff (cross-repo contract)
+**Active DMD region.** Only a centred region of the chip is illuminated; mirrors
+outside it must be OFF, enforced by `tfp.util.assertPatternInPatch` (see above).
+**The size is build-specific.** Build A: central 6×6 mm, `roiHalfWidthPx = 219` at
+13.68 µm pitch. Build B: **a Ø5.0 mm disc = 463 px** — read it at runtime with
+`readHandoffConstants()`, never pasted. Always a **disc, never a square**: a square's
+diagonal is what the grating sees, so it overruns the optics at √2 the nominal width.
 
-`docs/optics_handoff.md` is **generated** by the optics-model repo (`TF optics simulator`, a sibling folder of this one: `python -m configs.dmd_handoff` there writes the file here). **Never hand-edit it** — change the model, regenerate, commit the result here. It is the single documented exception to the stay-inside-this-repo rule, inbound direction only.
+**Pixel scale.** Build A is isotropic (0.342 µm/px on the DLP7000). Build B is
+**anisotropic and not a single number** — 2.3040 µm/px groove, 2.5897 µm/px
+dispersion, axes along the chip diagonals. Stored as `dmd.umPerPixel`. **Always fit
+the affine from a measured grid**; design numbers are a starting point and a sanity
+check, never a calibration.
 
-- It describes the **future merged arm** (CARBIDE at 1038 nm measured [CERT], DMD front end relayed through the 3D-SHOT back end, Meadowlark SLM as remote focus). The current-rig numbers in `configs/*.yaml` and "Lab conventions" below (6×6 mm active region, ~0.270/0.342 µm/px) stay authoritative until that arm is physically built and calibrated — the handoff's "Which build this describes" section is explicit about this.
-- Its fenced `handoff-constants` block is machine-readable: `tfp.util.readHandoffConstants()` parses it, and `tests/test_optics_handoff_constants.m` asserts this repo's hardware constants against it. That tripwire is what ends the era of silent cross-repo drift (the two repos held 1030 vs 1038 nm for months; 1030 is the CARBIDE's front-panel setpoint, and even the FS-50 runs ~1040).
-- **Safety caps come from it at runtime**: `tfp.hardware.DMD.assertPatternsSafe` reads `on_fraction_cap` (50%) and refuses any frame above it on every `loadPatternSequence`, mock included (`tfp:hardware:DMD:onFractionExceeded`; rationale in the handoff's §7 — air breakdown at the first relay pupil, at any laser power). The all-ON SLM alignment cap (`slm_alignment_cap_mW`) becomes live when the merged arm is built.
+**Implementation conventions** pinned in Phase 1 — treat as load-bearing:
 
-## Lab conventions
+- **Private properties take a trailing underscore** (`patterns_`, `state_`, `log_`).
+- **Every mock exposes `getLog()`**, a struct array of `{timestamp, eventType,
+  payload}`. Tests verify call sequences through it.
+- **Error identifiers are `tfp:<module>:<class-or-func>:<reason>`**, e.g.
+  `tfp:hardware:MockDMD:badPatternShape`, `tfp:io:loadConfig:badYaml`.
+- **Trial state moves only through `markRunning` / `markComplete(data)` /
+  `markFailed(errOrMsg)`.** `data` and `status` are `SetAccess = private`; the markers
+  validate transitions and throw `tfp:trial:Trial:badTransition`.
+- **`configField(struct, name, default)`** is the standard local helper for config
+  reads with a fallback (local in `MockDMD.m` and `MockDAQ.m`; promote to `+tfp/+util/`
+  if a third caller appears).
+- **`tfp.io.sessionLog` returns the written line without a trailing newline**; the
+  file gets one appended.
+- **`tfp.io.saveTrial` uses 4-digit zero-padded indices** (`trial_0001.mat`) and writes
+  both `complete` and `failed` trials. Analysis filters on `trial.status`.
+- **Tests run with cwd set to `tests/`.** Repo-relative paths inside a test must
+  resolve from `fileparts(mfilename('fullpath'))`, not `pwd` — the repo idiom, also
+  used by `readHandoffConstants` and `test_optics_handoff_constants`.
 
-- **Language**: MATLAB (lab standard, ScanImage native). Target R2023b or later. Use the MATLAB package system (`+tfp/`) for namespacing.
-- **Style**: camelCase functions, PascalCase classes, snake_case for config keys. Docstrings on every public function. Each class file starts with a 1-paragraph summary.
-- **Data**: trial-level data saved as `.mat` (v7.3) with a consistent schema. Session metadata as YAML alongside.
-- **Time**: all timestamps in seconds, double precision, referenced to DAQ master clock. Convert at the boundary, not in the middle.
-- **Coordinates**: DMD pixels are integer (col, row) with origin top-left. Sample coordinates are µm (x, y, z) with z=0 at the focal plane during calibration. All transforms live in `+calibration/`.
-- **Active DMD region**: only a centred disc of the chip is illuminated; mirrors outside it must be OFF. The size is **build-specific — do not assume 6 mm**. For the merged arm it is **Ø5.0 mm = 463 px** (see [Bring-up optical arm](#bring-up-optical-arm)), but read it at runtime with `tfp.util.readHandoffConstants()` rather than pasting it — this figure has moved three times. The older "central 6×6 mm / `roiHalfWidthPx = 278`" figure described a πShaper flat-top that this build does not have. Stored in config under `dmd.roiHalfWidthPx`. Prefer a **disc, never a square**: a square's diagonal is what the grating sees, so it overruns the optics at √2 the nominal width.
-- **Pixel scale**: **anisotropic, and not a single number.** The bring-up arm is 1.9200 µm/px along the groove axis and 2.2193 µm/px along the dispersion axis, with the axes running along the chip *diagonals* (45° clocking). The old "~40× demag → 0.270 µm/px isotropic" figure is superseded for this build — it is off by ~7× and hides the anisotropy. See the bring-up section below. Stored in config as `dmd.umPerPixel`. **Always fit the affine from a measured grid; use the design numbers only as a starting point and sanity check.**
+---
 
-## Conventions established in implementation
+# Vendor APIs
 
-Phase 1 implementation pinned the following conventions; treat them as load-bearing when adding new code.
+**Never invent a vendor function name.** If it is not in one of the vendored headers
+below, stop and ask. This applies equally to ALP and Blink.
 
-- **Private properties use trailing-underscore naming** (`patterns_`, `state_`, `log_`). Distinguishes internal state from public/protected properties at a glance.
-- **Each mock hardware class has a public `getLog()`** returning a struct array of `{timestamp, eventType, payload}` entries. Tests verify call sequences via this log.
-- **Error identifiers follow `tfp:<module>:<class-or-func>:<reason>`**, e.g. `tfp:hardware:MockDMD:badPatternShape`, `tfp:trial:Trial:badTransition`, `tfp:io:loadConfig:badYaml`.
-- **Trial state mutations go through `markRunning` / `markComplete(data)` / `markFailed(errOrMsg)`** methods on `tfp.trial.Trial`. `SetAccess = private` on `data` and `status` is enforced; the markers also validate state transitions and throw `tfp:trial:Trial:badTransition` on invalid moves.
-- **`configField(struct, name, default)` is the standard local helper** for reading config fields with a fallback (used as a local function in `MockDMD.m` and `MockDAQ.m`; promote to `+tfp/+util/` if a third caller appears).
-- **`tfp.io.sessionLog` returns the written line without a trailing newline.** The file gets the newline appended.
-- **`tfp.io.saveTrial` uses 4-digit zero-padded trial indices** (`trial_0001.mat`) and writes both `complete` and `failed` trials. Analysis pipelines filter by `trial.status`.
+## ViALUX ALP (DMD)
 
-## Hardware API
-- Target: ViALUX **ALP-4.3** high-speed API on the scope PC (Windows). DLP650LNIR is driven via the DLPC410 controller; ALP-4.3 supports this combo per the [parot-alptool](vendor/alp/reference/parot-alptool/) wrapper. Phase 3 of [Development workflow](#development-workflow) uses this SDK unless the EVM arrives with incompatible firmware. See [docs/alp-api-audit.md](docs/alp-api-audit.md) for the cross-reference audit confirming API coverage.
-- Official Vialux SDK header is now in-repo at [vendor/alp/official/alp.h](vendor/alp/official/alp.h) (Version 28, © 2004-2024). Diff against parot-alptool/alp.h completed 2026-05-18 — see [docs/alp-api-audit.md](docs/alp-api-audit.md) for full findings. All 9 audited function signatures verified identical. Key delta: `ALP_DMDTYPE_WXGA_S450 12L` (the DLP650LNIR type constant) is only in the official header; do not use `ALP_PROJ_SYNC/ALP_SYNCHRONOUS/ALP_ASYNCHRONOUS` (2303–2305L) — removed.
-- ALP-4.1 header now in-repo at [vendor/alp/official-4.1/alp.h](vendor/alp/official-4.1/alp.h) (Version 25, DLi4130 DLP7000 visible DMD kit, borrowed from Laura Waller lab). Audit confirmed all 9 core function signatures identical to ALP-4.3. Board: DLP7000, 1024×768 XGA, `alp41.dll`. Use this board for software validation until the NIR DLP650LNIR arrives.
-- Authoritative API surface:
-  - **Primary C API reference:** [vendor/alp/official/alp.h](vendor/alp/official/alp.h) — official Vialux header, Version 28. Use this for all new code.
-  - **Older reference (Version 14, for cross-check only):** [vendor/alp/reference/parot-alptool/alp.h](vendor/alp/reference/parot-alptool/alp.h) — extracted from an earlier ALP-4.3 installer by the parot-alptool author.
-  - **MATLAB calllib prototypes (4.3 x64):** [vendor/alp/reference/parot-alptool/alpV43x64proto.m](vendor/alp/reference/parot-alptool/alpV43x64proto.m) — the prototype file we'll use on a 4.3 x64 system; pairs with `alp4395.dll` and `alp4395_thunk_pcwin64.dll` in the same directory.
-  - [vendor/alp/reference/ALP4lib/src/ALP4.py](vendor/alp/reference/ALP4lib/src/ALP4.py) — Python wrapper, cleanest single-file API summary
-  - [vendor/alp/reference/parot-alptool/](vendor/alp/reference/parot-alptool/) — MATLAB `@alpapi/` wrappers and other prototype variants (V1, V42x32, V42x64) — cross-reference for ALP-4.3-specific calls
-  - [vendor/alp/reference/nakul-alp41/](vendor/alp/reference/nakul-alp41/) — wraps the **ALP Basic** API (separate DLL `alp41basic.dll`, `Alpb*` prefix, no sequence/projection model). NOT the high-speed API — useful only as a reference for device alloc/free/inquire mechanics; cannot express sequence-based stimulation
-- Never invent ALP function names. If a function isn't in one of the references above, stop and ask.
-- Flag any uncertain calls for verification once official headers arrive.
+- **Primary reference**: [vendor/alp/official/alp.h](vendor/alp/official/alp.h) —
+  ALP-4.3, Version 28, © 2004-2024. Use this for all new code.
+- **Board in hand**: DLP7000 (1024×768 XGA) on **ALP-4.1**, `alp41.dll` —
+  [vendor/alp/official-4.1/alp.h](vendor/alp/official-4.1/alp.h), Version 25, borrowed
+  from the Waller lab. All 9 core function signatures verified identical to 4.3, so
+  this board validates the software until the DLP650LNIR arrives.
+- **Key delta**: `ALP_DMDTYPE_WXGA_S450 12L` (the DLP650LNIR type constant) exists only
+  in the official 4.3 header. Do **not** use `ALP_PROJ_SYNC` / `ALP_SYNCHRONOUS` /
+  `ALP_ASYNCHRONOUS` (2303–2305L) — removed.
+- **MATLAB calllib prototypes (4.3 x64)**:
+  [vendor/alp/reference/parot-alptool/alpV43x64proto.m](vendor/alp/reference/parot-alptool/alpV43x64proto.m),
+  paired with `alp4395.dll` + its thunk in the same directory. `scripts/alpPaths.m`
+  resolves the SDK path — do not hard-code it.
+- Other references: `parot-alptool/` (older Version 14 header, `@alpapi/` wrappers,
+  other prototype variants) and `ALP4lib/src/ALP4.py` (cleanest single-file API
+  summary). `nakul-alp41/` wraps **ALP Basic** (`alp41basic.dll`, `Alpb*` prefix) — not
+  the high-speed API, useful only for device alloc/free/inquire mechanics; it cannot
+  express sequence-based stimulation.
+- Full cross-reference audit: [docs/alp-api-audit.md](docs/alp-api-audit.md).
 
-### Meadowlark 1K SLM (Blink SDK)
-- The Meadowlark HSP1K (1024×1024, 17 µm, 8-bit LC) does the remote focusing on the bringup arm. It lives on a **separate SLM PC** (PCIe + Blink SDK); the DAQ PC never sends pixels — it sends a small **mask spec** over msocket (port 3046; see [docs/PORTS.md](docs/PORTS.md)) and the SLM PC recomputes identical masks with the shared `tfp.slm` engine (`scripts/slm_pc_setup/slm_server.m`).
-- **Never invent Blink function names** — same discipline as the ALP rule. The SDK header must be vendored into `vendor/meadowlark/official/` and audited in [docs/blink-api-audit.md](docs/blink-api-audit.md) before any `calllib` name lands in `tfp.hardware.BlinkSLM` (stubbed with `sdkNotVendored` errors until then). Sequence advance defaults to `trigger_mode: software`; TTL (DAQ `port0/line8`) becomes a config flip once the audit confirms this unit's external-trigger sequencing.
-- The future TI-PLM swap stays a config change: all modulators sit under the `tfp.hardware.PLM` base (`makeModulator` factory keyed on `config.slm.backend`).
+## Meadowlark Blink (SLM)
 
-## Development environment
-- Code is written on macOS (this machine)
-- **MATLAB is installed locally on this MacBook** — Claude can and should run unit tests here (e.g. `matlab -batch "runtests('tests')"`) before pushing. Mock-backed tests cover most of the codebase, so local pre-flight catches the majority of regressions.
-- Hardware-touching code (real DMD, NI DAQ, ALP DLL) still RUNS on the Windows scope PC; the ALP DLL cannot be loaded on macOS and hardware verification happens on the scope PC after git push/pull.
+The HSP1K is 1024×1024, 17 µm, 8-bit LC, on the SLM PC. The SDK header **has not been
+vendored yet** — `tfp.hardware.BlinkSLM` is stubbed with `sdkNotVendored` errors, and
+no `calllib` name may land until the header is in `vendor/meadowlark/official/` and
+audited in [docs/blink-api-audit.md](docs/blink-api-audit.md). Sequence advance
+defaults to `trigger_mode: software`; TTL (DAQ `port0/line8`) becomes a config flip
+once the audit confirms this unit's external-trigger sequencing.
 
-## Hard rules for Claude
+---
 
-- **Never edit files outside this repository** (`c:\projects\DMD-control-flow-software`). Do not modify files in other directories on the system, regardless of what a task seems to require.
+# Development environment
 
-## What Claude should know when working on this codebase
+- Code is written on **macOS** (this machine). MATLAB is installed locally — run the
+  suite here before pushing: `matlab -nodisplay -batch "runtests"` (the repo's
+  `runtests.m` shadows the builtin and takes no arguments). Mock-backed tests cover
+  most of the codebase, so local pre-flight catches most regressions. **Always
+  `-nodisplay`** — test runs must not pop figure windows onto the user's screen.
+- Hardware-touching code (real DMD, NI DAQ, ALP DLL) runs on the **Windows scope PC**;
+  the ALP DLL cannot load on macOS, so hardware verification happens there after a
+  push/pull. The rig commits as `hadesnik` and its clock runs a few days fast.
+- **MATLAB R2025b (and 2024+) require macOS 13.3+**; R2023a works on Monterey 12.x and
+  is the current dev pin. Don't upgrade MATLAB until macOS is upgraded.
 
-- This is a research instrument, not production software. Optimize for clarity and ease of modification, not absolute robustness. But: anything that touches the high-power laser path needs explicit safety interlocks (see `+util/safetyChecks.m`).
-- The user runs this from MATLAB command line interactively, not as a compiled app. Don't build a GUI unless asked.
-- ScanImage integration is via TCP/IP or named pipe — never modify ScanImage internals.
-- The DLPC410 supports binary pattern rates up to 12,500 Hz. Don't assume that's achievable for our patterns; the limit depends on pattern size and trigger mode. Empirical benchmarking required when the DMD arrives.
-- Temporal focusing means the **axial confinement** of the 2p excitation comes from spectral dispersion + BFP fill, not from numerical aperture alone. Lateral pattern definition comes from the DMD; the grating doesn't affect lateral resolution. Pattern-generation code only cares about lateral; everything else is optics.
+---
+
+# What Claude should know
+
+- This is a **research instrument, not production software**. Optimise for clarity and
+  ease of modification over absolute robustness — but anything touching the high-power
+  laser path needs explicit safety interlocks (`+util/safetyChecks.m`).
+- The user runs this **interactively from the MATLAB command line**, not as a compiled
+  app. Don't build a GUI unless asked.
+- ScanImage integration is via TCP/IP or named pipe — **never modify ScanImage
+  internals**.
+- The DLPC410 supports binary pattern rates to 12,500 Hz, but don't assume that is
+  achievable for our patterns; the limit depends on pattern size and trigger mode.
+  Empirical benchmarking required when the DMD arrives.
+- Temporal focusing means **axial confinement comes from spectral dispersion + BFP
+  fill**, not from NA alone. Lateral definition comes from the DMD; the grating does
+  not affect lateral resolution. Pattern code cares only about lateral — everything
+  else is optics.
 
 ## Known gotchas
 
-- **ScanImage is a PMT-based point scanner, not a camera. It cannot image DMD illumination spots directly.**
-  The 2p imaging path uses galvo-scanned focused excitation and a PMT point detector. There is no widefield camera on the imaging PC. Consequently, projecting a DMD spot onto a fluorescent slab and "imaging it in ScanImage" does not work: ScanImage can only see fluorescence that its own scan beam excites.
-
-  Two viable routes for DMD↔sample spatial calibration exist:
-  - **Substage camera (preferred, implemented):** A widefield camera viewing the sample from below images fluorescence on a thin film. Two affines are fitted against the same camera frame: (A) DMD spots → camera (`alignDMDtoCamera`), and (B) ScanImage scan field → camera (`crossRegisterScanImage`). Composing them gives DMD → ScanImage scan-field coords with no data transfer between PCs. No ScanImage TIFF is needed — ScanImage just runs in Focus mode with a non-square pixel count (e.g. 256×512) so the camera sees an asymmetric rectangle that unambiguously identifies the fast (resonant) vs slow (galvo) scan axis. Axis signs are resolved by a verify step; see the Phase 3 calibration procedure above.
-  - **Photobleach holes (backup):** Project DMD spots onto a fluorescent film at sufficient power density to bleach dark holes. Image the holes with ScanImage (they appear as dark spots against the fluorescent background). This gives a direct DMD → ScanImage pixel mapping with no substage camera required. Feasibility depends on achieving enough intensity at the sample with the NKT FS-50; may not be practical at low duty-cycle.
-
-- **MATLAB R2025b (and 2024+) require macOS 13.3+**; R2023a works on Monterey 12.x and is the current dev pin. Don't upgrade the dev machine's MATLAB until macOS is upgraded.
-- **When cloning vendor repos into `vendor/`, strip `.git/` before `git add`** to avoid embedded-repo gitlinks (which break clone-and-go for collaborators).
+- **ScanImage is a PMT point scanner, not a camera — it cannot image DMD spots
+  directly.** It only sees fluorescence its own scan beam excites, so "project a spot
+  and look at it in ScanImage" does not work. Two routes exist for DMD↔sample
+  registration: the **substage camera** (preferred, implemented — see the two-step
+  procedure above; no ScanImage TIFF and no inter-PC data transfer needed), or
+  **photobleach holes** (backup — bleach dark spots into a fluorescent film and image
+  them with ScanImage; feasibility depends on reaching enough intensity with the FS-50
+  and may not be practical at low duty cycle).
+- **`configs/real.yaml` is rewritten in place on the rig** by
+  `tfp.io.updateConfigCalibrationPath`, and carries rig-specific COM port,
+  usteps_per_um, host IPs, and the `zstage.mount` / `direction_sign` decision. **Never
+  overwrite the rig's copy from a dev machine.**
+- **`alignmentTarget` exists twice**: `scripts/alignmentTarget.m` (rig, 262 lines) and
+  `src/+tfp/+patterns/alignmentTarget.m` (108 lines + test). Different paths and one is
+  namespaced, so neither git nor MATLAB flags the collision. Check both before editing
+  either. The `scripts/` copy is the one the bench procedure names for measuring the
+  patch centre (40 px rings, alongside `scripts/alignmentField.m`), so it is the live
+  one — but that is a use, not a decision, and the duplication is still unresolved.
+- **When cloning vendor repos into `vendor/`, strip `.git/` before `git add`**, or you
+  get embedded-repo gitlinks that break clone-and-go for collaborators.
 - **`data/` is gitignored** — session outputs don't belong in the repo.
-- **`vendor/alp/reference/parot-alptool/` ships Windows `.dll`/`.obj`/`.lib` binaries.** Harmless privately, but consider stripping before any public release.
+- **`vendor/alp/reference/parot-alptool/` ships Windows `.dll`/`.obj`/`.lib`
+  binaries.** Harmless privately; consider stripping before any public release.
 
-## Open questions to resolve
+## Open questions
 
-- [ ] Which NIR DMD EVM/SDK exactly — **leaning ViALUX ALP-4.3 wrapper** for the DLP650LNIR via DLPC410, based on [docs/alp-api-audit.md](docs/alp-api-audit.md). Phase 3 will use this unless the EVM arrives with incompatible firmware. Fallbacks (TI directly, ViALUX V-9501c) only revisited if 4.3 doesn't fit.
-- [ ] Final grating choice (530R aluminum reflective vs Wasatch 1700 g/mm VPH transmission). Affects post-grating layout but not code.
-- [ ] ScanImage version and bridge mechanism (vDAQ-mediated triggering vs. direct TCP).
-- [ ] Whether to put the DAQ-side recording in MATLAB session-based interface or Data Acquisition Toolbox `dataacquisition` (newer).
+- [ ] **Handoff regeneration at rev ≥5** with `f7 = 300 mm` (see the warning above).
+- [ ] Reconcile `configs/real.yaml`'s isotropic 0.270 µm/px / 278 px with build B's
+      anisotropic Ø5.0 mm reality — **on the rig**, not from here.
+- [ ] Resolve the duplicate `alignmentTarget`.
+- [ ] Vendor + audit the Blink SDK header so `BlinkSLM` can leave its stub.
+- [ ] Final grating choice: Newport 33010FL01-530R (1200 g/mm gold ruled reflective)
+      vs Wasatch 1700 g/mm VPH transmission. Affects post-grating layout, not code.
+- [ ] ScanImage version and bridge mechanism (vDAQ-mediated triggering vs direct TCP).
+- [ ] DAQ-side recording: MATLAB session-based interface vs the newer
+      `dataacquisition` interface.
 
-## Reading order for someone new (or for Claude on a fresh session)
+## Reading order for a fresh session
 
 1. This file.
-2. `docs/ARCHITECTURE.md` — concrete design, classes, data flow.
-3. `docs/tf_photostim_bom.html` — what the hardware actually is.
-4. `+tfp/+hardware/DMD.m` and `MockDMD.m` — the interface pattern.
-5. `+tfp/+experiments/exp_ppsf_lateral.m` — what a complete experiment script looks like.
+2. `ARCHITECTURE.md` (repo root) — class design, data flow.
+3. [docs/BRINGUP_GUIDE.md](docs/BRINGUP_GUIDE.md) — the bench procedure end to end.
+4. [docs/optics_handoff.md](docs/optics_handoff.md) — authoritative optics numbers.
+5. `src/+tfp/+hardware/DMD.m` and `MockDMD.m` — the interface pattern.
+6. `src/+tfp/+experiments/exp_ppsf_lateral.m` — what a complete experiment looks like.
