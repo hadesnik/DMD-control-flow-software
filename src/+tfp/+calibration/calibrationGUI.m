@@ -23,13 +23,31 @@ function calib = calibrationGUI(dmd, camera, siBridge, options)
 %   Hardware calls are not wrapped — failures propagate to the caller.
 %
 %   Requires Image Processing Toolbox (graythresh, bwconncomp, regionprops).
+%
+%   DEPRECATED 2026-08-19 — superseded by tfp.gui.CalibrationApp, which covers
+%   this step plus power calibration, ScanImage cross-registration, axis-sign
+%   verification and field tilt, behind the pulse-energy interlock. This
+%   function also drifted from tfp.calibration.alignDMDtoCamera: its
+%   gridSpacing default stayed at a hardcoded 100 px after the real one became
+%   patch-derived, and it never stamped stagePositionUm. Kept only so a session
+%   already using it does not break; do not add to it.
 
 if nargin < 3, siBridge = [];     end
 if nargin < 4, options  = struct(); end
 
+warning('tfp:calibration:calibrationGUI:deprecated', ...
+    ['tfp.calibration.calibrationGUI is superseded by tfp.gui.CalibrationApp ' ...
+     '(launch it with scripts/run_calibrationGUI.m). This function covers ' ...
+     'only the DMD->camera step and does so without the pulse-energy ' ...
+     'interlock. See docs/CALIBRATION_GUI.md.']);
+
 % --- parse options (same defaults as alignDMDtoCamera) ---
 nGridPoints = configField(options, 'nGridPoints', 5);
-gridSpacing = configField(options, 'gridSpacing', 100);
+% Derive the spacing exactly as alignDMDtoCamera does, so the corner spots stay
+% inside the illuminated patch. The old hardcoded 100 px predated the O463 px
+% build-B patch and put the corners outside it.
+gridSpacing = configField(options, 'gridSpacing', ...
+    defaultGridSpacing(nGridPoints, configField(options, 'spotRadius', 8)));
 spotRadius  = configField(options, 'spotRadius',  8);
 exposureS   = configField(options, 'exposureS',   0.1);
 umPerPixel  = configField(options, 'umPerPixel',  1.56);
@@ -508,5 +526,22 @@ if isfield(s, name)
     value = s.(name);
 else
     value = default;
+end
+end
+
+% ---------------------------------------------------------------------------
+function spacing = defaultGridSpacing(nGridPoints, spotRadius)
+%defaultGridSpacing Patch-derived spacing, mirroring alignDMDtoCamera.
+%   The grid CORNERS are the binding constraint: they sit at
+%   half*spacing*sqrt(2) from the chip centre.
+spacing = 100;
+try
+    patchR = tfp.util.readHandoffConstants().patch_diameter_px / 2;
+    half   = floor(nGridPoints / 2);
+    if half > 0
+        spacing = max(10, floor((patchR - spotRadius - 5) / (half * sqrt(2))));
+    end
+catch
+    % handoff unavailable: fall back to the historical default
 end
 end

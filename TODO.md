@@ -9,7 +9,8 @@ Bottom line: **do not run on the real rig until the CRITICAL items below are res
 
 - [x] **C1. Fire the ScanImage start-acquisition TTL.** *(Resolved by T-EP-3c, commit `2f04661`. Sequencer.runOne now calls `daq.sendDigitalPulse(startAcqLine, startAcqPulseS)` per trial.)*
 
-- [ ] **C2. Wire `powerLUT` through Sequencer AO queueing.**
+- [~] **C2. Wire `powerLUT` through Sequencer AO queueing.** *(Half done 2026-08-19: the schema collision underneath it is fixed.)* `powerLUT` and `powerMeterSweep` were answering different questions with the same field name — a scalar `dmdActivePx` in one, a vector in the other — which is why `powerLUT` had only ever been called from tests. [`tfp.calibration.normalizePowerCurve`](src/+tfp/+calibration/normalizePowerCurve.m) now migrates both to one versioned schema and `powerLUT` asserts it got the ON-count branch. `powerLUT` still is not wired into `Sequencer.buildStimWaveform`.
+  *Original note:*
   [Sequencer.m](src/+tfp/+trial/Sequencer.m) `buildStimWaveform` (line ~782) uses `trial.powerMw` as a raw voltage. [powerLUT.m](src/+tfp/+patterns/powerLUT.m) is only called by `tests/test_patterns.m`. The FS-50 modulation input will sit at the wrong voltage for any power curve. Mock tests pass because `MockDAQ` synthesizes responses regardless of AO.
   *Next: T-EP-3d.*
 
@@ -17,8 +18,8 @@ Bottom line: **do not run on the real rig until the CRITICAL items below are res
 
 - [x] **C4. Configure the frame-clock DI before reading it.** *(Resolved by T-EP-3c, commit `2f04661`. `frameClockLine` is now wired into `sessionCfg.diLines` at `startContinuousSession` time; `decodeFrameClock` runs on the captured continuous DI at session end.)*
 
-- [ ] **C5. Implement real `safetyChecks` before any high-power runs.**
-  [safetyChecks.m:12-14](src/+tfp/+util/safetyChecks.m#L12-L14) only checks an in-process abort flag. No power-max enforcement, no Pockels/shutter interlock. Ensemble experiments (which actually drive AO) don't even call it.
+- [~] **C5. Implement real `safetyChecks` before any high-power runs.** *(Largely addressed 2026-08-19.)*
+  [safetyChecks.m:12-14](src/+tfp/+util/safetyChecks.m#L12-L14) still only checks an in-process abort flag, but power-max enforcement now exists and is real: [`tfp.util.assertPulseEnergySafe`](src/+tfp/+util/assertPulseEnergySafe.m) enforces the handoff's `safe_pulse_energy_uJ` (89) and an air-breakdown pupil-intensity estimate, and [`tfp.hardware.LaserPowerController`](src/+tfp/+hardware/LaserPowerController.m) is the single gateway to the CARBIDE modulator — clamping, interlocking, confirming and zeroing on every error path. **Still open:** the build-A ensemble experiments drive `ao3` directly and do not go through the controller (see `tests/test_gui_headless_guard.m`'s allow-list), and there is still no shutter/Pockels interlock.
 
 - [ ] **C6. Fix `real.yaml` schema — `paths.dataDir` and `daq.aiRangeV`.**
   Experiments read `config.paths.dataDir` and `config.daq.aiRangeV`. `real.yaml` puts `dataDir` under `session.dataDir` (lines 35-37) and has no `aiRangeV` at all. Same `paths` bug in `dli4130.yaml` (lines 43-45).
@@ -27,8 +28,7 @@ Bottom line: **do not run on the real rig until the CRITICAL items below are res
 - [ ] **C7. Verify `startContinuousSession` arms with no queued AO.**
   [NI6323_DAQ.m:521-525](src/+tfp/+hardware/NI6323_DAQ.m#L521-L525): `startBackground()` is called with no queued output. Inline `%VERIFY` admits older drivers required at least one queued AO sample. No fallback or try/catch.
 
-- [ ] **C8. Persist axis-sign verify result to YAML automatically.**
-  CLAUDE.md promises sign disambiguation gets written into the rig config; [verifyScanFieldComposition.m:206-218](src/+tfp/+calibration/verifyScanFieldComposition.m#L206-L218) only prints suggested YAML lines for the operator to copy. Easy to miss on first real-rig run.
+- [x] **C8. Persist axis-sign verify result to YAML automatically.** *(Resolved 2026-08-19.)* `verifyScanFieldComposition` takes `options.configPath` + `options.allowConfigWrite` and writes `calibration.scan_fast_axis_sign` / `scan_slow_axis_sign` via the new [`tfp.io.updateConfigScalar`](src/+tfp/+io/updateConfigScalar.m) (unquoted scalars; `updateConfigCalibrationPath` now shares its regex machinery). Writing is opt-in and blocked entirely for mock sessions, because `configs/real.yaml` belongs to the rig. The YAML lines are still printed either way.
 
 - [ ] **C9. Switch ScanImage from continuous to episodic acquisition (one TIFF per trial, triggered by a per-trial start-acq TTL).** *Rounds 0–3 done; Rounds 4–5 pending.*
   - [x] Round 0 — Design lock (`docs/SYNC_EPISODIC.md`, archive tag).

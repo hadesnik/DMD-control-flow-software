@@ -29,8 +29,30 @@ classdef MockSubstageCamera < tfp.hardware.SubstageCamera
     %                     slmUmPerCmd*dzCmd. Peak drops as 1/(1+(dEff/zR)^2)
     %                     (energy conservation).
     %
+    %   Field-tilt model (all optional; 0 = flat, so existing tests are
+    %   unaffected):
+    %     .tiltGradientUmPerUm — excitation-plane depth gradient along the
+    %                     DISPERSION diagonal, um of focal shift per um of
+    %                     sample-plane travel. The handoff's design value is
+    %                     0.02929. Best focus at a field point therefore sits
+    %                     at filmZUm + slmUmPerCmd*dzCmd + tilt(point), which
+    %                     is exactly what tfp.calibration.measureFieldTilt
+    %                     must recover.
+    %     .tiltGrooveUmPerUm — same along the GROOVE diagonal (expected ~0;
+    %                     a large fitted value means the tilt is not along the
+    %                     dispersion axis at all).
+    %     .dmdSize      — [nRows nCols] of the chip the tilt is computed on
+    %                     (default: taken from the .dmd handle when present).
+    %
+    %   Runtime controls (exposure, gain, binning, ROI, pixel format) are
+    %   implemented so headless tests can exercise the same code paths the GUI
+    %   drives. Binning here defaults to AVERAGE mode, unlike a real Basler
+    %   which defaults to SUM — averaging keeps the [0,1] scale intact so a
+    %   test can see the noise drop without everything saturating. Set
+    %   .binningMode = 'sum' for the hardware-like behaviour.
+    %
     %   See also tfp.calibration.alignDMDtoCamera,
-    %   tfp.calibration.throughFocusSweep.
+    %   tfp.calibration.throughFocusSweep, tfp.calibration.measureFieldTilt.
 
     properties (SetAccess = protected)
         nRows         = []
@@ -51,6 +73,19 @@ classdef MockSubstageCamera < tfp.hardware.SubstageCamera
         slmUmPerCmd_  = 1.0
         filmZUm_      = 0
         zRUm_         = 10
+        tiltDisp_     = 0     % um focal shift per um along the dispersion axis
+        tiltGroove_   = 0     % ... along the groove axis
+        dmdSize_      = []    % [nRows nCols]; from the dmd handle when absent
+        % runtime controls
+        baseRows_     = 512
+        baseCols_     = 512
+        refExposureMs_ = 10
+        exposureMs_   = 10
+        gainDb_       = 0
+        binning_      = 1
+        binningMode_  = 'average'
+        roi_          = []    % [x y w h] on the UNBINNED sensor; [] = full
+        format_       = 'Mono8'
         log_          = struct('timestamp', {}, 'eventType', {}, 'payload', {})
     end
 
@@ -61,10 +96,22 @@ classdef MockSubstageCamera < tfp.hardware.SubstageCamera
                     'config must be a struct.');
             end
 
-            obj.nRows        = configField(config, 'nRows',       512);
-            obj.nCols        = configField(config, 'nCols',       512);
+            obj.baseRows_    = configField(config, 'nRows',       512);
+            obj.baseCols_    = configField(config, 'nCols',       512);
             obj.noiseLevel_  = configField(config, 'noiseLevel',  0.05);
             obj.spotSigmaPx_ = configField(config, 'spotSigmaPx', 4);
+
+            obj.tiltDisp_    = configField(config, 'tiltGradientUmPerUm', 0);
+            obj.tiltGroove_  = configField(config, 'tiltGrooveUmPerUm',   0);
+            obj.dmdSize_     = configField(config, 'dmdSize',             []);
+
+            obj.refExposureMs_ = configField(config, 'exposureMs', 10);
+            obj.exposureMs_    = obj.refExposureMs_;
+            obj.gainDb_        = configField(config, 'gain',        0);
+            obj.binning_       = configField(config, 'binning',     1);
+            obj.binningMode_   = char(configField(config, 'binningMode', 'average'));
+            obj.format_        = char(configField(config, 'format',  'Mono8'));
+            obj.roi_           = configField(config, 'roi',         []);
 
             if isfield(config, 'dmd')
                 obj.dmd_ = config.dmd;
@@ -93,6 +140,7 @@ classdef MockSubstageCamera < tfp.hardware.SubstageCamera
 
             obj.isInitialized = true;
             obj.lastFrame_    = [];
+            obj.refreshGeometry_();
             obj.logEvent('initialize', config);
         end
 
@@ -107,7 +155,9 @@ classdef MockSubstageCamera < tfp.hardware.SubstageCamera
                     'initialize() must be called before snap().');
             end
 
-            frame = obj.noiseLevel_ * rand(obj.nRows, obj.nCols);
+            % Render on the full sensor first, then apply ROI, then binning:
+            % the optical image does not know about the readout window.
+            frame = obj.noiseLevel_ * rand(obj.baseRows_, obj.baseCols_);
 
             if ~isempty(obj.dmd_) && ~isempty(obj.truthAffine_)
                 pattern = obj.dmd_.getActivePattern();
@@ -120,7 +170,8 @@ classdef MockSubstageCamera < tfp.hardware.SubstageCamera
                         p = obj.truthAffine_ * [dmdCol; dmdRow; 1];
                         camX = p(1);   % camera column (x)
                         camY = p(2);   % camera row (y)
-                        frame = frame + obj.gaussianSpot(camX, camY);
+                        frame = frame + obj.gaussianSpot(camX, camY, dmdCol, dmdRow, ...
+                            size(pattern));
                     end
                 end
             end
@@ -128,14 +179,21 @@ classdef MockSubstageCamera < tfp.hardware.SubstageCamera
             if ~isempty(obj.scanRect_)
                 x1 = max(1, round(obj.scanRect_(1)));
                 y1 = max(1, round(obj.scanRect_(2)));
-                x2 = min(obj.nCols, round(obj.scanRect_(1) + obj.scanRect_(3) - 1));
-                y2 = min(obj.nRows, round(obj.scanRect_(2) + obj.scanRect_(4) - 1));
+                x2 = min(obj.baseCols_, round(obj.scanRect_(1) + obj.scanRect_(3) - 1));
+                y2 = min(obj.baseRows_, round(obj.scanRect_(2) + obj.scanRect_(4) - 1));
                 if x2 >= x1 && y2 >= y1
                     frame(y1:y2, x1:x2) = 0.8 + 0.1 * rand(y2-y1+1, x2-x1+1);
                 end
             end
 
-            frame       = min(max(frame, 0), 1);   % clip to [0,1]
+            % Exposure and gain act on the collected signal, as they do on a
+            % real sensor: doubling exposure doubles the electrons.
+            frame = frame * (obj.exposureMs_ / obj.refExposureMs_) * 10^(obj.gainDb_ / 20);
+
+            frame = obj.applyRoi_(frame);
+            frame = obj.applyBinning_(frame);
+            frame = min(max(frame, 0), 1);   % clip to [0,1] (saturation)
+            frame = obj.quantise_(frame);
             obj.lastFrame_ = frame;
             obj.logEvent('snap', struct('hasDmdRef', ~isempty(obj.dmd_)));
         end
@@ -170,23 +228,95 @@ classdef MockSubstageCamera < tfp.hardware.SubstageCamera
         function entries = getLog(obj)
             entries = obj.log_;
         end
+
+        % --- runtime controls -------------------------------------------
+        function caps = getCapabilities(~)
+            caps = struct('exposure', true, 'gain', true, 'binning', true, ...
+                'roi', true, 'pixelFormat', true, 'exposureLimits', true, ...
+                'bitDepth', true);
+        end
+
+        function setExposureMs(obj, ms)
+            if ~isnumeric(ms) || ~isscalar(ms) || ~isfinite(ms) || ms <= 0
+                error('tfp:hardware:MockSubstageCamera:badExposure', ...
+                    'exposure must be a positive finite scalar in ms.');
+            end
+            lim = obj.getExposureLimitsMs();
+            obj.exposureMs_ = min(max(ms, lim(1)), lim(2));
+            obj.logEvent('setExposureMs', struct('exposureMs', obj.exposureMs_));
+        end
+
+        function ms  = getExposureMs(obj),        ms  = obj.exposureMs_;  end
+        function lim = getExposureLimitsMs(~),    lim = [0.02, 1000];     end
+
+        function setGain(obj, g)
+            if ~isnumeric(g) || ~isscalar(g) || ~isfinite(g)
+                error('tfp:hardware:MockSubstageCamera:badGain', ...
+                    'gain must be a finite scalar.');
+            end
+            obj.gainDb_ = g;
+            obj.logEvent('setGain', struct('gain', g));
+        end
+
+        function g = getGain(obj), g = obj.gainDb_; end
+
+        function setBinning(obj, n)
+            if ~isnumeric(n) || ~isscalar(n) || ~ismember(n, [1 2 4])
+                error('tfp:hardware:MockSubstageCamera:badBinning', ...
+                    'binning must be 1, 2 or 4; got %s.', mat2str(n));
+            end
+            obj.binning_ = n;
+            obj.refreshGeometry_();
+            obj.logEvent('setBinning', struct('binning', n));
+        end
+
+        function n = getBinning(obj), n = obj.binning_; end
+
+        function setRoi(obj, roi)
+            if ~isnumeric(roi) || numel(roi) ~= 4 || any(~isfinite(roi)) ...
+                    || any(roi(3:4) < 1) || roi(1) < 1 || roi(2) < 1
+                error('tfp:hardware:MockSubstageCamera:badRoi', ...
+                    'roi must be [x y width height], 1-indexed, size >= 1.');
+            end
+            obj.roi_ = double(roi(:)');
+            obj.refreshGeometry_();
+            obj.logEvent('setRoi', struct('roi', obj.roi_));
+        end
+
+        function roi = getRoi(obj), roi = obj.effectiveRoi_(); end
+
+        function resetRoi(obj)
+            obj.roi_ = [];
+            obj.refreshGeometry_();
+            obj.logEvent('resetRoi', []);
+        end
+
+        function setPixelFormat(obj, fmt)
+            obj.format_ = char(fmt);
+            obj.logEvent('setPixelFormat', struct('format', obj.format_));
+        end
+
+        function f = getPixelFormat(obj), f = obj.format_; end
+
+        function nBits = getBitDepth(obj)
+            nBits = tfp.hardware.BaslerSubstageCamera.bitsForFormat(obj.format_);
+        end
     end
 
     methods (Access = private)
-        function spot = gaussianSpot(obj, cx, cy)
-            [cols, rows] = meshgrid(1:obj.nCols, 1:obj.nRows);
+        function spot = gaussianSpot(obj, cx, cy, dmdCol, dmdRow, patternSize)
+            [cols, rows] = meshgrid(1:obj.baseCols_, 1:obj.baseRows_);
             % Defocus blur: widen sigma + drop peak by the effective
             % defocus between the excitation focus and the film.
-            dEff = obj.effectiveDefocusUm();
+            dEff = obj.effectiveDefocusUm(dmdCol, dmdRow, patternSize);
             grow = 1 + (dEff / obj.zRUm_)^2;
             s    = obj.spotSigmaPx_ * sqrt(grow);
             amp  = 1 / grow;
             spot = amp * exp(-((cols - cx).^2 + (rows - cy).^2) / (2 * s^2));
         end
 
-        function dEff = effectiveDefocusUm(obj)
+        function dEff = effectiveDefocusUm(obj, dmdCol, dmdRow, patternSize)
             %effectiveDefocusUm Excitation focus minus film plane (um).
-            dEff = 0;
             dzCmd = 0;
             if ~isempty(obj.slm_)
                 dzCmd = obj.slm_.getCurrentDefocusUm();
@@ -196,7 +326,74 @@ classdef MockSubstageCamera < tfp.hardware.SubstageCamera
             if ~isempty(obj.zstage_)
                 zPos = obj.zstage_.getPositionUm();
             end
-            dEff = obj.slmUmPerCmd_ * dzCmd - (zPos - obj.filmZUm_);
+            zTilt = obj.tiltOffsetUm(dmdCol, dmdRow, patternSize);
+            dEff  = obj.slmUmPerCmd_ * dzCmd + zTilt - (zPos - obj.filmZUm_);
+        end
+
+        function zUm = tiltOffsetUm(obj, dmdCol, dmdRow, patternSize)
+            %tiltOffsetUm Native excitation depth at a DMD field position.
+            %   The excitation surface is a tilted plane along the chip
+            %   diagonals (handoff section 5). Uses tfp.optics.dmdToDispersionUm
+            %   rather than re-deriving the 45-degree mapping, which is the one
+            %   place it is allowed to live.
+            zUm = 0;
+            if obj.tiltDisp_ == 0 && obj.tiltGroove_ == 0
+                return
+            end
+            dmdSize = obj.dmdSize_;
+            if isempty(dmdSize) && nargin >= 4 && numel(patternSize) >= 2
+                dmdSize = patternSize(1:2);
+            end
+            if isempty(dmdSize)
+                return
+            end
+            [xDisp, yGroove] = tfp.optics.dmdToDispersionUm( ...
+                [dmdCol, dmdRow], dmdSize);
+            zUm = obj.tiltDisp_ * xDisp + obj.tiltGroove_ * yGroove;
+        end
+
+        % --- runtime-control internals ---------------------------------
+        function refreshGeometry_(obj)
+            roi = obj.effectiveRoi_();
+            obj.nCols = floor(roi(3) / obj.binning_);
+            obj.nRows = floor(roi(4) / obj.binning_);
+        end
+
+        function roi = effectiveRoi_(obj)
+            if isempty(obj.roi_)
+                roi = [1, 1, obj.baseCols_, obj.baseRows_];
+            else
+                roi = obj.roi_;
+            end
+        end
+
+        function frame = applyRoi_(obj, frame)
+            if isempty(obj.roi_), return; end
+            r  = obj.roi_;
+            x1 = max(1, round(r(1)));
+            y1 = max(1, round(r(2)));
+            x2 = min(obj.baseCols_, x1 + round(r(3)) - 1);
+            y2 = min(obj.baseRows_, y1 + round(r(4)) - 1);
+            frame = frame(y1:y2, x1:x2);
+        end
+
+        function frame = applyBinning_(obj, frame)
+            n = obj.binning_;
+            if n <= 1, return; end
+            nr = floor(size(frame, 1) / n);
+            nc = floor(size(frame, 2) / n);
+            frame = frame(1:nr*n, 1:nc*n);
+            frame = reshape(frame, n, nr, n, nc);
+            if strcmpi(obj.binningMode_, 'sum')
+                frame = squeeze(sum(sum(frame, 1), 3));
+            else
+                frame = squeeze(mean(mean(frame, 1), 3));
+            end
+        end
+
+        function frame = quantise_(obj, frame)
+            levels = 2^obj.getBitDepth() - 1;
+            frame  = round(frame * levels) / levels;
         end
 
         function logEvent(obj, eventType, payload)

@@ -107,6 +107,38 @@ laser:
   modulation_voltage_min: 0.0     # 0 V = laser off
   calibration_file: ''
   default_power_mw: 1.0
+  # CARBIDE external modulator (build B). '' means UNWIRED: every output
+  # through tfp.hardware.LaserPowerController refuses until it is set.
+  carbide_modulator_ao_channel: 'ao1'
+  carbide_voltage_max: 5.0
+  carbide_voltage_min: 0.0
+  carbide_calibration_file: ''
+  # Laser -> sample end-to-end transmission. The volts->mW curve is measured
+  # AT THE SAMPLE but the relay-pupil hazard is upstream of everything, so
+  # tfp.util.assertPulseEnergySafe scales by this. 0.182 is the handoff
+  # section 7a figure and is %VERIFY until measured on the bench.
+  arm_transmission: 0.182
+
+# Substage camera. backend is read by tfp.hardware.makeCamera; 'class' is the
+# legacy spelling and is still parsed.
+camera:
+  backend: 'mock'
+  nRows: 512
+  nCols: 512
+  noiseLevel: 0.02
+  spotSigmaPx: 4
+  exposureMs: 10
+  gain: 0
+  binning: 1
+  format: 'Mono8'
+  umPerPixel: 1.56
+
+# Results the calibration session may write back (see docs/CALIBRATION_GUI.md).
+calibration:
+  scan_fast_axis_sign: 0     # 0 = unresolved; verifyScanFieldComposition writes +1/-1
+  scan_slow_axis_sign: 0
+  field_tilt_file: ''
+  lateral_file: ''
 
 # Trial timing defaults.
 trial:

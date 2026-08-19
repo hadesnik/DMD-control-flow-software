@@ -37,6 +37,15 @@ function calib = verifyScanFieldComposition(dmd, calib, options)
 %       .spotRadiusPx   DMD spot radius in pixels          default 5
 %       .fovSizeUm      scan FOV width in µm               default 800
 %       .mockResponse   [fastSign, slowSign] to bypass input() — for automated tests
+%       .confirmFcn     @(spec) logical — replaces the blocking input() prompt.
+%                       spec carries .comboIndex .nCombos .fastSign .slowSign
+%                       .predFastPx .predSlowPx .predXUm .predYUm .nFast
+%                       .nSlow .label. mockResponse still wins when both are
+%                       given, so existing tests are unaffected.
+%       .configPath     rig YAML to write the confirmed signs back into
+%                       (closes TODO C8). Written only when .allowConfigWrite
+%                       is true; otherwise the lines are printed as before.
+%       .allowConfigWrite  default false — never write a rig config by accident
 %       .showFigure     print summary table (default true unless mockResponse set)
 %
 %   Output: calib with updated fields:
@@ -74,6 +83,10 @@ nSlow      = calib.scanPixels(2);
 fovSizeUm  = configField(options, 'fovSizeUm',    800);
 spotR      = configField(options, 'spotRadiusPx',   5);
 mockResp   = configField(options, 'mockResponse',  []);
+% Injected confirmation callback, added 2026-08-19 so the GUI can replace the
+% blocking input() with buttons WITHOUT forking this function. Precedence is
+% mockResponse -> confirmFcn -> input(), so every existing test is unaffected.
+confirmFcn = configField(options, 'confirmFcn', []);
 showFig    = logical(configField(options, 'showFigure', isempty(mockResp)));
 
 testCoord  = configField(options, 'testDmdCoord', [dmd.nCols/2, dmd.nRows/2]);
@@ -166,6 +179,19 @@ for k = 1:nCombos
         else
             response = 'n';
         end
+    elseif ~isempty(confirmFcn)
+        % GUI path: the app renders the four combinations as a table with
+        % Yes/No per row. mockResponse still takes precedence above, so every
+        % existing automated test keeps working unchanged.
+        spec = struct( ...
+            'comboIndex', k, 'nCombos', size(signCombinations, 1), ...
+            'fastSign',   fs, 'slowSign', ss, ...
+            'predFastPx', preds(k,1), 'predSlowPx', preds(k,2), ...
+            'predXUm',    predUm(k,1), 'predYUm',   predUm(k,2), ...
+            'nFast',      nFast, 'nSlow', nSlow, ...
+            'label',      signLabels{k});
+        ok = confirmFcn(spec);
+        response = ternaryChar(islogical(ok) && isscalar(ok) && ok, 'y', 'n');
     else
         response = strtrim(lower(input( ...
             '        Is the DMD spot centred in this mROI? [y/n]: ', 's')));
@@ -214,9 +240,31 @@ if showFig
         confirmedFastSign, confirmedSlowSign);
     fprintf('[verifyScanFieldComposition] calib.dmdToScan_affine updated with sign correction.\n');
     fprintf('[verifyScanFieldComposition] Write these into your rig config YAML:\n');
+    fprintf('  calibration:\n');
     fprintf('    scan_fast_axis_sign: %+d\n', confirmedFastSign);
     fprintf('    scan_slow_axis_sign: %+d\n', confirmedSlowSign);
     fprintf('[verifyScanFieldComposition] ================================\n\n');
+end
+
+% --- TODO C8: persist the signs instead of only printing them --------------
+% CLAUDE.md promises the disambiguation lands in the rig config; until now this
+% function only printed lines for the operator to copy, which is easy to miss
+% on a first real-rig run. Writing is still OPT-IN, because configs/real.yaml
+% belongs to the rig and must never be rewritten by accident.
+configPath      = configField(options, 'configPath', '');
+allowConfigWrite = logical(configField(options, 'allowConfigWrite', false));
+if ~isempty(configPath) && allowConfigWrite
+    try
+        tfp.io.updateConfigScalar(configPath, 'calibration', ...
+            'scan_fast_axis_sign', confirmedFastSign);
+        tfp.io.updateConfigScalar(configPath, 'calibration', ...
+            'scan_slow_axis_sign', confirmedSlowSign);
+        calib.configWritten = configPath;
+    catch ME
+        warning('tfp:calibration:verifyScanFieldComposition:configWriteFailed', ...
+            ['could not write the confirmed signs into %s (%s). They are ' ...
+             'printed above — apply them by hand.'], configPath, ME.message);
+    end
 end
 
 end
@@ -244,4 +292,9 @@ if isfield(s, name)
 else
     value = default;
 end
+end
+
+% ---------------------------------------------------------------------------
+function c = ternaryChar(cond, a, b)
+if cond, c = a; else, c = b; end
 end

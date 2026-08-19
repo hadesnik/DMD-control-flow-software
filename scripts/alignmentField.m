@@ -33,7 +33,12 @@
 %
 % *** DO NOT RUN THIS WITH THE CARBIDE ON THE ARM. ***
 % There is no interlock here that can tell which laser is connected -- that
-% check is yours. tfp.util.assertPulseEnergySafe is the programmatic gate.
+% check is yours. tfp.util.assertPulseEnergySafe is the programmatic gate; as
+% of 2026-08-19 it EXISTS (it was advertised here for a month before it did).
+% Before running this with any laser on the arm, check the frame yourself:
+%   tfp.util.assertPulseEnergySafe(pattern, [], ...
+%       struct('repRateKhz', 100, 'frontPanelPowerW', <front panel W>))
+% It throws :pulseEnergyExceeded rather than letting an all-ON frame through.
 % ---------------------------------------------------------------------------
 
 function alignmentField(onFraction, holdSec)

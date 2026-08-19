@@ -74,32 +74,19 @@ wavelengthNm     = configField(options, 'wavelengthNm',  1040);
 repRateDivKhz    = configField(options, 'repRateDivKhz',   10);
 repRateFullMhz   = configField(options, 'repRateFullMhz',  1.25);
 sensorRelaxTimeS = configField(options, 'sensorRelaxTimeS', 20);
+% Injectable seams added 2026-08-19 so this function can be exercised without a
+% PM100D and without a human at the keyboard. Defaults reproduce the previous
+% behaviour exactly: a real TLPM device and a bare pause() at each prompt.
+promptFcn        = configField(options, 'promptFcn', @(msg) pause());
+onStep           = configField(options, 'onStep', []);
 
 voltageStepsDiv  = sort(voltageStepsDiv(:)');
 voltageStepsFull = sort(voltageStepsFull(:)');
 
-% --- Connect to PM100D via Thorlabs TLPM driver ---
-% TLPM is a MATLAB class provided by the Optical Power Monitor installer.
-% findRsrc() returns a device count; getRsrcName(0) returns the USB resource
-% string for the first device. Verified against TLPM MATLAB wrapper shipped
-% with Optical Power Monitor v3.x. If a future version changes the API,
-% check Thorlabs\TLPM\Examples\MATLAB\ for the updated call sequence.
-try
-    pm = TLPM();
-catch
-    error('tfp:calibration:powerMeterSweep:noDriver', ...
-        ['Thorlabs TLPM driver not found. Install from ' ...
-         'https://www.thorlabs.com/software_pages/ViewSoftwarePage.cfm?Code=PM100D']);
-end
-
-deviceCount = pm.findRsrc();
-if deviceCount < 1
-    error('tfp:calibration:powerMeterSweep:noDevice', ...
-        'No PM100D found. Check USB connection and Thorlabs Optical Power Monitor software.');
-end
-resourceName = pm.getRsrcName(0);
-pm.init(resourceName, true, true);
-pm.setWavelength(wavelengthNm);
+% --- Connect to the power meter (real PM100D, or an injected stand-in) ---
+% See private/openPowerMeter for the TLPM call sequence and its provenance.
+[pm, ownsMeter] = openPowerMeter(struct('meter', configField(options, 'meter', []), ...
+    'wavelengthNm', wavelengthNm), 'powerMeterSweep');
 
 % --- Create live figure: 2x2 layout ---
 if showFigure
@@ -140,13 +127,16 @@ end
 % Phase 1 - divided mode
 % =========================================================
 fprintf('\n=== PHASE 1: DIVIDED MODE (%.0f kHz) ===\n', repRateDivKhz);
-fprintf('Set the pulse picker to DIVIDED MODE (%.0f kHz) now.\n', repRateDivKhz);
-fprintf('Press any key when ready...\n');
-pause();
+promptFcn(sprintf(['Set the pulse picker to DIVIDED MODE (%.0f kHz) now.\n' ...
+    'Press any key when ready...'], repRateDivKhz));
 
-[powerMw_div, powerStd_div] = runSweep(daq, pm, aoChannel, ...
-    voltageStepsDiv, settleTimeS, warmupTimeS, nAverages, ...
-    sprintf('DIV %.0f kHz', repRateDivKhz), ax1);
+[powerMw_div, powerStd_div] = runPowerSweepPhase(pm, voltageStepsDiv, struct( ...
+    'setVoltsFcn', @(v) daq.outputSingleAnalog(aoChannel, v), ...
+    'zeroFcn',     @() zeroAndClose(daq, aoChannel, pm, ownsMeter), ...
+    'settleTimeS', settleTimeS, 'warmupTimeS', warmupTimeS, ...
+    'nAverages',   nAverages, ...
+    'label',       sprintf('DIV %.0f kHz', repRateDivKhz), ...
+    'onStep',      makeStepSink(ax1, sprintf('DIV %.0f kHz', repRateDivKhz), onStep)));
 
 % =========================================================
 % Phase 2 - full rep rate
@@ -156,20 +146,23 @@ pause();
 daq.outputSingleAnalog(aoChannel, 0);
 
 fprintf('\n=== PHASE 2: FULL REP RATE (%.2f MHz) ===\n', repRateFullMhz);
-fprintf('Switch the pulse picker to FULL REP RATE (%.2f MHz) now.\n', repRateFullMhz);
-fprintf('Press any key when ready...\n');
-pause();
+promptFcn(sprintf(['Switch the pulse picker to FULL REP RATE (%.2f MHz) now.\n' ...
+    'Press any key when ready...'], repRateFullMhz));
 
 fprintf('Waiting %.0f s for thermal sensor to relax to zero...\n', sensorRelaxTimeS);
 pause(sensorRelaxTimeS);
 
-[powerMw_full, powerStd_full] = runSweep(daq, pm, aoChannel, ...
-    voltageStepsFull, settleTimeS, 0, nAverages, ...
-    sprintf('FULL %.2f MHz', repRateFullMhz), ax2);
+[powerMw_full, powerStd_full] = runPowerSweepPhase(pm, voltageStepsFull, struct( ...
+    'setVoltsFcn', @(v) daq.outputSingleAnalog(aoChannel, v), ...
+    'zeroFcn',     @() zeroAndClose(daq, aoChannel, pm, ownsMeter), ...
+    'settleTimeS', settleTimeS, 'warmupTimeS', 0, ...
+    'nAverages',   nAverages, ...
+    'label',       sprintf('FULL %.2f MHz', repRateFullMhz), ...
+    'onStep',      makeStepSink(ax2, sprintf('FULL %.2f MHz', repRateFullMhz), onStep)));
 
 % Return AO to 0 V (laser off) and close PM100D.
 daq.outputSingleAnalog(aoChannel, 0);
-pm.close();
+if ownsMeter, pm.close(); end
 
 % =========================================================
 % Power-space fit over the overlap region.
@@ -267,7 +260,17 @@ curve.notes        = sprintf( ...
     'PM100D+S350C, %s, div %.0f kHz + full %.2f MHz (overlap %.1f-%.1f V), deg2=[%.4f %.2e] rmse1=%.3f rmse2=%.3f mW, %d nm', ...
     aoChannel, repRateDivKhz, repRateFullMhz, min(voltageStepsFull), vBoundary, ...
     fitDeg2(1), fitDeg2(2), rmse1, rmse2, wavelengthNm);
-curve.dmdActivePx  = 768 * 1024;  % DLi4130; update to 800*1280 for DLP650LNIR
+% ON count during the sweep. Was hardcoded 768*1024 (DLi4130), which is
+% silently wrong on any other chip; derive it from the handoff instead, or let
+% the caller state it.
+hc = tfp.util.readHandoffConstants();
+curve.dmdActivePx = configField(options, 'dmdActivePx', hc.dmd_rows * hc.dmd_cols);
+
+% One versioned schema across both sweeps; see normalizePowerCurve for why the
+% volts branch and the ON-count branch had to stop sharing a field name.
+curve = tfp.calibration.normalizePowerCurve(curve, ...
+    struct('laserState', configField(options, 'laserState', []), ...
+           'requireBranch', 'voltage'));
 
 % =========================================================
 % Fill post-sweep panels (diagnostic + merged + Phase 1 overlay)
@@ -324,54 +327,20 @@ end
 end
 
 % =========================================================
-% Local: run one voltage sweep with live figure update
+% Local: progress sink that keeps the legacy live figure working
 % =========================================================
-function [powerMw, powerStd] = runSweep(daq, pm, aoChannel, ...
-        voltageSteps, settleTimeS, warmupTimeS, nAverages, label, liveAx)
-
-nSteps   = numel(voltageSteps);
-powerMw  = zeros(1, nSteps);
-powerStd = zeros(1, nSteps);
-
-hasAx = nargin >= 9 && ~isempty(liveAx) && isvalid(liveAx);
-
-if warmupTimeS > 0
-    idxWarm = find(voltageSteps > 0, 1, 'first');
-    warmupV = voltageSteps(max(1, idxWarm));
-    daq.outputSingleAnalog(aoChannel, warmupV);
-    estSecs = warmupTimeS + nSteps * settleTimeS + nSteps * (nAverages - 1) * 0.5;
-    fprintf('[%s] Warmup: %.2f V for %.1f s  (est. sweep: %.0f s = %.1f min)...\n', ...
-        label, warmupV, warmupTimeS, estSecs, estSecs / 60);
-    pause(warmupTimeS);
-end
-
-try
-    for k = 1:nSteps
-        v = voltageSteps(k);
-        daq.outputSingleAnalog(aoChannel, v);
-        pause(settleTimeS);
-
-        readings = zeros(1, nAverages);
-        for j = 1:nAverages
-            readings(j) = pm.measPower() * 1e3;  % W -> mW
-            if j < nAverages
-                pause(0.5);
-            end
-        end
-
-        powerMw(k)  = mean(readings);
-        powerStd(k) = std(readings);
-        fprintf('[%s] Step %d/%d: %.2f V -> %.3f +/- %.4f mW\n', ...
-            label, k, nSteps, v, powerMw(k), powerStd(k));
-
-        % Live figure update
+function sink = makeStepSink(liveAx, label, extraSink)
+%makeStepSink Adapt runPowerSweepPhase's callback to the legacy live axes.
+hasAx = ~isempty(liveAx) && isvalid(liveAx);
+sink = @step;
+    function step(k, nSteps, volts, mw, sd)
         if hasAx
             try
                 cla(liveAx);
-                errorbar(liveAx, voltageSteps(1:k), powerMw(1:k), powerStd(1:k), ...
-                    'o-', 'LineWidth', 1.4, 'MarkerFaceColor', 'auto');
+                errorbar(liveAx, volts, mw, sd, 'o-', 'LineWidth', 1.4, ...
+                    'MarkerFaceColor', 'auto');
                 title(liveAx, sprintf('%s - step %d/%d  (%.3f mW)', ...
-                    label, k, nSteps, powerMw(k)));
+                    label, k, nSteps, mw(end)));
                 xlabel(liveAx, 'AO Voltage (V)');
                 ylabel(liveAx, 'Power (mW)');
                 grid(liveAx, 'on');
@@ -379,13 +348,20 @@ try
             catch
             end
         end
+        if ~isempty(extraSink)
+            extraSink(k, nSteps, volts, mw, sd);
+        end
     end
-catch ME
-    try, daq.outputSingleAnalog(aoChannel, 0); catch, end
-    try, pm.close();                            catch, end
-    rethrow(ME);
 end
 
+% =========================================================
+% Local: leave the beam off and release the meter on any fault
+% =========================================================
+function zeroAndClose(daq, aoChannel, pm, ownsMeter)
+try, daq.outputSingleAnalog(aoChannel, 0); catch, end
+if ownsMeter
+    try, pm.close(); catch, end
+end
 end
 
 % =========================================================

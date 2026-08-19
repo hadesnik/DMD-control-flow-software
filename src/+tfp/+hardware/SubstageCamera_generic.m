@@ -49,8 +49,8 @@ classdef SubstageCamera_generic < tfp.hardware.SubstageCamera
             %   obj.isInitialized = true;
 
             error('tfp:hardware:SubstageCamera_generic:notImplemented', ...
-                'SubstageCamera_generic.initialize() is a placeholder. ' ...
-                'Fill in SDK calls for the actual camera model.');
+                ['SubstageCamera_generic.initialize() is a placeholder. ' ...
+                 'Fill in SDK calls for the actual camera model.']);
         end
 
         function frame = snap(obj)

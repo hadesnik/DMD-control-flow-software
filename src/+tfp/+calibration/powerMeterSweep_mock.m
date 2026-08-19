@@ -116,7 +116,14 @@ curve.timestamp    = datetime('now');
 curve.notes        = sprintf( ...
     'MOCK sigmoid, %s, div %.0f kHz (0-5V) + full %.2f MHz (0-%.1fV), scale=%.4f, %d nm', ...
     aoChannel, repRateDivKhz, repRateFullMhz, vBoundary, scaleFactor, wavelengthNm);
-curve.dmdActivePx  = 768 * 1024;  % DLi4130; change to 800*1280 for DLP650LNIR
+% ON count during the sweep: derived, not pasted. The old literal was a
+% DLi4130 constant and silently wrong on the DLP650LNIR.
+hc = tfp.util.readHandoffConstants();
+curve.dmdActivePx  = hc.dmd_rows * hc.dmd_cols;
+
+% Emit the same versioned schema as the real sweeps, so anything that consumes
+% a curve does not have to know whether it came from hardware or a mock.
+curve = tfp.calibration.normalizePowerCurve(curve, struct('requireBranch', 'voltage'));
 
 if showFigure
     figure('Name', 'powerMeterSweep_mock', 'NumberTitle', 'off');

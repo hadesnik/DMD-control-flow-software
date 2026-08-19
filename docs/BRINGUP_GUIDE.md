@@ -138,15 +138,31 @@ you walk away.
 
 ---
 
+> **The GUI does §3, §4 and the new §4.5 for you**, behind the pulse-energy
+> interlock and with provenance stamped into every result:
+> `scripts/run_calibrationGUI.m`, documented in
+> [CALIBRATION_GUI.md](CALIBRATION_GUI.md). The command-line steps below still
+> work and remain the reference; the app runs the same functions.
+
 ## 3. Laser power path — calibrate volts → mW
 
-1. Wire the CARBIDE's external modulator to its DAQ AO channel; set
-   `laser.carbide_modulator_ao_channel` in `configs/real.yaml`.
-2. With the power meter at the sample plane, run the existing sweep:
+1. Wire the CARBIDE's external modulator to its DAQ AO channel; record the
+   terminal, cable, voltage range and **polarity** in [WIRING.md](WIRING.md), then
+   set `laser.carbide_modulator_ao_channel` in `configs/real.yaml`. Until it is
+   set, every output throws `tfp:hardware:LaserPowerController:notWired`.
+2. With the power meter at the sample plane, run the sweep. For the CARBIDE use
+   the single-phase sweep — `run_powerMeterSweep` is the FS-50 two-phase version,
+   whose divided/full-rep-rate stitching exists only because the FS-50's pulse
+   picker had to be switched by hand mid-sweep:
    ```matlab
-   run_powerMeterSweep      % scripts/ — writes data/calibration/power_curve_*.mat
+   config = tfp.io.loadConfig('configs/real.yaml');
+   s = tfp.gui.CalibrationSession(config, struct('configPath','configs/real.yaml'));
+   s.setLaserState(struct('repRateKhz',100,'pulsePickerDivision',1, ...
+                          'frontPanelPowerW',<front panel W>));
+   curve = s.runPowerSweep();      % asks ONCE for the ramp ceiling
    ```
-   and confirm it wrote the calibration path back into the config.
+   Consent is taken once for the whole ramp; the pulse-energy interlock still runs
+   on every step. The session saves the curve and stamps the laser state onto it.
 3. Record: max power at sample, the voltage that gives ~5 mW (calibration
    working power) and ~44 mW (the SLM alignment cap — know where it is on the dial).
 
@@ -201,6 +217,55 @@ tfp.io.updateConfigCalibrationPath('configs/real.yaml', 'session', 'calibration_
 - [ ] **Record the fitted µm/px scale** — compare against the (regenerated)
       handoff §5 values. Disagreement > a few % ⇒ something is installed
       differently (handoff §3 lists the suspects).
+
+---
+
+## 4.5 Field tilt — the depth plane across the field  *(new)*
+
+Temporal focusing disperses the beam across the field, so the plane of best
+excitation is **tilted**, not flat. The handoff predicts 0.02929 µm of focal
+shift per µm of sample travel along the dispersion axis — 1.678°, and **35.1 µm
+edge to edge across the Ø5.0 mm patch, comparable to the 32.6 µm axial FWHM**.
+Targets at opposite edges of the field are genuinely not in the same plane.
+
+Needs the z ruler, so on the default objective mount `si_motor_helper` must be
+running in the ScanImage MATLAB on the imaging PC (port 3047).
+
+```matlab
+tilt = s.runFieldTilt(struct('nRing', 8, 'zSearchHalfUm', 30, 'zStepUm', 5));
+```
+
+or directly:
+
+```matlab
+tilt = tfp.calibration.measureFieldTilt(dmd, cam, z, config);
+```
+
+Projects a spot at each of N field positions inside the patch, runs a
+through-focus sweep at each (reusing `throughFocusSweep`), and fits
+`z = a·x_disp + b·y_groove + c` with `tfp.optics.dmdToDispersionUm` supplying
+the 45° mapping.
+
+Good result: `a ≈ 0.02929` µm/µm, `|b|` near zero, `r² > 0.98`.
+
+Reading the failures:
+
+| Symptom | What it means |
+|---|---|
+| `:grooveGradientLarge` | the tilt is **not along the dispersion axis** — wrong 45° handedness, or the chip is mis-clocked. Diagnostic, not a bad fit. |
+| `:focusAtWindowEdge` | best focus was clamped at the edge of a sweep window, so the fitted gradient is biased toward zero. Widen `zSearchHalfUm` and re-run. |
+| `:gradientOutOfBand` / `:walkOutOfBand` | disagrees with the handoff. **Warn, never fail** — the committed handoff is rev 4 and predates the ratified f7 = 300 build. The measurement is the truth. |
+
+`tilt.depthGradientSign` is a **proposal** for `threeD.depth_gradient_sign`, not
+authority: it is expressed in both the ruler's "+z is deeper" contract and
+`dmdToDispersionUm`'s +dispersion direction, and the handoff leaves both bench
+conventions unspecified. §7.4's burn row remains the independent check — but if
+the two agree, that is a much cheaper confirmation than the burn/bleach route.
+
+- [ ] gradient fitted; `r² > 0.98`; no `:focusAtWindowEdge`
+- [ ] `|b|` small compared with `|a|`
+- [ ] walk recorded and compared against the handoff's 35.1 µm
+- [ ] `depthGradientSign` noted, pending §7.4 agreement
 
 ---
 

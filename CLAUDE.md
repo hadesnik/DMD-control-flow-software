@@ -228,9 +228,11 @@ concentrates light is the largest **contiguous** ON region, not the total count.
 ON as scattered cell-sized targets is orders of magnitude safer than 50% ON as one
 filled block. For a solid alignment target, stay under 50% **and** drop the power.
 
-**Laser context matters.** These are CARBIDE numbers (200 fs, ~400 µJ at 100 kHz).
-Whole-field-at-once needs 7.06 W of 40 W = 71 µJ/pulse against a ~68 µJ ceiling — a
-0.96× margin, headroom not comfort. A Ti:Sapph oscillator (Chameleon Ultra II, 80 MHz,
+**Laser context matters.** These are CARBIDE numbers (205 fs, ~400 µJ at 100 kHz).
+Whole-field-at-once needs **8.5 W of 40 W = 85 µJ/pulse against the ~89 µJ ceiling —
+a 1.04× margin**, headroom not comfort. *(An earlier revision of this file said
+7.06 W / 71 µJ / ~68 µJ; the handoff §7a numbers above are authoritative, and the
+code reads `safe_pulse_energy_uJ` from the handoff at runtime rather than from here.)* A Ti:Sapph oscillator (Chameleon Ultra II, 80 MHz,
 1 W ≈ 12.5 nJ/pulse) sits ~5000× below the ceiling, so the pupil hazard does not bind
 during oscillator bring-up. **Check which laser is on the arm before reasoning about
 power limits.**
@@ -238,6 +240,17 @@ power limits.**
 `tfp.util.assertSlmPowerSafe` makes the handoff §7b LC alignment cap (44 mW) live,
 with the same largest-contiguous-blob discriminator, enforced in `Sequencer.runOne`
 and the calibration paths.
+
+`tfp.util.assertPulseEnergySafe` makes the §7a **relay-pupil** cap live (added
+2026-08-19; two bench scripts had advertised it for a month before it existed).
+It enforces `safe_pulse_energy_uJ` (89) plus an air-breakdown pupil-intensity
+estimate, both gated on the largest contiguous ON blob, and is fail-closed on rep
+rate — which arrives from the operator-entered laser state, since we deliberately
+do not talk to the CARBIDE software. **Note the power reference**: the volts→mW
+curve is measured *at the sample* while the hazard is at a pupil upstream of the
+arm, so a sample-plane number understates it by ~5.5× (`laser.arm_transmission`,
+0.182 `%VERIFY`). `tfp.hardware.LaserPowerController` is the single gateway to the
+CARBIDE modulator BNC and the only sanctioned caller of `outputSingleAnalog`.
 
 ## The other half: write nothing outside the patch
 
@@ -384,6 +397,9 @@ only.
 │   ├── +trial/                    ← Trial, TrialSequence, Sequencer
 │   ├── +calibration/              ← lateral affines, z-calibration, PSF, power sweep
 │   ├── +experiments/              ← runnable exp_* scripts
+│   ├── +gui/                      ← CalibrationSession (headless brain, tested)
+│   │                                 + CalibrationApp (uifigure view, never tested)
+│   │                                 + FrameProcessor (pure display image math)
 │   ├── +analysis/  +io/  +util/  +sim/
 ├── tests/                         ← mock-backed; run without hardware
 ├── scripts/                       ← bring-up, alignment, ALP smoke tests, PC setup
@@ -620,7 +636,14 @@ once the audit confirms this unit's external-trigger sequencing.
   ease of modification over absolute robustness — but anything touching the high-power
   laser path needs explicit safety interlocks (`+util/safetyChecks.m`).
 - The user runs this **interactively from the MATLAB command line**, not as a compiled
-  app. Don't build a GUI unless asked.
+  app. Don't build a GUI unless asked. **One was asked for** [USER 2026-08-19]: the
+  calibration GUI, `tfp.gui.CalibrationApp`, launched by `scripts/run_calibrationGUI.m`
+  — see [docs/CALIBRATION_GUI.md](docs/CALIBRATION_GUI.md). Its rule is load-bearing:
+  **all state and every decision live in the headless `tfp.gui.CalibrationSession`;
+  `CalibrationApp.m` is the only file allowed to touch graphics.** A `uifigure` cannot
+  be constructed under `-nodisplay`, so anything that drifts into the view becomes
+  permanently untestable. `tests/test_gui_headless_guard.m` enforces this mechanically.
+  Programmatic `classdef`, never a binary `.mlapp`.
 - ScanImage integration is via TCP/IP or named pipe — **never modify ScanImage
   internals**.
 - The DLPC410 supports binary pattern rates to 12,500 Hz, but don't assume that is
@@ -666,6 +689,15 @@ once the audit confirms this unit's external-trigger sequencing.
 - [ ] Reconcile `configs/real.yaml`'s isotropic 0.270 µm/px / 278 px with build B's
       anisotropic Ø5.0 mm reality — **on the rig**, not from here.
 - [ ] Resolve the duplicate `alignmentTarget`.
+- [ ] Measure `laser.arm_transmission` (laser head → sample). Until then
+      `assertPulseEnergySafe` warns `:armTransmissionAssumed` on every call that
+      uses a sample-plane power. Entering the front-panel wattage avoids it.
+- [ ] Wire the CARBIDE modulator BNC and fill in [docs/WIRING.md](docs/WIRING.md);
+      **verify on a meter that 0 V means OFF** before connecting the beam — every
+      zero-on-error path in the software assumes it.
+- [ ] Route the build-A ensemble experiments through `LaserPowerController` rather
+      than calling `outputSingleAnalog` directly (allow-listed in
+      `tests/test_gui_headless_guard.m` for now).
 - [ ] Vendor + audit the Blink SDK header so `BlinkSLM` can leave its stub.
 - [ ] Final grating choice: Newport 33010FL01-530R (1200 g/mm gold ruled reflective)
       vs Wasatch 1700 g/mm VPH transmission. Affects post-grating layout, not code.
@@ -681,3 +713,5 @@ once the audit confirms this unit's external-trigger sequencing.
 4. [docs/optics_handoff.md](docs/optics_handoff.md) — authoritative optics numbers.
 5. `src/+tfp/+hardware/DMD.m` and `MockDMD.m` — the interface pattern.
 6. `src/+tfp/+experiments/exp_ppsf_lateral.m` — what a complete experiment looks like.
+7. [docs/CALIBRATION_GUI.md](docs/CALIBRATION_GUI.md) — the calibration app, and the
+   headless session underneath it that runs the same steps from the command line.

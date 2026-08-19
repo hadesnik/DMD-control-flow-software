@@ -37,7 +37,8 @@
 % Check which laser is on the arm before reasoning about power.
 %
 % This script does not command the laser and cannot enforce the ~68 uJ pulse
-% limit; that interlock lives in tfp.util.assertPulseEnergySafe. Laser state
+% limit; that interlock lives in tfp.util.assertPulseEnergySafe, which as of
+% 2026-08-19 exists and is enforced (it was named here before it did). Laser state
 % is your responsibility when running this directly.
 % ---------------------------------------------------------------------------
 
