@@ -1,0 +1,466 @@
+<!doctype html><html><head><meta charset='utf-8'>
+<title>Source for slm_plane_profiles.pdf</title>
+<style>
+body{font:14px/1.5 -apple-system,Segoe UI,Helvetica,Arial,sans-serif;max-width:920px;margin:2rem auto;padding:0 1rem;color:#222}
+h1{font-size:1.3rem} h2{font-size:1rem;margin-top:1.6rem;border-bottom:1px solid #ddd;padding-bottom:.2rem}
+.loc{color:#888;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.85rem}
+pre{background:#f6f8fa;border:1px solid #e1e4e8;border-radius:6px;padding:.8rem;overflow:auto;font:12px/1.45 ui-monospace,Menlo,Consolas,monospace}
+ul.toc{padding-left:1.2rem} ul.toc a{text-decoration:none}
+.thirdparty{color:#666;font-size:.9rem;margin-top:2rem}
+</style></head><body>
+<h1>Functions used to generate <code>slm_plane_profiles.pdf</code></h1>
+<p>Auto-generated source listing. Project functions are shown in full; third-party / standard-library calls are noted but not reproduced.</p>
+<ul class='toc'>
+<li><a href='#fn-0'>main</a> <span class='loc'>sim/slm_plane_profiles.py:363</span></li>
+<li><a href='#fn-1'>slm_plane</a> <span class='loc'>sim/slm_plane_profiles.py:325</span></li>
+<li><a href='#fn-2'>make_patterns</a> <span class='loc'>sim/slm_plane_profiles.py:205</span></li>
+<li><a href='#fn-3'>illumination</a> <span class='loc'>sim/slm_plane_profiles.py:265</span></li>
+<li><a href='#fn-4'>read_handoff_constants</a> <span class='loc'>sim/slm_plane_profiles.py:96</span></li>
+<li><a href='#fn-5'>build_rig</a> <span class='loc'>sim/slm_plane_profiles.py:181</span></li>
+<li><a href='#fn-6'>_rotate</a> <span class='loc'>sim/slm_plane_profiles.py:283</span></li>
+<li><a href='#fn-7'>_smear_x</a> <span class='loc'>sim/slm_plane_profiles.py:307</span></li>
+<li><a href='#fn-8'>_bin_sum</a> <span class='loc'>sim/slm_plane_profiles.py:276</span></li>
+<li><a href='#fn-9'>_chip_grid</a> <span class='loc'>sim/slm_plane_profiles.py:200</span></li>
+<li><a href='#fn-10'>justified_legend</a> <span class='loc'>fig_util/figure_helpers.py:329</span></li>
+<li><a href='#fn-11'>panel_label</a> <span class='loc'>fig_util/figure_helpers.py:315</span></li>
+</ul>
+<h2 id='fn-0'>main</h2>
+<p class='loc'>sim/slm_plane_profiles.py:363</p>
+<pre><code>def main() -&gt; Path:
+    apply_style()
+    rig = build_rig()
+    illum = illumination(rig)
+    cases = make_patterns(rig)
+
+    results = []
+    for key, label, pat in cases:
+        img, mm_per_px = slm_plane(pat, rig, illum)
+        results.append(dict(key=key, label=label, pat=pat, img=img,
+                            mm_per_px=mm_per_px,
+                            on_frac=pat.mean()))
+
+    ref_peak = results[0][&quot;img&quot;].max()          # all-ON sets the shared scale
+    half = CANVAS_MM / 2.0
+    extent = [-half, half, -half, half]
+    for r in results:
+        r[&quot;rel_peak&quot;] = r[&quot;img&quot;].max() / ref_peak
+        n = r[&quot;img&quot;].shape[0]
+        ax_mm = (np.arange(n) - n / 2 + 0.5) * r[&quot;mm_per_px&quot;]
+        # Power that misses the LC entirely -- the aperture-fill question that
+        # f7 = 300 reopens, since the footprint scales with f7.
+        inside = (np.abs(ax_mm) &lt;= SLM_APERTURE_MM / 2)[:, None] &amp; \
+                 (np.abs(ax_mm) &lt;= SLM_APERTURE_MM / 2)[None, :]
+        tot = r[&quot;img&quot;].sum()
+        r[&quot;clipped&quot;] = 1.0 - (r[&quot;img&quot;][inside].sum() / tot) if tot &gt; 0 else 0.0
+        # 1/e^2 extent of the collapsed profile on each axis, so the all-ON
+        # case can be quoted as the aspect ratio of the spectral line.
+        for key, prof in ((&quot;ext_disp&quot;, r[&quot;img&quot;].sum(0)), (&quot;ext_grv&quot;, r[&quot;img&quot;].sum(1))):
+            sel = ax_mm[prof &gt; prof.max() * 0.1353]
+            r[key] = float(sel.max() - sel.min()) if sel.size else 0.0
+
+    worst_clip = max(r[&quot;clipped&quot;] for r in results)
+    line = results[0]
+
+    ncol = len(results)
+    fig = plt.figure(figsize=(16.5, 9.4))
+    gs = fig.add_gridspec(
+        3, ncol, height_ratios=[1.0, 1.45, 1.15],
+        left=0.045, right=0.90, top=0.945, bottom=0.30, hspace=0.42, wspace=0.16,
+    )
+
+    letters = &quot;ABCDEFGHI&quot;
+    for i, r in enumerate(results):
+        # --- row 1: what is written on the chip -------------------------
+        ax = fig.add_subplot(gs[0, i])
+        ax.imshow(r[&quot;pat&quot;], cmap=&quot;Greys&quot;, origin=&quot;lower&quot;, interpolation=&quot;nearest&quot;,
+                  aspect=&quot;equal&quot;)
+        ax.set_xticks([]); ax.set_yticks([])
+        ax.set_title(r[&quot;label&quot;], fontsize=8.5, pad=3)
+        panel_label(ax, letters[i], x=-0.02, y=1.30)
+        if i == 0:
+            ax.set_ylabel(&quot;DMD chip&quot;, fontsize=9)
+
+        # --- row 2: what the liquid crystal sees ------------------------
+        ax2 = fig.add_subplot(gs[1, i])
+        with np.errstate(divide=&quot;ignore&quot;):
+            db = np.log10(np.maximum(r[&quot;img&quot;] / ref_peak, 1e-30))
+        im = ax2.imshow(db, cmap=&quot;inferno&quot;, origin=&quot;lower&quot;, extent=extent,
+                        vmin=FLOOR_DB, vmax=0.0, interpolation=&quot;nearest&quot;,
+                        aspect=&quot;equal&quot;)
+        ax2.add_patch(Rectangle((-SLM_APERTURE_MM / 2, -SLM_APERTURE_MM / 2),
+                                SLM_APERTURE_MM, SLM_APERTURE_MM,
+                                fill=False, ec=&quot;#39d0ff&quot;, lw=1.0, ls=&quot;--&quot;))
+        ax2.set_xticks([-8, 0, 8]); ax2.set_yticks([-8, 0, 8])
+        ax2.tick_params(labelsize=8)
+        if i == 0:
+            ax2.set_ylabel(&quot;groove axis (mm)&quot;, fontsize=9)
+        else:
+            ax2.set_yticklabels([])
+        ax2.set_xlabel(&quot;dispersion (mm)&quot;, fontsize=8.5)
+
+    cax = fig.add_axes([0.915, gs[1, 0].get_position(fig).y0,
+                        0.013, gs[1, 0].get_position(fig).height])
+    cb = fig.colorbar(im, cax=cax)
+    cb.set_label(&quot;log₁₀ irradiance, relative to all-ON peak&quot;, fontsize=9)
+    cb.ax.tick_params(labelsize=8)
+
+    # --- row 3: the two numbers that decide whether a pattern is safe ---
+    axm = fig.add_subplot(gs[2, :])
+    xs = np.arange(ncol)
+    peaks = [r[&quot;rel_peak&quot;] for r in results]
+    axm.bar(xs, peaks, color=&quot;#c1443c&quot;, width=0.6)
+    axm.set_yscale(&quot;log&quot;)
+    axm.set_ylim(10 ** (FLOOR_DB - 0.4), 3.0)
+    axm.axhline(1.0, color=&quot;#444&quot;, lw=0.9, ls=&quot;--&quot;)
+    axm.text(ncol - 0.45, 1.25, &quot;all-ON reference&quot;, fontsize=8.5, ha=&quot;right&quot;,
+             va=&quot;bottom&quot;, color=&quot;#444&quot;)
+    axm.set_xticks(xs)
+    axm.set_xticklabels([r[&quot;label&quot;] for r in results], fontsize=8.5)
+    axm.set_ylabel(&quot;peak irradiance\n(rel. all-ON)&quot;, fontsize=9)
+    axm.tick_params(labelsize=8)
+    axm.set_xlim(-0.6, ncol - 0.4)
+    panel_label(axm, &quot;J&quot;, x=-0.012, y=1.06)
+    for xi, r in zip(xs, results):
+        pct = 100 * r[&quot;on_frac&quot;]
+        # White bbox so the all-ON reference line cannot cut through the label.
+        axm.text(xi, r[&quot;rel_peak&quot;] * 1.5, f&quot;{pct:.1f}%&quot; if pct &lt; 10 else f&quot;{pct:.0f}%&quot;,
+                 ha=&quot;center&quot;, va=&quot;bottom&quot;, fontsize=8, zorder=5,
+                 bbox=dict(facecolor=&quot;white&quot;, edgecolor=&quot;none&quot;, pad=1.0))
+
+    title = &quot;Irradiance at the SLM is the Fourier transform of the DMD pattern, smeared by the laser spectrum.&quot;
+    body = (
+        f&quot;Scalar Fourier propagation of the merged arm to the Meadowlark HSP1K, at the bench-confirmed &quot;
+        f&quot;f7 = {F7_CONFIRMED_MM:.0f} mm (handoff rev 4 is generated at 250 mm, so its own §5 figures are 1.2× larger than these). &quot;
+        &quot;All constants except f7 are parsed live from docs/optics_handoff.md. &quot;
+        &quot;(A–I) Top row, the binary frame written on the DMD, confined to the Ø5.0 mm illuminated disc; bottom row, the resulting &quot;
+        &quot;time-averaged irradiance on the liquid crystal, shown as log₁₀ relative to the all-ON peak over a common 6-decade scale and &quot;
+        &quot;identical ±11 mm axes, so panels are directly comparable. Dashed cyan square is the 17.4 mm LC aperture. The horizontal axis &quot;
+        &quot;is the grating&#x27;s dispersion direction; because the chip is clocked 45°, each transform is rotated into this lab frame, which is &quot;
+        &quot;why chip-aligned features (D, E) appear on the diagonals. (A) A filled patch puts everything into a single DC order, which the &quot;
+        f&quot;grating then draws out into a spectral line of {line[&#x27;ext_grv&#x27;]:.2f} × {line[&#x27;ext_disp&#x27;]:.1f} mm (1/e², groove × dispersion). &quot;
+        f&quot;That ~400:1 smear is what keeps the LC below its damage limit, and why the air-breakdown interlock sits upstream of the grating &quot;
+        f&quot;instead. (B–D) Checkerboards at 64, 16 and 4 px &quot;
+        &quot;place first orders at a radius that grows as 1/period, walking light outward from DC. (E) Crosshairs transform to a cross rotated &quot;
+        &quot;90° from the bars that produced it. (F) 200 soma-sized targets, the realistic experiment: a broad speckled envelope with no &quot;
+        &quot;concentration. (G–I) Annuli at 0.35, 0.65 and 0.95 of the patch radius give Bessel-ring transforms whose fringe spacing narrows &quot;
+        &quot;as the ring grows. (J) Peak irradiance per pattern relative to the all-ON frame (log axis, dashed line = that reference); the &quot;
+        &quot;percentage above each bar is the fraction of the whole chip switched ON, which is the quantity the 50% load-time cap tests. &quot;
+        &quot;Method: field = pattern × Gaussian illumination, one FFT to the pupil, rotation into the lab frame, then convolution along &quot;
+        &quot;dispersion with the 7.7 nm pulse spectrum. The model is unfitted, yet reproduces two independent handoff constants — the &quot;
+        f&quot;7.2 mm cross-dispersion footprint at f7 = 250 and the 0.3604 patch-edge intensity. No pattern clips the aperture &quot;
+        f&quot;(worst case {100*worst_clip:.2f}% of power outside), so the 1.2× footprint growth from f7 = 250 → 300 does not cost light — &quot;
+        f&quot;but it does spend the margin that made clipping a non-question. The 1.124 anamorphic factor is omitted because the handoff &quot;
+        f&quot;fixes its magnitude but not its sign at the pupil; it would stretch the dispersion axis by ≤12% and moves no order across &quot;
+        f&quot;the aperture.&quot;
+    )
+    justified_legend(fig, title, body)
+
+    return savefig(
+        fig, &quot;slm_plane_profiles&quot;, outdir=&quot;figures/slm_plane&quot;,
+        functions=[main, slm_plane, make_patterns, illumination,
+                   read_handoff_constants, build_rig, _rotate, _smear_x,
+                   _bin_sum, _chip_grid, justified_legend, panel_label],
+    )
+</code></pre>
+<h2 id='fn-1'>slm_plane</h2>
+<p class='loc'>sim/slm_plane_profiles.py:325</p>
+<pre><code>def slm_plane(pattern: np.ndarray, rig: Rig, illum: np.ndarray) -&gt; np.ndarray:
+    &quot;&quot;&quot;Time-averaged irradiance at the SLM for one DMD pattern.
+
+    Steps: (i) field on the chip = pattern x Gaussian illumination;
+    (ii) Fourier transform -- this *is* the propagation, since the SLM is the
+    Fourier plane of I0; (iii) rotate into the lab frame, because the chip is
+    clocked 45 deg so the optical axes lie along its diagonals;
+    (iv) convolve along dispersion with the laser spectrum.
+    &quot;&quot;&quot;
+    field = np.zeros((NFFT, NFFT), dtype=np.complex128)
+    r0 = (NFFT - pattern.shape[0]) // 2
+    c0 = (NFFT - pattern.shape[1]) // 2
+    field[r0 : r0 + pattern.shape[0], c0 : c0 + pattern.shape[1]] = pattern * illum
+
+    inten = np.abs(np.fft.fftshift(np.fft.fft2(field))) ** 2
+    inten = _bin_sum(inten, BIN)                      # -&gt; NFFT/BIN across 2*halfwidth
+
+    mm_per_px = (2.0 * rig.slm_halfwidth_m * 1e3) / inten.shape[0]
+    n_canvas = int(round(CANVAS_MM / mm_per_px))
+    n_canvas += n_canvas % 2
+    canvas = np.zeros((n_canvas, n_canvas))
+    o = (n_canvas - inten.shape[0]) // 2
+    canvas[o : o + inten.shape[0], o : o + inten.shape[1]] = inten
+
+    # The chip&#x27;s 45 deg clocking: rotate the transform into the lab frame so
+    # dispersion runs along +x and the (axis-aligned) SLM aperture is a square.
+    canvas = _rotate(canvas, -45.0)
+    return _smear_x(canvas, rig.smear_fwhm_m * 1e3 / mm_per_px), mm_per_px
+</code></pre>
+<h2 id='fn-2'>make_patterns</h2>
+<p class='loc'>sim/slm_plane_profiles.py:205</p>
+<pre><code>def make_patterns(rig: Rig) -&gt; list[tuple[str, str, np.ndarray]]:
+    &quot;&quot;&quot;Return ``(key, label, bool-array)`` for each case, in figure order.&quot;&quot;&quot;
+    x, y = _chip_grid(rig)
+    r = np.hypot(x, y)
+    R = rig.patch_diameter_px / 2.0
+    patch = r &lt;= R
+    rng = np.random.default_rng(20260819)  # fixed: the figure is reproducible
+
+    cases: list[tuple[str, str, np.ndarray]] = []
+
+    # 1. Everything inside the illuminated disc. Note this is only ~16% of the
+    #    whole chip, so it passes the 50% ON cap -- the cap targets a literal
+    #    full-chip frame, not a full patch.
+    cases.append((&quot;all_on&quot;, &quot;All ON (full patch)&quot;, patch))
+
+    # 2. Checkerboards at three periods. A period-p checkerboard puts its
+    #    energy into orders at +-1/p along both chip diagonals, so the coarser
+    #    the square, the closer the orders sit to DC.
+    for p in (64, 16, 4):
+        chk = (((np.floor(x / p) + np.floor(y / p)) % 2) == 0) &amp; patch
+        cases.append((f&quot;checker{p}&quot;, f&quot;Checkerboard, {p} px&quot;, chk))
+
+    # 3. Crosshairs: one bar along each chip axis. The transform of a bar is a
+    #    line perpendicular to it, so this is the clearest demonstration that
+    #    the SLM sees the *transform* and not the picture.
+    bar = 6
+    cross = ((np.abs(x) &lt;= bar) | (np.abs(y) &lt;= bar)) &amp; patch
+    cases.append((&quot;crosshair&quot;, &quot;Crosshairs&quot;, cross))
+
+    # 4. 200 soma-sized targets -- the realistic experiment. Radius from the
+    #    5 um soma radius at the confirmed f7=300 sample scale (~2.0 um/px),
+    #    floored at 2 px as scripts/alpRandomEnsemble.m does.
+    spot_r = max(2, int(round(5.0 / 2.0)))
+    spots = np.zeros_like(patch)
+    n_spots, placed = 200, 0
+    while placed &lt; n_spots:
+        rad = R * math.sqrt(rng.random())
+        th = rng.random() * 2 * math.pi
+        cx, cy = rad * math.cos(th), rad * math.sin(th)
+        if math.hypot(cx, cy) &gt; R - spot_r:
+            continue
+        spots |= (np.hypot(x - cx, y - cy) &lt;= spot_r)
+        placed += 1
+    cases.append((&quot;spots200&quot;, f&quot;200 spots, {spot_r} px&quot;, spots))
+
+    # 5. Annuli at three radii. A ring transforms to a Bessel J0 pattern whose
+    #    ring spacing goes as 1/radius, so a bigger annulus gives finer fringes.
+    for frac in (0.35, 0.65, 0.95):
+        rr = frac * R
+        w = 4.0
+        ann = (np.abs(r - rr) &lt;= w) &amp; patch
+        cases.append((f&quot;annulus{int(frac*100)}&quot;, f&quot;Annulus, {frac:.2f} R&quot;, ann))
+
+    return cases
+</code></pre>
+<h2 id='fn-3'>illumination</h2>
+<p class='loc'>sim/slm_plane_profiles.py:265</p>
+<pre><code>def illumination(rig: Rig) -&gt; np.ndarray:
+    &quot;&quot;&quot;Gaussian amplitude on the chip (Ø7.0 mm 1/e^2 *intensity* diameter).
+
+    Reproduces the handoff&#x27;s ``patch_edge_intensity`` (0.3604) at r = R, which
+    is the check that this is the same beam the handoff modelled.
+    &quot;&quot;&quot;
+    x, y = _chip_grid(rig)
+    w_px = (rig.illum_1e2_diameter_m / 2.0) / rig.pitch_m
+    return np.exp(-(x**2 + y**2) / w_px**2)  # amplitude; intensity is its square
+</code></pre>
+<h2 id='fn-4'>read_handoff_constants</h2>
+<p class='loc'>sim/slm_plane_profiles.py:96</p>
+<pre><code>def read_handoff_constants(path: Path = HANDOFF) -&gt; dict:
+    &quot;&quot;&quot;Parse the fenced ``handoff-constants`` block out of the optics handoff.
+
+    The Python twin of ``tfp.util.readHandoffConstants``. Reading at runtime
+    (rather than pasting) is what keeps this figure honest when the optics repo
+    regenerates -- the repo has been bitten three times by copied scale
+    constants going stale.
+    &quot;&quot;&quot;
+    text = path.read_text(encoding=&quot;utf-8&quot;)
+    m = re.search(r&quot;```handoff-constants\n(.*?)```&quot;, text, re.S)
+    if not m:
+        raise RuntimeError(f&quot;no handoff-constants block in {path}&quot;)
+    out: dict[str, object] = {}
+    for line in m.group(1).splitlines():
+        line = line.split(&quot;#&quot;)[0].strip()
+        if not line or &quot;:&quot; not in line:
+            continue
+        key, _, val = line.partition(&quot;:&quot;)
+        val = val.strip()
+        try:
+            out[key.strip()] = float(val) if &quot;.&quot; in val else int(val)
+        except ValueError:
+            out[key.strip()] = val
+    return out
+</code></pre>
+<h2 id='fn-5'>build_rig</h2>
+<p class='loc'>sim/slm_plane_profiles.py:181</p>
+<pre><code>def build_rig() -&gt; Rig:
+    hc = read_handoff_constants()
+    return Rig(
+        cols=int(hc[&quot;dmd_cols&quot;]),
+        rows=int(hc[&quot;dmd_rows&quot;]),
+        pitch_m=float(hc[&quot;dmd_pitch_um&quot;]) * 1e-6,
+        patch_diameter_px=float(hc[&quot;patch_diameter_px&quot;]),
+        wavelength_m=float(hc[&quot;wavelength_nm&quot;]) * 1e-9,
+        pulse_fwhm_s=float(hc[&quot;pulse_fwhm_fs&quot;]) * 1e-15,
+        f7_m=F7_CONFIRMED_MM * 1e-3,
+    )
+</code></pre>
+<h2 id='fn-6'>_rotate</h2>
+<p class='loc'>sim/slm_plane_profiles.py:283</p>
+<pre><code>def _rotate(img: np.ndarray, deg: float) -&gt; np.ndarray:
+    &quot;&quot;&quot;Bilinear rotation about the array centre (scipy is not available here).&quot;&quot;&quot;
+    h, w = img.shape
+    cy, cx = (h - 1) / 2.0, (w - 1) / 2.0
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float64)
+    t = math.radians(deg)
+    # inverse map: destination pixel -&gt; source coordinate
+    dx, dy = xx - cx, yy - cy
+    sx = cx + dx * math.cos(t) + dy * math.sin(t)
+    sy = cy - dx * math.sin(t) + dy * math.cos(t)
+    x0, y0 = np.floor(sx).astype(int), np.floor(sy).astype(int)
+    fx, fy = sx - x0, sy - y0
+    out = np.zeros_like(img)
+    ok = (x0 &gt;= 0) &amp; (x0 &lt; w - 1) &amp; (y0 &gt;= 0) &amp; (y0 &lt; h - 1)
+    xi, yi = np.clip(x0, 0, w - 2), np.clip(y0, 0, h - 2)
+    out = (
+        img[yi, xi] * (1 - fx) * (1 - fy)
+        + img[yi, xi + 1] * fx * (1 - fy)
+        + img[yi + 1, xi] * (1 - fx) * fy
+        + img[yi + 1, xi + 1] * fx * fy
+    )
+    return np.where(ok, out, 0.0)
+</code></pre>
+<h2 id='fn-7'>_smear_x</h2>
+<p class='loc'>sim/slm_plane_profiles.py:307</p>
+<pre><code>def _smear_x(img: np.ndarray, fwhm_px: float) -&gt; np.ndarray:
+    &quot;&quot;&quot;Convolve along x with the laser spectrum (FFT convolution, numpy only).&quot;&quot;&quot;
+    n = img.shape[1]
+    sigma = fwhm_px / (2.0 * math.sqrt(2.0 * math.log(2.0)))
+    k = np.arange(n) - n // 2
+    kern = np.exp(-0.5 * (k / sigma) ** 2)
+    kern /= kern.sum()
+    return np.real(
+        np.fft.ifft(np.fft.fft(img, axis=1) * np.fft.fft(np.fft.ifftshift(kern))[None, :], axis=1)
+    )
+</code></pre>
+<h2 id='fn-8'>_bin_sum</h2>
+<p class='loc'>sim/slm_plane_profiles.py:276</p>
+<pre><code>def _bin_sum(a: np.ndarray, k: int) -&gt; np.ndarray:
+    &quot;&quot;&quot;Sum k×k blocks -- downsampling that conserves total power.&quot;&quot;&quot;
+    n = (a.shape[0] // k) * k
+    m = (a.shape[1] // k) * k
+    return a[:n, :m].reshape(n // k, k, m // k, k).sum(axis=(1, 3))
+</code></pre>
+<h2 id='fn-9'>_chip_grid</h2>
+<p class='loc'>sim/slm_plane_profiles.py:200</p>
+<pre><code>def _chip_grid(rig: Rig):
+    yy, xx = np.mgrid[0 : rig.rows, 0 : rig.cols].astype(np.float64)
+    return xx - (rig.cols - 1) / 2.0, yy - (rig.rows - 1) / 2.0
+</code></pre>
+<h2 id='fn-10'>justified_legend</h2>
+<p class='loc'>fig_util/figure_helpers.py:329</p>
+<pre><code>def justified_legend(fig, title: str, body: str, *, x0: float = 0.06,
+                     x1: float = 0.94, y_top: float | None = None, fontsize: float = 10,
+                     line_spacing: float = 1.5, bottom_margin: float = 0.03,
+                     min_fontsize: float = 8.0) -&gt; float:
+    &quot;&quot;&quot;Render a paper-style figure legend: a **bold** ``title`` run followed by ``body``,
+    fully justified between ``x0``..``x1`` (figure fraction), starting with the first
+    line&#x27;s top at ``y_top`` and growing downward (conventions 1 &amp; 5).
+
+    Panel references in ``body`` such as ``(A)`` / ``(A,B)`` / ``(A-D)`` are bold. Write
+    the body as per-panel references -- ``(A) ... (B) ...`` -- naming exactly what each
+    panel shows (axes, conditions, groups, pooling, time windows) plus a brief note on
+    the analytical approach, so the figure stands alone. The last line is left-aligned
+    (standard for justified paragraphs). Words are placed individually because matplotlib
+    has no native full justification.
+
+    Overlap safety (convention 3: a legend must NEVER obscure any panel/axis/figure text):
+    - ``y_top=None`` (default) auto-places the legend&#x27;s top just below the lowest panel
+      text (tick labels / axis labels), so it cannot overlap the panels above it. Pass an
+      explicit ``y_top`` only to override.
+    - Body text renders at ``fontsize`` (default **10 pt**) and is shrunk only as far as
+      ``min_fontsize`` (default **8 pt** -- the convention-6 floor) if needed so the whole
+      block fits above ``bottom_margin``; it can never run off the bottom either. Size the
+      reserved band (taller figure + ``fig.subplots_adjust(bottom=...)``) so it stays at
+      the full 10 pt without shrinking.
+
+    Returns the figure-fraction y below the last line.
+    &quot;&quot;&quot;
+    fig.canvas.draw()
+    rend = fig.canvas.get_renderer()
+    figw, figh = fig.bbox.width, fig.bbox.height
+    line_px = (x1 - x0) * figw
+
+    runs = [(w, True) for w in title.split()]
+    runs += [(w, bool(_PANEL_REF.fullmatch(w))) for w in body.split()]
+
+    def _layout(fs):
+        &quot;&quot;&quot;Word widths + greedy line-wrap at font size ``fs``.&quot;&quot;&quot;
+        def _w(word, bold):
+            t = fig.text(0, 0, word, fontsize=fs, fontweight=&quot;bold&quot; if bold else &quot;normal&quot;)
+            w = t.get_window_extent(rend).width
+            t.remove()
+            return w
+        space = max(_w(&quot;m m&quot;, False) - _w(&quot;mm&quot;, False), 2.0)
+        widths = [_w(w, b) for w, b in runs]
+        lines, cur, cur_w = [], [], 0.0
+        for i in range(len(runs)):
+            add = widths[i] + (space if cur else 0.0)
+            if cur and cur_w + add &gt; line_px:
+                lines.append(cur)
+                cur, cur_w = [i], widths[i]
+            else:
+                cur.append(i)
+                cur_w += add
+        if cur:
+            lines.append(cur)
+        return lines, widths, space
+
+    # Auto-place below the lowest panel text so the legend never overlaps the panels.
+    if y_top is None:
+        ys = []
+        for ax in fig.axes:
+            try:
+                bb = ax.get_tightbbox(rend)
+            except Exception:
+                bb = None
+            if bb is not None and bb.height &gt; 0:
+                ys.append(bb.y0 / figh)
+        y_top = (min(ys) if ys else 0.22) - 0.025
+
+    # Shrink the font (to the 8 pt floor) until the block fits above ``bottom_margin``.
+    fs = float(fontsize)
+    while True:
+        lines, widths, space = _layout(fs)
+        line_h = fs * line_spacing * fig.dpi / 72.0 / figh     # fig-fraction per line
+        if (y_top - len(lines) * line_h) &gt;= bottom_margin or fs &lt;= min_fontsize:
+            break
+        fs -= 0.5
+
+    line_h_px = fs * line_spacing * fig.dpi / 72.0
+    y = y_top * figh
+    for li, line in enumerate(lines):
+        wsum = sum(widths[i] for i in line)
+        n = len(line)
+        gap = space if (li == len(lines) - 1 or n == 1) else (line_px - wsum) / (n - 1)
+        x = x0 * figw
+        for i in line:
+            word, bold = runs[i]
+            t = fig.text(x / figw, y / figh, word, fontsize=fs,
+                         fontweight=&quot;bold&quot; if bold else &quot;normal&quot;, ha=&quot;left&quot;, va=&quot;top&quot;)
+            t.set_gid(&quot;legend&quot;)          # tag so check_text_overlaps groups the words
+            x += widths[i] + gap
+        y -= line_h_px
+    return y / figh
+</code></pre>
+<h2 id='fn-11'>panel_label</h2>
+<p class='loc'>fig_util/figure_helpers.py:315</p>
+<pre><code>def panel_label(ax, letter: str, *, x: float = -0.08, y: float = 1.04,
+                fontsize: int = 14) -&gt; None:
+    &quot;&quot;&quot;Bold **14 pt** panel letter just above the top-left of an axes (axes-fraction
+    coords; convention 2). Default ``y`` sits just above the axes (not up near a
+    suptitle), so the letter clears the figure title on single-row layouts.
+    &quot;&quot;&quot;
+    t = ax.text(x, y, letter, transform=ax.transAxes, fontsize=fontsize,
+                fontweight=&quot;bold&quot;, va=&quot;bottom&quot;, ha=&quot;right&quot;, clip_on=False)
+    t.set_gid(&quot;panel-letter&quot;)
+</code></pre>
+</body></html>

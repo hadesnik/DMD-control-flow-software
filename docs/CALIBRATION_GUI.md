@@ -4,12 +4,61 @@
 PC: live camera tuning, CARBIDE volts→mW, the two-step spatial calibration with
 axis-sign verification, and the field-tilt (depth-plane) measurement.
 
-Launch with `scripts/run_calibrationGUI.m`.
+Launch with `scripts/run_calibrationGUI.m`:
+
+```matlab
+app = run_calibrationGUI                          % the rig (configs/real.yaml)
+app = run_calibrationGUI('configs/mock.yaml')     % demo, no hardware needed
+```
 
 > **Everything here also works from the command line**, with the same
 > interlocks and the same provenance. The app is a view over
 > `tfp.gui.CalibrationSession`, which is headless by construction — see
 > [Running without the GUI](#running-without-the-gui).
+
+---
+
+## Try it without hardware
+
+```matlab
+cd <repo>
+addpath('scripts');
+app = run_calibrationGUI('configs/mock.yaml');
+```
+
+Runs on any machine — no DMD, no DAQ, no camera, no PM100D, no drivers. Work
+left to right: apply the laser state, run preflight, then each calibration.
+Every step produces a real result, and a red banner names every simulated
+device throughout.
+
+**It simulates a rig rather than pretending to measure one.** That distinction
+is the whole point: a `MockSubstageCamera` built from YAML alone returns *pure
+noise*, and `alignDMDtoCamera` will happily threshold that noise, find blobs,
+fit an affine and report a plausible residual — a demo that appears to work
+while measuring nothing. So `tfp.sim.wireMockRig` connects the mock camera to
+the mock DMD through a known truth affine, makes the spot's blur follow the z
+stage, and tilts the excitation plane along the dispersion diagonal. The power
+sweep uses `tfp.sim.SyntheticPowerMeter`, which watches the mock DAQ's log and
+reports the power the commanded voltage would produce.
+
+The real sweep, the real controller and the real interlock all run — only the
+instruments are simulated. You will see the actual confirmation dialogs, and
+declining one really does prevent output.
+
+Compare any result against the injected ground truth:
+
+```matlab
+truth = app.session.mockTruth();     % .truthAffine .truthGradientUmPerUm ...
+```
+
+Typical demo numbers: DMD→camera residual ≈ 0.04 px, and a field-tilt gradient
+recovering the handoff's 0.02929 µm/µm.
+
+What the demo cannot show: the `uiconfirm` dialogs are the real thing but the
+numbers behind them are simulated; ScanImage cross-registration needs a bright
+rectangle on the camera, which the mock only renders if you set `scanRect`; and
+nothing here exercises the ALP, NI-DAQmx, pylon or TLPM drivers, all of which
+are Windows-only.
 
 ---
 
@@ -221,6 +270,7 @@ Prompts fall back to `input()` at the command line via
 | `src/+tfp/+hardware/LaserPowerController.m` | the only thing that drives the modulator |
 | `src/+tfp/+util/assertPulseEnergySafe.m` | the relay-pupil interlock |
 | `src/+tfp/+calibration/measureFieldTilt.m` | the depth-plane measurement |
+| `src/+tfp/+sim/wireMockRig.m` | connects the mock devices into one optical model |
 | `data/calibration_sessions/<stamp>_<name>/log.txt` | the session audit trail |
 
 `tests/test_gui_headless_guard.m` fails the build if graphics leak out of

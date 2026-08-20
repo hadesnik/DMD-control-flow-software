@@ -98,6 +98,7 @@ classdef LaserPowerController < handle
         lastConfirmedMw_  = -Inf
         authorisedVolts_  = -Inf
         everOutputNonZero_ = false
+        released_          = false
     end
 
     methods
@@ -358,7 +359,18 @@ classdef LaserPowerController < handle
             obj.log('step_start', struct('step', obj.stepToken_));
         end
 
+        function release(obj)
+            %release Mark an orderly shutdown; the destructor then stays quiet.
+            %   Without this, a normal shutdown (which zeroes the laser and
+            %   THEN cleans up the DAQ) triggers a second zero attempt from the
+            %   destructor against a dead DAQ session, and warns about a beam
+            %   that was deliberately turned off a moment earlier. Crying wolf
+            %   on a safety warning is how it stops being read.
+            obj.released_ = true;
+        end
+
         function delete(obj)
+            if obj.released_, return; end
             if ~isempty(obj.daq_) && isvalid(obj.daq_) && obj.isWired()
                 obj.zeroQuiet();
             end

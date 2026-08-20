@@ -1,50 +1,82 @@
-%run_calibrationGUI Launch the calibration GUI on the DAQ PC.
+function app = run_calibrationGUI(configPath, varargin)
+%run_calibrationGUI Launch the calibration GUI.
 %
-%   Run this from the repo root:
-%       >> run_calibrationGUI
+%   app = run_calibrationGUI()                      % configs/real.yaml (the rig)
+%   app = run_calibrationGUI('configs/mock.yaml')   % DEMO — no hardware at all
+%   app = run_calibrationGUI(path, 'allowConfigWrite', true)
 %
-%   Edit CONFIG_PATH below for the rig you are on:
-%     configs/real.yaml     build B — CARBIDE + DLP650LNIR (the default)
+%   Config choices:
+%     configs/real.yaml     build B — CARBIDE + DLP650LNIR (default)
 %     configs/dli4130.yaml  the borrowed DLP7000 on ALP-4.1
-%     configs/mock.yaml     no hardware at all, for a dry run
+%     configs/mock.yaml     DEMO: every device simulated, runs on any machine
 %
-%   Everything this app does is also available from the command line with the
-%   same interlocks and the same provenance — the GUI is a view over
-%   tfp.gui.CalibrationSession, not a separate implementation:
+%   DEMO MODE. With configs/mock.yaml the whole app runs with no hardware and
+%   no drivers — useful on a laptop to learn the workflow before the bench
+%   session. tfp.sim.wireMockRig connects the mock camera to the mock DMD
+%   through a known truth affine and a tilted excitation plane, and the power
+%   sweep uses tfp.sim.SyntheticPowerMeter, so every step produces a real
+%   measurement OF A SIMULATION rather than a plausible fit to noise. A red
+%   banner names every simulated device, and `app.session.mockTruth()` returns
+%   the injected ground truth to compare a result against.
 %
-%       config = tfp.io.loadConfig('configs/real.yaml');
-%       s = tfp.gui.CalibrationSession(config, struct('configPath','configs/real.yaml'));
-%       s.setLaserState(struct('repRateKhz',100,'pulsePickerDivision',1, ...
-%                              'frontPanelPowerW',8.5));
-%       disp(struct2table(s.preflight()));
-%       curve = s.runPowerSweep();
-%       s.shutdown();
+%   Name-value options are forwarded to tfp.gui.CalibrationApp:
+%     'allowConfigWrite'  persist results into the YAML (rig only; always
+%                         refused for a mock session). Default false.
+%     'sessionName'       suffix for the session directory
+%     'visible'           false to build the window hidden (smoke tests)
 %
-%   BEFORE YOU START, see docs/CALIBRATION_GUI.md. In short:
+%   BEFORE A REAL RUN, see docs/CALIBRATION_GUI.md. In short:
 %     * the CARBIDE modulator BNC must be wired and recorded in docs/WIRING.md,
 %       and laser.carbide_modulator_ao_channel set — until then the power tab
 %       refuses to output;
-%     * enter the laser state (rep rate, pulse-picker division, front-panel
-%       power) FIRST: the pulse-energy interlock is fail-closed on rep rate;
+%     * enter the laser state FIRST: the pulse-energy interlock is fail-closed
+%       on rep rate;
 %     * for the field-tilt tab, si_motor_helper must be running in the
 %       ScanImage MATLAB on the imaging PC (port 3047).
-
-CONFIG_PATH  = fullfile(fileparts(fileparts(mfilename('fullpath'))), ...
-                        'configs', 'real.yaml');
-ALLOW_CONFIG_WRITE = false;   % set true on the RIG to persist results to YAML
+%
+%   Everything the app does is also available from the command line with the
+%   same interlocks and the same provenance — see docs/CALIBRATION_GUI.md,
+%   "Running without the GUI".
 
 repoRoot = fileparts(fileparts(mfilename('fullpath')));
 addpath(fullfile(repoRoot, 'src'));
 
+if nargin < 1 || isempty(configPath)
+    configPath = fullfile(repoRoot, 'configs', 'real.yaml');
+elseif ~isfile(configPath)
+    % Accept a repo-relative path from any working directory.
+    candidate = fullfile(repoRoot, configPath);
+    if isfile(candidate)
+        configPath = candidate;
+    end
+end
+
 tfp.util.safetyChecks('arm');
 
-config = tfp.io.loadConfig(CONFIG_PATH);
+config = tfp.io.loadConfig(configPath);
 
-app = tfp.gui.CalibrationApp(config, struct( ...
-    'configPath',       CONFIG_PATH, ...
-    'allowConfigWrite', ALLOW_CONFIG_WRITE, ...
-    'sessionName',      'bringup'));   %#ok<NASGU>
+opts = struct('configPath', configPath, 'sessionName', 'bringup', ...
+    'allowConfigWrite', false);
+for k = 1:2:numel(varargin)
+    opts.(varargin{k}) = varargin{k+1};
+end
 
-fprintf(['\n[run_calibrationGUI] Session directory: %s\n' ...
-         '[run_calibrationGUI] Close the window (or press BEAM OFF) to stop.\n'], ...
-    app.session.sessionId);
+app = tfp.gui.CalibrationApp(config, opts);
+
+isDemo = strcmpi(char(tfp.util.configField(config, 'hardwareKind', '')), 'mock');
+fprintf('\n[run_calibrationGUI] config  : %s%s\n', configPath, ...
+    ternary(isDemo, '   *** DEMO — every device simulated ***', ''));
+fprintf('[run_calibrationGUI] session : %s\n', app.session.sessionId);
+if isDemo
+    fprintf(['[run_calibrationGUI] Start on the Laser state tab, apply it, then ' ...
+             'work left to right.\n' ...
+             '[run_calibrationGUI] Ground truth of the simulation: ' ...
+             'app.session.mockTruth()\n']);
+end
+fprintf('[run_calibrationGUI] Close the window (or press BEAM OFF) to stop.\n');
+end
+
+% ---------------------------------------------------------------------------
+function out = ternary(c, a, b)
+if c, out = a; else, out = b; end
+end

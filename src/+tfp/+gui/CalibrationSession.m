@@ -73,6 +73,8 @@ classdef CalibrationSession < handle
         darkFrame_  = []
         gitHash_    = ''
         configText_ = ''
+        isMock_     = false
+        mockTruth_  = []
     end
 
     methods
@@ -90,8 +92,8 @@ classdef CalibrationSession < handle
             % A mock session must not be able to rewrite a rig config, whatever
             % the caller asked for.
             wantWrite = logical(tfp.util.configField(options, 'allowConfigWrite', false));
-            isMock    = strcmpi(char(tfp.util.configField(config, 'hardwareKind', 'mock')), 'mock');
-            obj.allowConfigWrite = wantWrite && ~isMock;
+            obj.isMock_ = strcmpi(char(tfp.util.configField(config, 'hardwareKind', 'mock')), 'mock');
+            obj.allowConfigWrite = wantWrite && ~obj.isMock_;
 
             obj.gitHash_ = tfp.util.gitHash();
             if ~isempty(obj.configPath) && isfile(obj.configPath)
@@ -100,6 +102,17 @@ classdef CalibrationSession < handle
 
             obj.openSessionDir();
             obj.buildHardware(options);
+
+            % A MockSubstageCamera built from YAML alone has no DMD reference
+            % and no truth affine, so snap() returns pure noise — and
+            % alignDMDtoCamera will happily fit an affine to that noise and
+            % report a plausible residual. Wire the mocks into a self-consistent
+            % optical model instead, so a demo session simulates a rig rather
+            % than pretending to measure one.
+            if logical(tfp.util.configField(options, 'wireMockRig', true))
+                obj.mockTruth_ = tfp.sim.wireMockRig(obj.dmd_, obj.camera_, ...
+                    obj.zstage_, tfp.util.configField(options, 'mockRig', struct()));
+            end
 
             obj.laser_ = tfp.hardware.LaserPowerController(obj.daq_, config, struct( ...
                 'confirmFcn', obj.confirmFcn_, ...
@@ -129,6 +142,13 @@ classdef CalibrationSession < handle
 
         function s = laserState(obj)
             s = obj.laser_.getLaserState();
+        end
+
+        function t = mockTruth(obj)
+            %mockTruth Ground truth of the simulated rig, or [] on real hardware.
+            %   Lets a demo compare a recovered affine or tilt gradient against
+            %   the value that was injected.
+            t = obj.mockTruth_;
         end
 
         function lp = laser(obj)
@@ -251,6 +271,15 @@ classdef CalibrationSession < handle
             %runPowerSweep CARBIDE volts->mW, interlocked and stamped.
             if nargin < 2 || isempty(options), options = struct(); end
             obj.assertLaserState('runPowerSweep');
+            % No PM100D on a mock rig (and none on a dev machine at all — the
+            % Thorlabs TLPM driver is Windows-only). Substitute the simulated
+            % meter, which watches the mock DAQ's log and reports the power the
+            % commanded voltage would produce. The REAL sweep, controller and
+            % interlock all run; only the instrument is simulated.
+            if obj.isMock_ && ~isfield(options, 'meter')
+                options.meter = tfp.sim.SyntheticPowerMeter(obj.daq_, ...
+                    obj.laser_.aoChannel, struct('maxMw', 50));
+            end
             curve = obj.withCamera(@() tfp.calibration.powerMeterSweepSingle( ...
                 obj.laser_, options));
             obj.laser_.loadPowerCurve(curve);
@@ -387,7 +416,12 @@ classdef CalibrationSession < handle
             %   outputSingleAnalog needs a live NI session, so zeroing after
             %   daq.cleanup() would silently fail and leave the beam on.
             obj.log('session_end', []);
+            % Laser first: outputSingleAnalog needs a live NI session, so
+            % zeroing after daq.cleanup() would silently fail. release() then
+            % marks the controller done, so its destructor does not warn about
+            % a DAQ that was shut down on purpose.
             try, obj.laser_.zeroQuiet(); catch, end
+            try, obj.laser_.release();   catch, end
             try, obj.stopLive();         catch, end
             for h = {obj.camera_, obj.dmd_, obj.zstage_, obj.daq_}
                 try
@@ -661,7 +695,13 @@ classdef CalibrationSession < handle
             end
         end
 
-        function row = powerMeterRow(obj) %#ok<MANU>
+        function row = powerMeterRow(obj)
+            if obj.isMock_
+                row = struct('device', 'PM100D', 'status', 'simulated', ...
+                    'detail', 'tfp.sim.SyntheticPowerMeter (mock session)', ...
+                    'remedy', 'Nothing measured here is a power calibration.');
+                return
+            end
             % Detected lazily: constructing TLPM on a machine without the
             % driver throws, and that is information, not a failure.
             if exist('TLPM', 'class') == 8 || exist('TLPM', 'file') == 2

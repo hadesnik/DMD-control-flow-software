@@ -643,7 +643,10 @@ once the audit confirms this unit's external-trigger sequencing.
   `CalibrationApp.m` is the only file allowed to touch graphics.** A `uifigure` cannot
   be constructed under `-nodisplay`, so anything that drifts into the view becomes
   permanently untestable. `tests/test_gui_headless_guard.m` enforces this mechanically.
-  Programmatic `classdef`, never a binary `.mlapp`.
+  Programmatic `classdef`, never a binary `.mlapp`. **`run_calibrationGUI('configs/mock.yaml')`
+  runs the whole app with no hardware** — `tfp.sim.wireMockRig` connects the mock camera
+  to the mock DMD through a known truth affine and a tilted excitation plane, so a demo
+  session measures a simulation instead of fitting noise.
 - ScanImage integration is via TCP/IP or named pipe — **never modify ScanImage
   internals**.
 - The DLPC410 supports binary pattern rates to 12,500 Hz, but don't assume that is

@@ -15,10 +15,14 @@ classdef CalibrationApp < handle
     %   reviewed in a pull request, merged, or grepped — and the guard test
     %   literally could not run against it.
     %
-    %   Launch:
-    %       app = tfp.gui.CalibrationApp(tfp.io.loadConfig('configs/real.yaml'), ...
-    %                struct('configPath', 'configs/real.yaml'));
-    %   or via scripts/run_calibrationGUI.m, which does the addpath too.
+    %   Launch via scripts/run_calibrationGUI.m, which handles the addpath:
+    %       app = run_calibrationGUI                          % the rig
+    %       app = run_calibrationGUI('configs/mock.yaml')     % demo, no hardware
+    %
+    %   In demo mode every device is simulated and tfp.sim.wireMockRig connects
+    %   them into a self-consistent optical model, so each step is a real
+    %   measurement of a simulation rather than a plausible fit to noise. A red
+    %   banner names every simulated device.
     %
     %   LAYOUT
     %     Row 1  the safety bar, visible on every tab: laser state, live AO
@@ -53,8 +57,13 @@ classdef CalibrationApp < handle
             if nargin < 2 || isempty(options), options = struct(); end
             if nargin < 1 || isempty(config),  config  = struct(); end
 
+            % options.visible = false builds the window hidden, so a smoke
+            % test can verify the whole layout constructs without popping a
+            % window onto the operator's screen.
+            visible = tfp.util.configField(options, 'visible', true);
             obj.fig_ = uifigure('Name', 'TF-Photostim calibration', ...
-                'Position', [60 60 1600 950], 'Tag', 'tfp_calibration_app');
+                'Position', [60 60 1600 950], 'Tag', 'tfp_calibration_app', ...
+                'Visible', matlab.lang.OnOffSwitchState(logical(visible)));
 
             % The session's confirmFcn is this app's modal dialog. The spec is
             % rendered by tfp.util.formatPowerConfirmSpec so the console
