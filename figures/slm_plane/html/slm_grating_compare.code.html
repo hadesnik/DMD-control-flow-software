@@ -1,0 +1,399 @@
+<!doctype html><html><head><meta charset='utf-8'>
+<title>Source for slm_grating_compare.pdf</title>
+<style>
+body{font:14px/1.5 -apple-system,Segoe UI,Helvetica,Arial,sans-serif;max-width:920px;margin:2rem auto;padding:0 1rem;color:#222}
+h1{font-size:1.3rem} h2{font-size:1rem;margin-top:1.6rem;border-bottom:1px solid #ddd;padding-bottom:.2rem}
+.loc{color:#888;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.85rem}
+pre{background:#f6f8fa;border:1px solid #e1e4e8;border-radius:6px;padding:.8rem;overflow:auto;font:12px/1.45 ui-monospace,Menlo,Consolas,monospace}
+ul.toc{padding-left:1.2rem} ul.toc a{text-decoration:none}
+.thirdparty{color:#666;font-size:.9rem;margin-top:2rem}
+</style></head><body>
+<h1>Functions used to generate <code>slm_grating_compare.pdf</code></h1>
+<p>Auto-generated source listing. Project functions are shown in full; third-party / standard-library calls are noted but not reproduced.</p>
+<ul class='toc'>
+<li><a href='#fn-0'>main</a> <span class='loc'>sim/slm_grating_compare.py:180</span></li>
+<li><a href='#fn-1'>rig_for_grating</a> <span class='loc'>sim/slm_grating_compare.py:87</span></li>
+<li><a href='#fn-2'>pattern_spots</a> <span class='loc'>sim/slm_grating_compare.py:108</span></li>
+<li><a href='#fn-3'>pattern_guide_target</a> <span class='loc'>sim/slm_grating_compare.py:114</span></li>
+<li><a href='#fn-4'>pattern_downstream_target</a> <span class='loc'>sim/slm_grating_compare.py:143</span></li>
+<li><a href='#fn-5'>pattern_crosshair</a> <span class='loc'>sim/slm_grating_compare.py:162</span></li>
+<li><a href='#fn-6'>line_extent_mm</a> <span class='loc'>sim/slm_grating_compare.py:171</span></li>
+<li><a href='#fn-7'>slm_plane</a> <span class='loc'>sim/slm_plane_profiles.py:414</span></li>
+<li><a href='#fn-8'>illumination</a> <span class='loc'>sim/slm_plane_profiles.py:354</span></li>
+<li><a href='#fn-9'>justified_legend</a> <span class='loc'>fig_util/figure_helpers.py:329</span></li>
+<li><a href='#fn-10'>panel_label</a> <span class='loc'>fig_util/figure_helpers.py:315</span></li>
+</ul>
+<h2 id='fn-0'>main</h2>
+<p class='loc'>sim/slm_grating_compare.py:180</p>
+<pre><code>def main() -&gt; Path:
+    apply_style()
+    base = build_rig()
+    illum = illumination(base)
+
+    cases = [
+        (f&quot;300 spots, Ø{SOMA_DIAM_PX} px&quot;, pattern_spots(base)),
+        (&quot;Alignment guide\n(scripts/, rings to 400 px)&quot;, pattern_guide_target(base)),
+        (&quot;Downstream target\n(tfp.patterns, in-patch)&quot;, pattern_downstream_target(base)),
+        (&quot;Crosshairs&quot;, pattern_crosshair(base)),
+    ]
+    rigs = {g: rig_for_grating(base, g) for g in GRATINGS}
+
+    # Compute every panel first: the shared normalisation has to see them all,
+    # otherwise the 600 l/mm concentration is hidden by per-panel autoscaling.
+    grid: dict = {}
+    for g in GRATINGS:
+        for label, pat in cases:
+            img, mm = slm_plane(pat, rigs[g], illum)
+            grid[(g, label)] = (img, mm)
+    ref = max(img.max() for img, _ in grid.values())
+
+    ncol = len(cases)
+    fig = plt.figure(figsize=(13.6, 11.6))
+    gs = fig.add_gridspec(
+        4, ncol, height_ratios=[1.0, 1.32, 1.32, 1.05],
+        left=0.075, right=0.885, top=0.955, bottom=0.275, hspace=0.46, wspace=0.14,
+    )
+    half = CANVAS_MM / 2.0
+    extent = [-half, half, -half, half]
+
+    # --- row 1: the frames written on the chip ------------------------------
+    for i, (label, pat) in enumerate(cases):
+        ax = fig.add_subplot(gs[0, i])
+        ax.imshow(pat, cmap=&quot;Greys&quot;, origin=&quot;lower&quot;, interpolation=&quot;nearest&quot;, aspect=&quot;equal&quot;)
+        ax.set_xticks([]); ax.set_yticks([])
+        ax.set_title(label, fontsize=8.5, pad=3)
+        panel_label(ax, &quot;ABCD&quot;[i], x=-0.02, y=1.34)
+        if i == 0:
+            ax.set_ylabel(&quot;DMD chip&quot;, fontsize=9)
+
+    # --- rows 2-3: what the LC sees, one row per grating --------------------
+    letters = {1200e3: &quot;EFGH&quot;, 600e3: &quot;IJKL&quot;}
+    for row, g in enumerate(GRATINGS, start=1):
+        rg = rigs[g]
+        for i, (label, _) in enumerate(cases):
+            img, mm = grid[(g, label)]
+            ax = fig.add_subplot(gs[row, i])
+            with np.errstate(divide=&quot;ignore&quot;):
+                db = np.log10(np.maximum(img / ref, 1e-30))
+            im = ax.imshow(db, cmap=&quot;inferno&quot;, origin=&quot;lower&quot;, extent=extent,
+                           vmin=FLOOR_DB, vmax=0.0, interpolation=&quot;nearest&quot;, aspect=&quot;equal&quot;)
+            ax.add_patch(Rectangle((-SLM_APERTURE_MM / 2, -SLM_APERTURE_MM / 2),
+                                   SLM_APERTURE_MM, SLM_APERTURE_MM,
+                                   fill=False, ec=&quot;#39d0ff&quot;, lw=1.0, ls=&quot;--&quot;))
+            ax.set_xticks([-8, 0, 8]); ax.set_yticks([-8, 0, 8])
+            ax.tick_params(labelsize=8)
+            panel_label(ax, letters[g][i], x=-0.02, y=1.04)
+            if i == 0:
+                ax.set_ylabel(f&quot;{g/1e3:.0f} l/mm  (β = {rg.grating_beta_deg:+.1f}°)\n&quot;
+                              &quot;groove axis (mm)&quot;, fontsize=9)
+            else:
+                ax.set_yticklabels([])
+            if row == 2:
+                ax.set_xlabel(&quot;dispersion (mm)&quot;, fontsize=8.5)
+
+    cax = fig.add_axes([0.898, gs[2, 0].get_position(fig).y0, 0.012,
+                        gs[1, 0].get_position(fig).y1 - gs[2, 0].get_position(fig).y0])
+    cb = fig.colorbar(im, cax=cax)
+    cb.set_label(&quot;log₁₀ irradiance, common scale across all eight panels&quot;, fontsize=9)
+    cb.ax.tick_params(labelsize=8)
+
+    # --- row 4: the number the comparison is about --------------------------
+    axm = fig.add_subplot(gs[3, :])
+    xs = np.arange(ncol)
+    w = 0.34
+    fw = {g: [line_extent_mm(grid[(g, l)][0], grid[(g, l)][1], 0.5) for l, _ in cases]
+          for g in GRATINGS}
+    axm.bar(xs - w / 2, fw[1200e3], w, label=&quot;1200 l/mm&quot;, color=&quot;#c1443c&quot;)
+    axm.bar(xs + w / 2, fw[600e3], w, label=&quot;600 l/mm&quot;, color=&quot;#3c6fc1&quot;)
+    for xi, (a, b) in enumerate(zip(fw[1200e3], fw[600e3])):
+        axm.text(xi, max(a, b) + 0.22, f&quot;{a/b:.2f}× longer&quot;, ha=&quot;center&quot;, va=&quot;bottom&quot;,
+                 fontsize=8.5, fontweight=&quot;bold&quot;)
+    axm.set_xticks(xs)
+    axm.set_xticklabels([l.replace(&quot;\n&quot;, &quot; &quot;) for l, _ in cases], fontsize=8.5)
+    axm.set_ylabel(&quot;line length,\nFWHM (mm)&quot;, fontsize=9)
+    axm.set_ylim(0, max(fw[1200e3]) * 1.45)   # headroom so the ratio labels clear the key
+    axm.tick_params(labelsize=8)
+    axm.legend(fontsize=8.5, frameon=False, loc=&quot;upper right&quot;, ncol=2)
+    axm.set_xlim(-0.6, ncol - 0.4)
+    panel_label(axm, &quot;M&quot;, x=-0.028, y=1.13)
+
+    peak_ratio = np.mean([grid[(600e3, l)][0].max() / grid[(1200e3, l)][0].max()
+                          for l, _ in cases])
+    ratio = np.mean([a / b for a, b in zip(fw[1200e3], fw[600e3])])
+
+    kern = rigs[1200e3].smear_fwhm_m / rigs[600e3].smear_fwhm_m
+    b12, b6 = rigs[1200e3].grating_beta_deg, rigs[600e3].grating_beta_deg
+    title = (f&quot;A 600 l/mm grating shortens the spectral line {min(ratio_list:=[a/b for a, b in zip(fw[1200e3], fw[600e3])]):.1f}–&quot;
+             f&quot;{max(ratio_list):.1f}× — and brightens the liquid crystal by the same factor.&quot;)
+    body = (
+        f&quot;Scalar Fourier propagation to the Meadowlark HSP1K at the bench-confirmed f7 = 300 mm, with the grating as the only variable. &quot;
+        f&quot;β is solved from sin α + sin β = mλg at a fixed α = {ALPHA_DEG}° incidence, i.e. a straight swap into the same mount; the &quot;
+        f&quot;1200 l/mm case returns β = {b12:+.1f}°, reproducing the handoff BOM, while 600 l/mm throws the order to β = {b6:+.1f}°, &quot;
+        f&quot;across the normal. &quot;
+        f&quot;(A–D) The frames written on the chip: 300 targets of Ø{SOMA_DIAM_PX} px (≈{SOMA_DIAM_PX*2.039:.0f} µm at the sample); the bench alignment guide from scripts/alignmentTarget.m, whose rings &quot;
+        &quot;deliberately run to 400 px radius, outside the Ø463 px patch, because locating the true illumination edge is its purpose; the &quot;
+        &quot;patch-confined downstream target from tfp.patterns.alignmentTarget (edge ring, centre cross, long dispersion ticks, short groove &quot;
+        &quot;ticks); and plain crosshairs. (E–H) Irradiance on the LC with the 1200 l/mm grating. (I–L) The same four frames with 600 l/mm. &quot;
+        &quot;All eight share one log₁₀ colour scale normalised to the brightest panel and identical ±11 mm axes, so the 600 l/mm row being &quot;
+        &quot;visibly hotter is a real difference, not autoscaling; dashed cyan square is the 17.4 mm aperture. Chip-aligned features sit on the &quot;
+        f&quot;diagonals because the chip is clocked 45° and each transform is rotated into the lab frame. (M) Spectral-line length, measured as &quot;
+        f&quot;the FWHM of the dispersion-axis profile, paired per pattern. Mean shortening is {ratio:.2f}×, against {peak_ratio:.2f}× higher peak &quot;
+        f&quot;irradiance — the same power in a shorter line. The underlying smear kernel shortens by {kern:.2f}×; measured lines fall below that &quot;
+        f&quot;because each pattern&#x27;s own transform has finite width along dispersion, most visibly for the 300 spots ({ratio_list[0]:.2f}×), whose &quot;
+        f&quot;broad envelope dominates the convolution. Because angular dispersion is m·g/cos β, halving the groove density gives {kern:.2f}× rather &quot;
+        f&quot;than 2×: cos β rises from {math.cos(math.radians(b12)):.3f} to {math.cos(math.radians(b6)):.3f} and returns some of what halving g &quot;
+        f&quot;took away. Caveat: re-angling the mount instead of swapping in place changes β and every ratio here.&quot;
+    )
+    justified_legend(fig, title, body)
+
+    return savefig(
+        fig, &quot;slm_grating_compare&quot;, outdir=&quot;figures/slm_plane&quot;,
+        functions=[main, rig_for_grating, pattern_spots, pattern_guide_target,
+                   pattern_downstream_target, pattern_crosshair, line_extent_mm,
+                   slm_plane, illumination, justified_legend, panel_label],
+    )
+</code></pre>
+<h2 id='fn-1'>rig_for_grating</h2>
+<p class='loc'>sim/slm_grating_compare.py:87</p>
+<pre><code>def rig_for_grating(base: Rig, lines_per_m: float) -&gt; Rig:
+    &quot;&quot;&quot;Clone the rig with a different grating, solving for the diffracted angle.
+
+    beta comes from the grating equation rather than being quoted, which is
+    what makes the 600 l/mm case honest: its order lands on the far side of
+    the normal and cos(beta) -- not just g -- sets the dispersion.
+    &quot;&quot;&quot;
+    alpha = math.radians(ALPHA_DEG)
+    sin_beta = base.wavelength_m * lines_per_m - math.sin(alpha)
+    if not -1.0 &lt;= sin_beta &lt;= 1.0:
+        raise ValueError(f&quot;{lines_per_m/1e3:.0f} l/mm has no propagating order at this angle&quot;)
+    beta = math.asin(sin_beta)
+    return Rig(**{**base.__dict__,
+                  &quot;grating_lines_per_m&quot;: lines_per_m,
+                  &quot;grating_beta_deg&quot;: math.degrees(beta)})
+</code></pre>
+<h2 id='fn-2'>pattern_spots</h2>
+<p class='loc'>sim/slm_grating_compare.py:108</p>
+<pre><code>def pattern_spots(rig: Rig, n: int = 300, diam_px: int = SOMA_DIAM_PX) -&gt; np.ndarray:
+    &quot;&quot;&quot;n soma-sized discs over the patch. Sized by DIAMETER, from the shared
+    helper so both figures cannot drift apart on what &quot;a spot&quot; means.&quot;&quot;&quot;
+    return random_spots(rig, n=n, diam_px=diam_px, seed=300)
+</code></pre>
+<h2 id='fn-3'>pattern_guide_target</h2>
+<p class='loc'>sim/slm_grating_compare.py:114</p>
+<pre><code>def pattern_guide_target(rig: Rig, step: int = 40, ring_thick: int = 6,
+                         fid_size: int = 34, fid_radius: int = 200) -&gt; np.ndarray:
+    &quot;&quot;&quot;scripts/alignmentTarget.m -- the bench alignment guide.
+
+    Rings run out to min(cx,cy) = 400 px, i.e. well beyond the Ø463 px patch;
+    that overrun is deliberate in the original (it is how the real footprint
+    radius gets measured), and it is why this pattern is the one that lights
+    mirrors the aperture budget never covered.
+    &quot;&quot;&quot;
+    x, y = _chip_grid(rig)
+    r = np.hypot(x, y)
+    img = np.zeros(x.shape, dtype=bool)
+
+    max_r = min((rig.cols + 1) / 2.0, (rig.rows + 1) / 2.0)
+    for k in range(1, int(max_r // step) + 1):
+        t = ring_thick * 2 if k % 5 == 0 else ring_thick   # every 5th doubled
+        img |= np.abs(r - k * step) &lt;= t / 2.0
+
+    # The two chip diagonals ARE the dispersion and groove axes (45° clocking).
+    img |= np.abs(x - y) / math.sqrt(2) &lt;= ring_thick / 2.0
+    img |= np.abs(x + y) / math.sqrt(2) &lt;= ring_thick / 2.0
+
+    # Asymmetric fiducial: filled square on +(1,1), short bar on +(1,-1).
+    f = fid_radius / math.sqrt(2)
+    img |= (np.abs(x - f) &lt;= fid_size / 2) &amp; (np.abs(y - f) &lt;= fid_size / 2)
+    img |= (np.abs(x - f) &lt;= fid_size) &amp; (np.abs(y + f) &lt;= fid_size / 6)
+    return img
+</code></pre>
+<h2 id='fn-4'>pattern_downstream_target</h2>
+<p class='loc'>sim/slm_grating_compare.py:143</p>
+<pre><code>def pattern_downstream_target(rig: Rig, ring_w: float = 5, cross_half: float = 60,
+                              line_w: float = 5, tick_disp: float = 40,
+                              tick_grv: float = 20) -&gt; np.ndarray:
+    &quot;&quot;&quot;tfp.patterns.alignmentTarget -- patch-confined downstream target.&quot;&quot;&quot;
+    x, y = _chip_grid(rig)
+    r = np.hypot(x, y)
+    R = rig.patch_diameter_px / 2.0
+    u = (x + y) / math.sqrt(2)     # dispersion diagonal
+    v = (x - y) / math.sqrt(2)     # groove diagonal
+
+    ring = np.abs(r - R) &lt;= ring_w / 2
+    cross = ((np.abs(x) &lt;= line_w / 2) &amp; (np.abs(y) &lt;= cross_half)) | \
+            ((np.abs(y) &lt;= line_w / 2) &amp; (np.abs(x) &lt;= cross_half))
+    inner = R - ring_w
+    d_tick = (np.abs(v) &lt;= line_w / 2) &amp; (np.abs(u) &gt;= inner - tick_disp) &amp; (np.abs(u) &lt;= inner - 3)
+    g_tick = (np.abs(u) &lt;= line_w / 2) &amp; (np.abs(v) &gt;= inner - tick_grv) &amp; (np.abs(v) &lt;= inner - 3)
+    return (ring | cross | d_tick | g_tick) &amp; (r &lt;= R + ring_w / 2)
+</code></pre>
+<h2 id='fn-5'>pattern_crosshair</h2>
+<p class='loc'>sim/slm_grating_compare.py:162</p>
+<pre><code>def pattern_crosshair(rig: Rig, bar: int = 6) -&gt; np.ndarray:
+    x, y = _chip_grid(rig)
+    patch = np.hypot(x, y) &lt;= rig.patch_diameter_px / 2.0
+    return ((np.abs(x) &lt;= bar) | (np.abs(y) &lt;= bar)) &amp; patch
+</code></pre>
+<h2 id='fn-6'>line_extent_mm</h2>
+<p class='loc'>sim/slm_grating_compare.py:171</p>
+<pre><code>def line_extent_mm(img: np.ndarray, mm_per_px: float, frac: float) -&gt; float:
+    &quot;&quot;&quot;Width of the dispersion-axis profile at ``frac`` of its peak.&quot;&quot;&quot;
+    n = img.shape[0]
+    ax = (np.arange(n) - n / 2 + 0.5) * mm_per_px
+    prof = img.sum(axis=0)
+    sel = ax[prof &gt; prof.max() * frac]
+    return float(sel.max() - sel.min()) if sel.size else 0.0
+</code></pre>
+<h2 id='fn-7'>slm_plane</h2>
+<p class='loc'>sim/slm_plane_profiles.py:414</p>
+<pre><code>def slm_plane(pattern: np.ndarray, rig: Rig, illum: np.ndarray) -&gt; np.ndarray:
+    &quot;&quot;&quot;Time-averaged irradiance at the SLM for one DMD pattern.
+
+    Steps: (i) field on the chip = pattern x Gaussian illumination;
+    (ii) Fourier transform -- this *is* the propagation, since the SLM is the
+    Fourier plane of I0; (iii) rotate into the lab frame, because the chip is
+    clocked 45 deg so the optical axes lie along its diagonals;
+    (iv) convolve along dispersion with the laser spectrum.
+    &quot;&quot;&quot;
+    field = np.zeros((NFFT, NFFT), dtype=np.complex128)
+    r0 = (NFFT - pattern.shape[0]) // 2
+    c0 = (NFFT - pattern.shape[1]) // 2
+    field[r0 : r0 + pattern.shape[0], c0 : c0 + pattern.shape[1]] = pattern * illum
+
+    inten = np.abs(np.fft.fftshift(np.fft.fft2(field))) ** 2
+    inten = _bin_sum(inten, BIN)                      # -&gt; NFFT/BIN across 2*halfwidth
+
+    mm_per_px = (2.0 * rig.slm_halfwidth_m * 1e3) / inten.shape[0]
+    n_canvas = int(round(CANVAS_MM / mm_per_px))
+    n_canvas += n_canvas % 2
+    canvas = np.zeros((n_canvas, n_canvas))
+    o = (n_canvas - inten.shape[0]) // 2
+    canvas[o : o + inten.shape[0], o : o + inten.shape[1]] = inten
+
+    # The chip&#x27;s 45 deg clocking: rotate the transform into the lab frame so
+    # dispersion runs along +x and the (axis-aligned) SLM aperture is a square.
+    canvas = _rotate(canvas, -45.0)
+    return _smear_x(canvas, rig.smear_fwhm_m * 1e3 / mm_per_px), mm_per_px
+</code></pre>
+<h2 id='fn-8'>illumination</h2>
+<p class='loc'>sim/slm_plane_profiles.py:354</p>
+<pre><code>def illumination(rig: Rig) -&gt; np.ndarray:
+    &quot;&quot;&quot;Gaussian amplitude on the chip (Ø7.0 mm 1/e^2 *intensity* diameter).
+
+    Reproduces the handoff&#x27;s ``patch_edge_intensity`` (0.3604) at r = R, which
+    is the check that this is the same beam the handoff modelled.
+    &quot;&quot;&quot;
+    x, y = _chip_grid(rig)
+    w_px = (rig.illum_1e2_diameter_m / 2.0) / rig.pitch_m
+    return np.exp(-(x**2 + y**2) / w_px**2)  # amplitude; intensity is its square
+</code></pre>
+<h2 id='fn-9'>justified_legend</h2>
+<p class='loc'>fig_util/figure_helpers.py:329</p>
+<pre><code>def justified_legend(fig, title: str, body: str, *, x0: float = 0.06,
+                     x1: float = 0.94, y_top: float | None = None, fontsize: float = 10,
+                     line_spacing: float = 1.5, bottom_margin: float = 0.03,
+                     min_fontsize: float = 8.0) -&gt; float:
+    &quot;&quot;&quot;Render a paper-style figure legend: a **bold** ``title`` run followed by ``body``,
+    fully justified between ``x0``..``x1`` (figure fraction), starting with the first
+    line&#x27;s top at ``y_top`` and growing downward (conventions 1 &amp; 5).
+
+    Panel references in ``body`` such as ``(A)`` / ``(A,B)`` / ``(A-D)`` are bold. Write
+    the body as per-panel references -- ``(A) ... (B) ...`` -- naming exactly what each
+    panel shows (axes, conditions, groups, pooling, time windows) plus a brief note on
+    the analytical approach, so the figure stands alone. The last line is left-aligned
+    (standard for justified paragraphs). Words are placed individually because matplotlib
+    has no native full justification.
+
+    Overlap safety (convention 3: a legend must NEVER obscure any panel/axis/figure text):
+    - ``y_top=None`` (default) auto-places the legend&#x27;s top just below the lowest panel
+      text (tick labels / axis labels), so it cannot overlap the panels above it. Pass an
+      explicit ``y_top`` only to override.
+    - Body text renders at ``fontsize`` (default **10 pt**) and is shrunk only as far as
+      ``min_fontsize`` (default **8 pt** -- the convention-6 floor) if needed so the whole
+      block fits above ``bottom_margin``; it can never run off the bottom either. Size the
+      reserved band (taller figure + ``fig.subplots_adjust(bottom=...)``) so it stays at
+      the full 10 pt without shrinking.
+
+    Returns the figure-fraction y below the last line.
+    &quot;&quot;&quot;
+    fig.canvas.draw()
+    rend = fig.canvas.get_renderer()
+    figw, figh = fig.bbox.width, fig.bbox.height
+    line_px = (x1 - x0) * figw
+
+    runs = [(w, True) for w in title.split()]
+    runs += [(w, bool(_PANEL_REF.fullmatch(w))) for w in body.split()]
+
+    def _layout(fs):
+        &quot;&quot;&quot;Word widths + greedy line-wrap at font size ``fs``.&quot;&quot;&quot;
+        def _w(word, bold):
+            t = fig.text(0, 0, word, fontsize=fs, fontweight=&quot;bold&quot; if bold else &quot;normal&quot;)
+            w = t.get_window_extent(rend).width
+            t.remove()
+            return w
+        space = max(_w(&quot;m m&quot;, False) - _w(&quot;mm&quot;, False), 2.0)
+        widths = [_w(w, b) for w, b in runs]
+        lines, cur, cur_w = [], [], 0.0
+        for i in range(len(runs)):
+            add = widths[i] + (space if cur else 0.0)
+            if cur and cur_w + add &gt; line_px:
+                lines.append(cur)
+                cur, cur_w = [i], widths[i]
+            else:
+                cur.append(i)
+                cur_w += add
+        if cur:
+            lines.append(cur)
+        return lines, widths, space
+
+    # Auto-place below the lowest panel text so the legend never overlaps the panels.
+    if y_top is None:
+        ys = []
+        for ax in fig.axes:
+            try:
+                bb = ax.get_tightbbox(rend)
+            except Exception:
+                bb = None
+            if bb is not None and bb.height &gt; 0:
+                ys.append(bb.y0 / figh)
+        y_top = (min(ys) if ys else 0.22) - 0.025
+
+    # Shrink the font (to the 8 pt floor) until the block fits above ``bottom_margin``.
+    fs = float(fontsize)
+    while True:
+        lines, widths, space = _layout(fs)
+        line_h = fs * line_spacing * fig.dpi / 72.0 / figh     # fig-fraction per line
+        if (y_top - len(lines) * line_h) &gt;= bottom_margin or fs &lt;= min_fontsize:
+            break
+        fs -= 0.5
+
+    line_h_px = fs * line_spacing * fig.dpi / 72.0
+    y = y_top * figh
+    for li, line in enumerate(lines):
+        wsum = sum(widths[i] for i in line)
+        n = len(line)
+        gap = space if (li == len(lines) - 1 or n == 1) else (line_px - wsum) / (n - 1)
+        x = x0 * figw
+        for i in line:
+            word, bold = runs[i]
+            t = fig.text(x / figw, y / figh, word, fontsize=fs,
+                         fontweight=&quot;bold&quot; if bold else &quot;normal&quot;, ha=&quot;left&quot;, va=&quot;top&quot;)
+            t.set_gid(&quot;legend&quot;)          # tag so check_text_overlaps groups the words
+            x += widths[i] + gap
+        y -= line_h_px
+    return y / figh
+</code></pre>
+<h2 id='fn-10'>panel_label</h2>
+<p class='loc'>fig_util/figure_helpers.py:315</p>
+<pre><code>def panel_label(ax, letter: str, *, x: float = -0.08, y: float = 1.04,
+                fontsize: int = 14) -&gt; None:
+    &quot;&quot;&quot;Bold **14 pt** panel letter just above the top-left of an axes (axes-fraction
+    coords; convention 2). Default ``y`` sits just above the axes (not up near a
+    suptitle), so the letter clears the figure title on single-row layouts.
+    &quot;&quot;&quot;
+    t = ax.text(x, y, letter, transform=ax.transAxes, fontsize=fontsize,
+                fontweight=&quot;bold&quot;, va=&quot;bottom&quot;, ha=&quot;right&quot;, clip_on=False)
+    t.set_gid(&quot;panel-letter&quot;)
+</code></pre>
+</body></html>

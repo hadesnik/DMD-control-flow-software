@@ -39,10 +39,10 @@ running **before** the DAQ PC starts anything that needs them.
    pupil; an all-ON pattern at full power crosses air breakdown *at any laser
    power setting you might later raise*. `tfp.hardware.DMD.assertPatternsSafe`
    refuses any frame > 50% ON on every load, mocks included. Do not work around it.
-2. **SLM liquid-crystal alignment cap (44 mW)** — with the 3D-SHOT diffuser gone,
+2. **SLM liquid-crystal alignment cap (42 mW)** — with the 3D-SHOT diffuser gone,
    the SLM sits at a Fourier plane of the DMD pattern: an all-ON / near-uniform
    patch focuses each color into a spectral **line** (~0.1 mm²) on the LC.
-   `tfp.util.assertSlmPowerSafe` blocks near-uniform patterns above 44 mW when
+   `tfp.util.assertSlmPowerSafe` blocks near-uniform patterns above 42 mW when
    `slm.enabled` is true. Sparse spot patterns are benign at full field power.
 
 Always begin rig sessions with `tfp.util.safetyChecks('arm')` (the Sequencer
@@ -55,15 +55,17 @@ checks it per trial), laser at minimum power until Phase 4, and the power meter
 
 ### Optics bench (from `docs/optics_handoff.md` — the merged arm)
 
-- [x] **f7 = 300 mm — CONFIRMED on the bench [USER 2026-08-19].**
-      The committed handoff (rev 4) still describes f7 = 250, so its lateral
-      scales are **1.2× too large** — known-wrong now, not merely unverified.
-      Expect **1.9200 µm/px groove, 2.1581 dispersion** over an **889 × 999 µm**
-      field; derivation and caveats in CLAUDE.md, "Provisional f7 = 300 scale".
-      Every "expected value" below stays provisional and the software warns
-      instead of failing until the optics repo regenerates (rev ≥ 5).
-- [ ] **f6 = 80 mm confirmed installed** ⚠ VERIFY — the other swap of the pair
-      (bench of record carried 150 mm). Not covered by the f7 confirmation.
+- [x] **f7 = 300 mm — CONFIRMED on the bench [USER 2026-08-19]**, and the
+      handoff is regenerated to match (rev 5, `Ra/Rb 250/200 f7 300`). Expect
+      **2.3040 µm/px groove, 2.6528 dispersion** over a **1067 × 1228 µm**
+      field. Note rev 5 also re-specified **Ra as 250 mm** (was 300) — check
+      which lens is in the Ra seat, not just f7; the two cancel on the groove
+      axis, so a half-done swap looks self-consistent and is not.
+- [ ] **f6 = 80 mm confirmed installed** ⚠ VERIFY — the other swap (bench of
+      record carried 150 mm). Not covered by the f7 confirmation.
+- [ ] **Grating incidence re-set to 43.7° in / 33.7° out** ⚠ VERIFY — rev 5
+      re-angled it from 42.8/34.5; this is what moved the anamorphic factor to
+      1.1514, so a round spot needs a 15% diagonal compression, not 12%.
 - [ ] **3D-SHOT zero-order block at I1 REMOVED** (handoff §6 — where it sits it
       shadows the middle of the merged field; the SLM zero-order ghost is
       accepted, not blocked).
@@ -79,13 +81,9 @@ checks it per trial), laser at minimum power until Phase 4, and the power meter
 
 - [ ] Repo cloned + up to date on **all three PCs**; `addpath('src')` in each MATLAB.
 - [ ] msocket library on the path of all three (set `msocketPath` config keys).
-- [ ] **Optics repo regen** (owner action, now unblocked — the f7 seat is
-      confirmed 300 as of 2026-08-19): in `TF optics simulator`, re-pin the
-      default build to f7=300 and run `python -m configs.dmd_handoff` → commit
-      the new `docs/optics_handoff.md` here. This flips the sanity bands from
-      warn to live, and is the only thing that fixes the axial numbers
-      (`axial_fwhm_um`, `walk_um`, `remote_focus_um`), which — unlike the
-      lateral scale — cannot be hand-corrected.
+- [x] ~~Optics repo regen~~ — **done 2026-08-19**, rev 5, generator commit
+      `1216736` (clean, not `+dirty`). Design-value sanity bands can move from
+      warn to fail whenever someone wants to make that change.
 - [ ] `configs/real.yaml` reviewed: `slm:` (host = SLM PC IP), `zstage:`,
       `etl:`, `threeD:`, `laser.carbide_modulator_ao_channel` (once wired).
 - [ ] Full mock suite green on the DAQ PC (pre-flight):
@@ -164,7 +162,7 @@ you walk away.
    Consent is taken once for the whole ramp; the pulse-energy interlock still runs
    on every step. The session saves the curve and stamps the laser state onto it.
 3. Record: max power at sample, the voltage that gives ~5 mW (calibration
-   working power) and ~44 mW (the SLM alignment cap — know where it is on the dial).
+   working power) and ~42 mW (the SLM alignment cap — know where it is on the dial).
 
 - [ ] volts→mW curve saved; `laser.*calibration_file` points at it
 
@@ -223,9 +221,9 @@ tfp.io.updateConfigCalibrationPath('configs/real.yaml', 'session', 'calibration_
 ## 4.5 Field tilt — the depth plane across the field  *(new)*
 
 Temporal focusing disperses the beam across the field, so the plane of best
-excitation is **tilted**, not flat. The handoff predicts 0.02929 µm of focal
-shift per µm of sample travel along the dispersion axis — 1.678°, and **35.1 µm
-edge to edge across the Ø5.0 mm patch, comparable to the 32.6 µm axial FWHM**.
+excitation is **tilted**, not flat. The handoff predicts 0.02843 µm of focal
+shift per µm of sample travel along the dispersion axis — 1.628°, and **34.9 µm
+edge to edge across the Ø5.0 mm patch, comparable to the 33.2 µm axial FWHM**.
 Targets at opposite edges of the field are genuinely not in the same plane.
 
 Needs the z ruler, so on the default objective mount `si_motor_helper` must be
@@ -246,7 +244,7 @@ through-focus sweep at each (reusing `throughFocusSweep`), and fits
 `z = a·x_disp + b·y_groove + c` with `tfp.optics.dmdToDispersionUm` supplying
 the 45° mapping.
 
-Good result: `a ≈ 0.02929` µm/µm, `|b|` near zero, `r² > 0.98`.
+Good result: `a ≈ 0.02843` µm/µm, `|b|` near zero, `r² > 0.98`.
 
 Reading the failures:
 
@@ -254,7 +252,7 @@ Reading the failures:
 |---|---|
 | `:grooveGradientLarge` | the tilt is **not along the dispersion axis** — wrong 45° handedness, or the chip is mis-clocked. Diagnostic, not a bad fit. |
 | `:focusAtWindowEdge` | best focus was clamped at the edge of a sweep window, so the fitted gradient is biased toward zero. Widen `zSearchHalfUm` and re-run. |
-| `:gradientOutOfBand` / `:walkOutOfBand` | disagrees with the handoff. **Warn, never fail** — the committed handoff is rev 4 and predates the ratified f7 = 300 build. The measurement is the truth. |
+| `:gradientOutOfBand` / `:walkOutOfBand` | disagrees with the handoff. **Warn, never fail** — the measurement is the truth; the handoff is design intent. |
 
 `tilt.depthGradientSign` is a **proposal** for `threeD.depth_gradient_sign`, not
 authority: it is expressed in both the ruler's "+z is deeper" contract and
@@ -264,7 +262,7 @@ the two agree, that is a much cheaper confirmation than the burn/bleach route.
 
 - [ ] gradient fitted; `r² > 0.98`; no `:focusAtWindowEdge`
 - [ ] `|b|` small compared with `|a|`
-- [ ] walk recorded and compared against the handoff's 35.1 µm
+- [ ] walk recorded and compared against the handoff's 34.9 µm
 - [ ] `depthGradientSign` noted, pending §7.4 agreement
 
 ---
@@ -534,8 +532,7 @@ prepared mask stack (unique dz values), per-trial group advance + LC settle,
 no pixel masks over the wire.
 
 Record: **axial PPSF FWHM** — response vs dz around a target cell. Expected
-order: ~30 µm (handoff rev 4 says 32.6 µm at a 12 µm target — provisional until
-the f7=300 regen). Also confirm response at dz = ±50 µm is strongly suppressed
+order: ~33 µm (handoff rev 5 says 33.2 µm at a 12 µm target). Also confirm response at dz = ±50 µm is strongly suppressed
 (off-target protection above/below).
 
 - [ ] axial FWHM recorded; symmetric about the fitted dz₀ ≈ 0
@@ -580,9 +577,9 @@ should add ≤ ~5 ms per depth change).
 
 ## 11. The record sheet — key variables to log
 
-| # | Variable | Measured by | Expected (provisional, rev-4 handoff) |
+| # | Variable | Measured by | Expected (handoff rev 5) |
 |---|---|---|---|
-| 1 | Lateral µm/px (both axes) | §4 affine fit | **1.9200 groove / 2.1581 disp** at the confirmed f7=300 — *not* handoff §5's 2.3040 / 2.5897, which is 1.2× too large |
+| 1 | Lateral µm/px (both axes) | §4 affine fit | **2.3040 groove / 2.6528 disp** (handoff rev 5 §5) |
 | 2 | Volts → mW curve | §3 power sweep | — |
 | 3 | SLM defocus slope (µm/µm) | §6a fit | ≈ 1.0, r² > 0.98 |
 | 4 | ETL plane depths (µm) | §6b | your configured spacing |
@@ -591,7 +588,7 @@ should add ≤ ~5 ms per depth change).
 | 7 | Power threshold / saturation | §8a | — |
 | 8 | **Lateral PPSF FWHM** | §8b | — (grant figure) |
 | 9 | Min reliable ISI (switching) | §8c | — (grant figure) |
-| 10 | **Axial PPSF FWHM** | §9 | ~32.6 µm (rev 4) |
+| 10 | **Axial PPSF FWHM** | §9 | ~33.2 µm (rev 5) |
 | 11 | Cross-plane response contrast | §10 | strong own-plane preference |
 | 12 | SLM group-advance overhead | §10 logs | ~settle (3.4 ms) + link latency |
 
@@ -604,7 +601,7 @@ should add ≤ ~5 ms per depth change).
 - **`tfp:hardware:BlinkSLM:sdkNotVendored`** — the Blink audit (§2) isn't done;
   server runs dry until then.
 - **`tfp:util:assertSlmPowerSafe:slmAlignmentCapExceeded`** — you asked for a
-  near-uniform pattern above 44 mW with the SLM in the path. Lower power for
+  near-uniform pattern above 42 mW with the SLM in the path. Lower power for
   alignment patterns; sparse targets are exempt by design.
 - **`tfp:hardware:DMD:onFractionExceeded`** — pattern > 50% ON. Not overridable.
 - **Through-focus sweep finds no spot** (`tooFewPoints`) — film out of range,
@@ -634,5 +631,5 @@ should add ≤ ~5 ms per depth change).
 | Calibration IO | `tfp.io.saveCalibration`, `loadCalibration`, `updateConfigCalibrationPath`, `loadCalibrationOrIdentity` |
 | 3D experiment | `tfp.experiments.exp_3d_ensemble`, `TrialSequence.generate3DEnsemble`, `Sequencer` (slm/threeD), `tfp.io.assignFramePlanes`, `alignTrialsFreeRun` |
 | 2D experiments | `exp_power_curve`, `exp_ppsf_lateral`, `exp_ppsf_2d`, `exp_rapid_sequential`, `exp_axial_ppsf` |
-| Safety | `tfp.hardware.DMD.assertPatternsSafe` (50% ON), `tfp.util.assertSlmPowerSafe` (44 mW LC cap), `tfp.util.safetyChecks` |
+| Safety | `tfp.hardware.DMD.assertPatternsSafe` (50% ON), `tfp.util.assertSlmPowerSafe` (42 mW LC cap), `tfp.util.safetyChecks` |
 | Audits / gates | `docs/blink-api-audit.md`, `docs/mp285-protocol-audit.md`, `docs/PORTS.md` |

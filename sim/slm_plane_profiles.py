@@ -11,7 +11,7 @@ I0 is an intermediate *image* of the chip, and f7 sits one focal length from
 I0 and one from the SLM, so the SLM field is the Fourier transform of the
 pattern written on the DMD. That is why the pattern you draw and the
 irradiance the liquid crystal actually experiences look nothing alike, and why
-handoff section 7b caps all-ON/near-uniform patterns at 44 mW.
+handoff section 7b caps all-ON/near-uniform patterns at 42 mW.
 
 The figure answers one bench question: for each pattern class, where does the
 light pile up on the LC, and how close does it come to the aperture edge?
@@ -38,7 +38,7 @@ MODEL VALIDATION (why you can believe the axes)
 Two independent numbers fall out of the model and match the handoff without
 being fitted to it:
 
-  * cross-dispersion footprint at f7=250 -> 7.21 mm, handoff says 7.2 mm;
+  * cross-dispersion footprint -> 7.21 mm, handoff says 7.2 mm;
   * patch-edge illumination -> 0.3603, handoff constant is 0.3604.
 
 STATED ASSUMPTIONS / LIMITS
@@ -46,13 +46,15 @@ STATED ASSUMPTIONS / LIMITS
   * Scalar, paraxial, monochromatic-per-wavelength; the pulse enters only as
     an incoherent sum over wavelength (the convolution above). No temporal
     focusing dynamics -- this is the time-averaged irradiance the LC sees.
-  * The anamorphic factor (1.124) is NOT applied to the pupil coordinate. The
-    handoff fixes its magnitude but not which way it runs at the pupil, and it
-    is a <=12% stretch of the dispersion axis only. It does not move any order
-    between "inside" and "outside" the aperture at f7=300, so the conclusions
-    are unaffected; the axis scale carries that caveat.
-  * f7 = 300 mm (bench-confirmed 2026-08-19), NOT the 250 mm that handoff
-    rev 4 was generated with. See CLAUDE.md "Provisional f7 = 300 scale".
+  * The anamorphic factor is NOT applied to the pupil coordinate. The handoff
+    fixes its magnitude but not which way it runs at the pupil, and it is a
+    ~15% stretch of the dispersion axis only. It moves no order between
+    "inside" and "outside" the aperture, so the conclusions are unaffected;
+    the axis scale carries that caveat.
+  * The whole lens prescription (Ra/Rb/f7/f6/p1) and the grating angles are
+    read from the committed handoff and cross-checked against its own
+    um_per_px_groove and anamorphic constants, so a regeneration either
+    propagates or raises. Nothing optical is hardcoded here.
   * Mirror-level diffraction from the DMD's own blaze is not modelled; this is
     the pattern's Fourier content only, within the first Nyquist window.
 
@@ -87,10 +89,37 @@ from figure_helpers import (  # noqa: E402
 
 HANDOFF = REPO / "docs" / "optics_handoff.md"
 
-# The f7 seat is a 300 mm lens, confirmed on the bench [USER 2026-08-19].
-# Handoff rev 4 was generated at 250; until the optics repo regenerates, this
-# is the one constant we deliberately override rather than read.
-F7_CONFIRMED_MM = 300.0
+
+def parse_build_label(label: str) -> dict:
+    """Pull the lens prescription out of the handoff's ``build_label``.
+
+    e.g. ``5.0mm Ra/Rb 250/200 f7 300 f6 80 p1 100`` -> Ra/Rb/f7/f6/p1 in mm.
+
+    This exists because rev 4 -> rev 5 moved Ra (300 -> 250) at the same time
+    as f7 (250 -> 300), and the two changes cancel on the groove axis. Anything
+    that hardcoded one and not the other silently produced a scale that was
+    wrong by 1.2x while still looking self-consistent. Read both, or neither.
+    """
+    m = re.search(r"Ra/Rb\s+(\d+)/(\d+)\s+f7\s+(\d+)\s+f6\s+(\d+)\s+p1\s+(\d+)", label)
+    if not m:
+        raise RuntimeError(f"cannot parse lens prescription from build_label: {label!r}")
+    ra, rb, f7, f6, p1 = (float(v) for v in m.groups())
+    return dict(f_Ra_mm=ra, f_Rb_mm=rb, f7_mm=f7, f_f6_mm=f6, f_peri1_mm=p1)
+
+
+def parse_grating(text: str) -> dict:
+    """Groove density and the installed in/out angles, from the BOM row.
+
+    The angles are prose, not machine-readable, so the result is checked
+    against the ``anamorphic`` constant (= cos beta / cos alpha) before use --
+    if the optics repo re-angles the grating and this regex goes stale, that
+    check fires rather than the figure quietly using last year's geometry.
+    """
+    row = re.search(r"TF grating.*?(\d+) g/mm.*?In\s*([\d.]+)°,\s*out\s*([\d.]+)°", text, re.S)
+    if not row:
+        raise RuntimeError("cannot find the TF grating row in the handoff")
+    g, alpha, beta = float(row.group(1)), float(row.group(2)), float(row.group(3))
+    return dict(grating_lines_per_m=g * 1e3, grating_alpha_deg=alpha, grating_beta_deg=beta)
 
 
 def read_handoff_constants(path: Path = HANDOFF) -> dict:
@@ -130,13 +159,15 @@ class Rig:
     wavelength_m: float
     pulse_fwhm_s: float
     f7_m: float
-    # relay: DMD -> I0
+    # relay: DMD -> I0. Ra/Rb come from build_label; L1a/L1b are fixed by the
+    # DMD front end and do not vary across the trade study.
     f_L1a_mm: float = 80.0
     f_L1b_mm: float = 400.0
-    f_Ra_mm: float = 300.0
+    f_Ra_mm: float = 250.0
     f_Rb_mm: float = 200.0
     grating_lines_per_m: float = 1200e3
-    grating_beta_deg: float = 34.5  # diffracted angle, handoff BOM row 3
+    grating_alpha_deg: float = 43.7  # incidence,  handoff BOM row 3
+    grating_beta_deg: float = 33.7   # diffracted, handoff BOM row 3
     illum_1e2_diameter_m: float = 7.0e-3
 
     @property
@@ -179,16 +210,51 @@ class Rig:
 
 
 def build_rig() -> Rig:
+    """Assemble the rig entirely from the committed handoff, then self-check.
+
+    Nothing here is a literal. The check at the end recomputes the sample-plane
+    scale from the parsed lens prescription and compares it to the handoff's
+    own ``um_per_px_groove``/``anamorphic``; a mismatch means the document
+    moved in a way this model did not follow, and it is better to stop than to
+    render a plausible-looking figure on stale geometry.
+    """
     hc = read_handoff_constants()
-    return Rig(
+    lenses = parse_build_label(str(hc["build_label"]))
+    grating = parse_grating(HANDOFF.read_text(encoding="utf-8"))
+
+    rig = Rig(
         cols=int(hc["dmd_cols"]),
         rows=int(hc["dmd_rows"]),
         pitch_m=float(hc["dmd_pitch_um"]) * 1e-6,
         patch_diameter_px=float(hc["patch_diameter_px"]),
         wavelength_m=float(hc["wavelength_nm"]) * 1e-9,
         pulse_fwhm_s=float(hc["pulse_fwhm_fs"]) * 1e-15,
-        f7_m=F7_CONFIRMED_MM * 1e-3,
+        f7_m=lenses["f7_mm"] * 1e-3,
+        f_Ra_mm=lenses["f_Ra_mm"],
+        f_Rb_mm=lenses["f_Rb_mm"],
+        **grating,
     )
+
+    # Scale check: M_gs = 1 / (m_x * m_i0_s), groove = pitch * M1 / M_gs.
+    m_x = rig.f_Rb_mm / rig.f_Ra_mm
+    m_i0_s = (lenses["f_f6_mm"] / lenses["f7_mm"]) * (200.0 / lenses["f_peri1_mm"]) * (20.0 / 200.0)
+    groove_um = rig.pitch_m * 1e6 * (rig.f_L1b_mm / rig.f_L1a_mm) * (m_x * m_i0_s)
+    _agree("um_per_px_groove", groove_um, float(hc["um_per_px_groove"]))
+
+    # Anamorphic check: it is cos(beta)/cos(alpha), which validates the angles
+    # scraped out of the BOM prose.
+    anam = math.cos(math.radians(rig.grating_beta_deg)) / math.cos(math.radians(rig.grating_alpha_deg))
+    _agree("anamorphic", anam, float(hc["anamorphic"]))
+    return rig
+
+
+def _agree(name: str, got: float, want: float, tol: float = 0.005) -> None:
+    if abs(got - want) / want > tol:
+        raise RuntimeError(
+            f"model disagrees with the handoff on {name}: computed {got:.4f}, "
+            f"handoff says {want:.4f}. The prescription moved -- re-read "
+            f"docs/optics_handoff.md before trusting any figure built here."
+        )
 
 
 # ----------------------------------------------------------------------------
@@ -202,13 +268,46 @@ def _chip_grid(rig: Rig):
     return xx - (rig.cols - 1) / 2.0, yy - (rig.rows - 1) / 2.0
 
 
+# Soma target size, as a DIAMETER in chip pixels. At the confirmed f7 = 300
+# sample scale (1.9200 groove / 2.1581 dispersion, mean 2.04 µm/px) one chip
+# pixel is ~2 µm, so:
+#     Ø5 px  ~= 10 µm  -- a small soma, exactly the cell body
+#     Ø7 px  ~= 14 µm  -- an L2/3 soma with a little targeting margin  <- default
+#     Ø9 px  ~= 18 µm  -- a large soma / deliberate overfill
+# Note scripts/alpRandomEnsemble.m computes a RADIUS and floors it at 2 px,
+# which lands on Ø5 px -- the small end of this range.
+SOMA_DIAM_PX = 7
+
+
+def random_spots(rig: Rig, n: int, diam_px: int, seed: int = 20260819) -> np.ndarray:
+    """``n`` discs of diameter ``diam_px``, uniform over the illuminated patch.
+
+    Uniform in area (radius ~ sqrt(U)), not in radius, so the density does not
+    pile up at the centre. Placement is seeded, so the figure is reproducible.
+    """
+    x, y = _chip_grid(rig)
+    R = rig.patch_diameter_px / 2.0
+    rad_px = diam_px / 2.0
+    rng = np.random.default_rng(seed)
+    out = np.zeros(x.shape, dtype=bool)
+    placed = 0
+    while placed < n:
+        rr = R * math.sqrt(rng.random())
+        th = rng.random() * 2 * math.pi
+        cx, cy = rr * math.cos(th), rr * math.sin(th)
+        if math.hypot(cx, cy) > R - rad_px:
+            continue
+        out |= np.hypot(x - cx, y - cy) <= rad_px
+        placed += 1
+    return out
+
+
 def make_patterns(rig: Rig) -> list[tuple[str, str, np.ndarray]]:
     """Return ``(key, label, bool-array)`` for each case, in figure order."""
     x, y = _chip_grid(rig)
     r = np.hypot(x, y)
     R = rig.patch_diameter_px / 2.0
     patch = r <= R
-    rng = np.random.default_rng(20260819)  # fixed: the figure is reproducible
 
     cases: list[tuple[str, str, np.ndarray]] = []
 
@@ -231,21 +330,11 @@ def make_patterns(rig: Rig) -> list[tuple[str, str, np.ndarray]]:
     cross = ((np.abs(x) <= bar) | (np.abs(y) <= bar)) & patch
     cases.append(("crosshair", "Crosshairs", cross))
 
-    # 4. 200 soma-sized targets -- the realistic experiment. Radius from the
-    #    5 um soma radius at the confirmed f7=300 sample scale (~2.0 um/px),
-    #    floored at 2 px as scripts/alpRandomEnsemble.m does.
-    spot_r = max(2, int(round(5.0 / 2.0)))
-    spots = np.zeros_like(patch)
-    n_spots, placed = 200, 0
-    while placed < n_spots:
-        rad = R * math.sqrt(rng.random())
-        th = rng.random() * 2 * math.pi
-        cx, cy = rad * math.cos(th), rad * math.sin(th)
-        if math.hypot(cx, cy) > R - spot_r:
-            continue
-        spots |= (np.hypot(x - cx, y - cy) <= spot_r)
-        placed += 1
-    cases.append(("spots200", f"200 spots, {spot_r} px", spots))
+    # 4. Soma-sized targets -- the realistic experiment. Sized by DIAMETER;
+    #    stating a radius invites the "2 px spot" ambiguity, since radius 2 px
+    #    is Ø5 px on the chip.
+    spots = random_spots(rig, n=200, diam_px=SOMA_DIAM_PX)
+    cases.append(("spots200", f"200 spots, Ø{SOMA_DIAM_PX} px", spots))
 
     # 5. Annuli at three radii. A ring transforms to a Bessel J0 pattern whose
     #    ring spacing goes as 1/radius, so a bigger annulus gives finer fringes.
@@ -395,11 +484,21 @@ def main() -> Path:
     worst_clip = max(r["clipped"] for r in results)
     line = results[0]
 
+    # Spot-size sensitivity: the SLM peak is set by the DC order, which scales
+    # as the square of the chip ON fraction, so target diameter is a stronger
+    # lever on LC irradiance than the target COUNT is.
+    sweep_d = [5, 7, 9, 11, 13]
+    sweep = []
+    for d in sweep_d:
+        pat = random_spots(rig, n=200, diam_px=d)
+        img, _ = slm_plane(pat, rig, illum)
+        sweep.append((d, pat.mean(), img.max()))
+
     ncol = len(results)
-    fig = plt.figure(figsize=(16.5, 9.4))
+    fig = plt.figure(figsize=(16.5, 11.3))
     gs = fig.add_gridspec(
-        3, ncol, height_ratios=[1.0, 1.45, 1.15],
-        left=0.045, right=0.90, top=0.945, bottom=0.30, hspace=0.42, wspace=0.16,
+        4, ncol, height_ratios=[1.0, 1.45, 1.10, 1.00],
+        left=0.045, right=0.90, top=0.955, bottom=0.255, hspace=0.52, wspace=0.16,
     )
 
     letters = "ABCDEFGHI"
@@ -461,11 +560,41 @@ def main() -> Path:
                  ha="center", va="bottom", fontsize=8, zorder=5,
                  bbox=dict(facecolor="white", edgecolor="none", pad=1.0))
 
+    # --- row 4: how hard target diameter drives the LC ----------------------
+    axs = fig.add_subplot(gs[3, :])
+    dd = np.array([d for d, _, _ in sweep])
+    pk = np.array([p for _, _, p in sweep]) / ref_peak
+    on = np.array([o for _, o, _ in sweep])
+    axs.plot(dd, pk, "o-", color="#c1443c", lw=1.8, ms=7, label="simulated SLM peak")
+    # The DC order carries (mean transmission)^2, so the square law is the
+    # prediction, not a fit: anchor it on the smallest spot and let it run.
+    axs.plot(dd, pk[0] * (on / on[0]) ** 2, "--", color="#444", lw=1.2,
+             label="(chip ON fraction)² — predicted")
+    axs.set_yscale("log")
+    axs.set_xticks(dd)
+    axs.set_xlabel("target diameter on the chip (px)", fontsize=9)
+    axs.set_ylabel("peak irradiance\n(rel. all-ON)", fontsize=9)
+    axs.tick_params(labelsize=8)
+    axs.legend(fontsize=8.5, frameon=False, loc="upper left")
+    axs.set_xlim(dd[0] - 0.7, dd[-1] + 0.7)
+    axs.set_ylim(pk.min() / 4, pk.max() * 40)
+    # Labels go ABOVE the points: the curve rises left-to-right, so below-left
+    # runs into the x axis and its tick labels (which the overlap checker
+    # deliberately ignores, so it would not be caught automatically).
+    for d, o, p in sweep:
+        axs.annotate(f"{d*2.039:.0f} µm\n{100*o:.1f}% ON", (d, p / ref_peak),
+                     textcoords="offset points", xytext=(0, 13),
+                     ha="center", fontsize=8)
+    axs.annotate("used in (F)", (SOMA_DIAM_PX, pk[dd.tolist().index(SOMA_DIAM_PX)]),
+                 textcoords="offset points", xytext=(0, -20), ha="center",
+                 fontsize=8.5, fontweight="bold", color="#c1443c")
+    panel_label(axs, "K", x=-0.012, y=1.06)
+
     title = "Irradiance at the SLM is the Fourier transform of the DMD pattern, smeared by the laser spectrum."
     body = (
         f"Scalar Fourier propagation of the merged arm to the Meadowlark HSP1K, at the bench-confirmed "
-        f"f7 = {F7_CONFIRMED_MM:.0f} mm (handoff rev 4 is generated at 250 mm, so its own §5 figures are 1.2× larger than these). "
-        "All constants except f7 are parsed live from docs/optics_handoff.md. "
+        f"f7 = {rig.f7_m*1e3:.0f} mm of handoff rev {read_handoff_constants()['handoff_rev']}. Every optical constant, including the lens "
+        "prescription and grating angles, is parsed live from docs/optics_handoff.md and cross-checked against it. "
         "(A–I) Top row, the binary frame written on the DMD, confined to the Ø5.0 mm illuminated disc; bottom row, the resulting "
         "time-averaged irradiance on the liquid crystal, shown as log₁₀ relative to the all-ON peak over a common 6-decade scale and "
         "identical ±11 mm axes, so panels are directly comparable. Dashed cyan square is the 17.4 mm LC aperture. The horizontal axis "
@@ -475,15 +604,20 @@ def main() -> Path:
         f"That ~400:1 smear is what keeps the LC below its damage limit, and why the air-breakdown interlock sits upstream of the grating "
         f"instead. (B–D) Checkerboards at 64, 16 and 4 px "
         "place first orders at a radius that grows as 1/period, walking light outward from DC. (E) Crosshairs transform to a cross rotated "
-        "90° from the bars that produced it. (F) 200 soma-sized targets, the realistic experiment: a broad speckled envelope with no "
+        f"90° from the bars that produced it. (F) 200 targets of Ø{SOMA_DIAM_PX} px (≈{SOMA_DIAM_PX*2.039:.0f} µm at the sample), the "
+        "realistic experiment: a broad speckled envelope with no "
         "concentration. (G–I) Annuli at 0.35, 0.65 and 0.95 of the patch radius give Bessel-ring transforms whose fringe spacing narrows "
         "as the ring grows. (J) Peak irradiance per pattern relative to the all-ON frame (log axis, dashed line = that reference); the "
-        "percentage above each bar is the fraction of the whole chip switched ON, which is the quantity the 50% load-time cap tests. "
+        f"percentage above each bar is the fraction of the whole chip switched ON, which is the quantity the 50% load-time cap tests. "
+        f"(K) Peak irradiance for 200 targets as target DIAMETER is swept {sweep_d[0]}–{sweep_d[-1]} px (≈{sweep_d[0]*2.039:.0f}–"
+        f"{sweep_d[-1]*2.039:.0f} µm), spanning {pk[-1]/pk[0]:.0f}× — bigger targets both carry more power and transform to a narrower "
+        "pupil distribution. The dashed line is the (ON fraction)² law the DC order obeys, drawn as a prediction anchored on the smallest "
+        "spot rather than fitted; the agreement is why target size, not target count, is the strong lever on LC irradiance. "
         "Method: field = pattern × Gaussian illumination, one FFT to the pupil, rotation into the lab frame, then convolution along "
         "dispersion with the 7.7 nm pulse spectrum. The model is unfitted, yet reproduces two independent handoff constants — the "
-        f"7.2 mm cross-dispersion footprint at f7 = 250 and the 0.3604 patch-edge intensity. No pattern clips the aperture "
-        f"(worst case {100*worst_clip:.2f}% of power outside), so the 1.2× footprint growth from f7 = 250 → 300 does not cost light — "
-        f"but it does spend the margin that made clipping a non-question. The 1.124 anamorphic factor is omitted because the handoff "
+        f"7.2 mm cross-dispersion footprint and the 0.3604 patch-edge intensity. No pattern clips the aperture "
+        f"(worst case {100*worst_clip:.2f}% of power outside); the beam uses only ~41% of the aperture width across groove, which is "
+        f"structural, not adjustable. The {read_handoff_constants()['anamorphic']:.4f} anamorphic factor is omitted because the handoff "
         f"fixes its magnitude but not its sign at the pupil; it would stretch the dispersion axis by ≤12% and moves no order across "
         f"the aperture."
     )
@@ -491,7 +625,7 @@ def main() -> Path:
 
     return savefig(
         fig, "slm_plane_profiles", outdir="figures/slm_plane",
-        functions=[main, slm_plane, make_patterns, illumination,
+        functions=[main, slm_plane, make_patterns, random_spots, illumination,
                    read_handoff_constants, build_rig, _rotate, _smear_x,
                    _bin_sum, _chip_grid, justified_legend, panel_label],
     )

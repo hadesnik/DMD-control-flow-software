@@ -22,9 +22,9 @@ exactly one file into this repo, `docs/optics_handoff.md` — see
 ## Status
 
 Phases 1–2 complete; Phase 4 (SLM remote focusing + 3D) landed mock-first 2026-08-15.
-Test suite as of 2026-08-19: **298 passed / 0 failed / 1 filtered, 299 total** (the
+Test suite as of 2026-08-19: **439 passed / 0 failed / 1 filtered, 440 total** (the
 filtered one is `test_optics_handoff_constants/slm_relay_mag_key_is_still_pending`,
-skipped by assumption until the optics repo publishes `slm_bfp_relay_mag`). The NIR
+skipped by assumption — rev 5 still does not publish `slm_bfp_relay_mag`). The NIR
 DLP650LNIR has **not** arrived; bring-up runs on the borrowed visible DLP7000.
 
 **Driving goal — R01 preliminary data.** The hero figure is all-optical patterned
@@ -69,7 +69,7 @@ f7 → SLM → f6 → periscope → PBS → Nikon 200 mm tube → 10×/0.45.
 > ⚠️ **Known inconsistency to resolve.** `configs/real.yaml` still carries
 > `umPerPixel: 0.270` / `roiHalfWidthPx: 278` with a "central 6×6 mm" comment — the
 > old *isotropic, π-Shaper-flat-top* assumption. That file now drives build B, whose
-> real numbers are anisotropic (2.3040 / 2.5897 µm/px) over a Ø5.0 mm disc (463 px).
+> real numbers are anisotropic (2.3040 / 2.6528 µm/px) over a Ø5.0 mm disc (463 px).
 > The values are ~7–9× off and hide the anisotropy. The rig owns `real.yaml` (it is
 > rewritten in place during bring-up) — **do not overwrite it from a dev machine**;
 > flag it and let the rig fix it. Calibration fits from a measured grid regardless,
@@ -96,7 +96,7 @@ carrying a copy.
    hinge on the chip diagonal, and clocking lays that diagonal in the table plane. So
    **every sample↔DMD transform carries a 45° rotation**, and the optical axes run
    along the chip's *diagonals*, not its rows and columns.
-2. **Sample-plane scale is anisotropic** (1.1240×) along the diagonal, because that is
+2. **Sample-plane scale is anisotropic** (1.1514×) along the diagonal, because that is
    where the grating disperses. **A circle in DMD pixels lands as an ellipse at the
    sample.** To get a round spot, compress the DMD ellipse along the `(1,1)` diagonal.
 3. **A uniform all-ON frame is a hardware hazard**, not just a dull pattern — see the
@@ -141,62 +141,50 @@ all change *scale*; none changes the mount's handedness. It does **not** settle 
 diagonal is `+dispersion` vs `+groove`, nor either sign at the *sample*: the relay
 adds a 180° inversion and every fold adds a flip. This fixes only chip↔bench rotation.
 
-## Design constants (handoff rev 4, 2026-08-09)
+## Design constants (handoff rev 5, 2026-08-19)
 
 | Quantity | Value | key |
 |---|---|---|
 | Usable patch | **Ø5.0 mm = 463 px** diameter, centred | `patch_diameter_px` |
-| Field at sample | 1067 × 1199 µm ellipse | |
-| µm/px, groove / dispersion | **2.3040 / 2.5897** | `um_per_px_groove` / `_disp` |
-| Anamorphic factor | 1.1240 | `anamorphic` |
+| Field at sample | 1067 × 1228 µm ellipse | |
+| µm/px, groove / dispersion | **2.3040 / 2.6528** | `um_per_px_groove` / `_disp` |
+| Anamorphic factor | 1.1514 | `anamorphic` |
 | Axis rotation | 45° | `axis_rotation_deg` |
-| Axial FWHM | 32.6 µm | `axial_fwhm_um` |
-| Depth gradient | 0.02929 µm/µm along dispersion; 35.1 µm across the patch | `depth_gradient_um_per_um` / `walk_um` |
+| Axial FWHM | 33.2 µm | `axial_fwhm_um` |
+| Depth gradient | 0.02843 µm/µm along dispersion; 34.9 µm across the patch | `depth_gradient_um_per_um` / `walk_um` |
 | Binary frame rate | 12,500 Hz → 80 µs/frame | `dmd_binary_rate_hz` |
 | Illumination | Ø7.0 mm 1/e² Gaussian (1.75× expander, **not** a catalogue GBE) | |
 | Patch-edge intensity | 0.3604 → dwell correction **7.70×** | `patch_edge_intensity` |
 | Safe pulse energy | 89 µJ | `safe_pulse_energy_uJ` |
 | Laser | 1038 nm, 205 fs, 100 kHz | `wavelength_nm` / `pulse_fwhm_fs` |
-| Remote focus range | 904 µm | `remote_focus_um` |
+| Remote focus range | 908 µm | `remote_focus_um` |
 
-## Provisional f7 = 300 scale
+## What rev 5 changed, and the trap it set
 
-**The table above is generated at `f7 = 250`. The bench carries a 300 mm
-[USER 2026-08-19].** Handoff §5's own sensitivity table gives lateral scale `∝ 1/f7`,
-so the published figures are **1.2× too large** on both lateral axes until the optics
-repo regenerates. Re-deriving §5's chain with only f7 changed:
+Rev 5 (2026-08-19) is the regeneration that had been owed since the f7 seat was
+confirmed as a 300 mm. It moved **two** things, not one:
 
-```
-m_i0_s = (f6/f7) * (peri2/peri1) * (EFL_obj/f_tube) = (80/300)*(200/100)*(20.0/200)
-M_gs   = 1 / (m_x * m_i0_s)  where m_x = f_Rb/f_Ra = 200/300
-```
-
-| | handoff rev 4 (`f7 250`) | expected at `f7 300` |
+| | rev 4 | **rev 5** |
 |---|---|---|
-| M_gs, grating → sample | 23.438 | **28.125** |
-| µm/px groove | 2.3040 | **1.9200** |
-| µm/px dispersion | 2.5897 | **2.1581** |
-| Field at sample | 1067 × 1199 µm | **889 × 999 µm** |
+| build | `Ra/Rb 300/200 f7 250` | **`Ra/Rb 250/200 f7 300`** |
+| grating, in / out | 42.8° / 34.5° | **43.7° / 33.7°** |
+| µm/px groove | 2.3040 | **2.3040 — unchanged** |
+| µm/px dispersion | 2.5897 | **2.6528** |
+| anamorphic | 1.1240 | **1.1514** |
+| LC alignment cap | 44 (block) / 42 (prose) | **42, consistent** |
 
-Substituting f7 = 250 into the same expression reproduces the published 2.3040 /
-2.5897 and 1067 × 1199 exactly, which is the check that the re-derivation is sound.
+**The trap: Ra moved 300 → 250 in the same revision as f7 moved 250 → 300.**
+Both are ratios of 1.2 and they enter the scale inversely, so they cancel exactly
+on the groove axis — 2.3040 before and after. Anyone who corrected for f7 alone
+(as the interim note here did) got 1.9200 µm/px, wrong by 1.2×, while every
+internal consistency check still passed. The dispersion axis moved only because
+the grating was re-angled, not because of the lenses.
 
-**Trap — do not "restore" the old numbers.** The groove figure lands back on 1.9200,
-which is also what rev 3 carried, so it will look like the pre-rev-4 pair is simply
-correct again. It is not: rev 3's dispersion was 2.2193 on a 1.1559 anamorphic, and
-the anamorphic is now 1.1240, giving 2.1581. Same groove axis, different dispersion
-axis. Take the pair from a regenerated handoff, never from git history.
-
-**Only the lateral scale is hand-correctable.** `axial_fwhm_um`, `walk_um`,
-`depth_gradient_um_per_um` and `remote_focus_um` all depend on the beam geometry that
-f7 also sets, and do not follow a single documented proportionality — they need the
-regeneration, not arithmetic. Unchanged: `patch_diameter_px` (set by the illumination
-Gaussian at the chip, upstream of f7), the 45° rotation, and both safety caps.
-
-**One thing for the regen to check:** the SLM footprint scales with f7, so rev 4's
-12.4 × 7.2 mm at 72% worst-axis fill becomes ≈ 14.9 × 8.6 mm, ≈ 86% of the 17.4 mm
-aperture. Still inside, but close enough that clipping deserves confirming rather
-than assuming.
+The lesson is the one the repo already encodes: **read the whole prescription or
+none of it.** `sim/slm_plane_profiles.py` now parses `build_label` for
+Ra/Rb/f7/f6/p1 and scrapes the grating angles, then asserts its own recomputed
+scale against `um_per_px_groove` and `anamorphic` — a mismatch raises rather than
+rendering a plausible figure on stale geometry.
 
 **Dwell correction is quadratic, not linear** (`dwell_exponent: 2`). Two-photon
 excitation goes as I², so equalising *dose* across the patch needs dwell ∝ 1/I². At
@@ -204,8 +192,8 @@ the patch edge that is (1/0.3604)² = **7.70×**, not the 1.19× an earlier revi
 implied. Edge targets cost nearly 8× the frames of centre targets — budget sequence
 length accordingly.
 
-**Depth is a tilted plane.** The excitation surface tilts 1.678° along the dispersion
-axis: `z_um ≈ x_disp * 0.02929`. The walk across the field is comparable to one axial
+**Depth is a tilted plane.** The excitation surface tilts 1.628° along the dispersion
+axis: `z_um ≈ x_disp * 0.02843`. The walk across the field is comparable to one axial
 FWHM, so targets at opposite edges are genuinely not in the same plane. The control
 code should *report* this, not hide it. (The handoff notes the walk is cancelled by
 the sample tilt stage.)
@@ -237,7 +225,7 @@ code reads `safe_pulse_energy_uJ` from the handoff at runtime rather than from h
 during oscillator bring-up. **Check which laser is on the arm before reasoning about
 power limits.**
 
-`tfp.util.assertSlmPowerSafe` makes the handoff §7b LC alignment cap (44 mW) live,
+`tfp.util.assertSlmPowerSafe` makes the handoff §7b LC alignment cap (42 mW) live,
 with the same largest-contiguous-blob discriminator, enforced in `Sequencer.runOne`
 and the calibration paths.
 
@@ -359,21 +347,20 @@ only.
   CARBIDE's front-panel setpoint; the measured value on factory certificate
   s/n C264570 is 1038, and even the FS-50 runs ~1040).
 - **Safety caps come from it at runtime**: `on_fraction_cap` (0.50) and
-  `slm_alignment_cap_mW` (44).
+  `slm_alignment_cap_mW` (42).
 
-> ⚠️ **Regeneration owed, and now known to be wrong — not merely stale.**
-> **The lens in the f7 seat is a 300 mm — CONFIRMED on the bench [USER 2026-08-19].**
-> The committed handoff is **rev 4 (2026-08-09)**, built with `f7 = 250`
-> (`build_label: 5.0mm Ra/Rb 300/200 f7 250 f6 80 p1 100`), matching the ratified BOM
-> of 2026-08-10 in nothing but date order. **Every lateral scale in handoff §5 is
-> therefore 1.2× too large.** Until the optics repo regenerates at rev ≥5, design-value
-> sanity bands **warn rather than fail**, and the calibrations fit the measured truth
-> regardless — so this is a wrong-expectation bug, not a wrong-pointing bug. See
-> [Provisional f7 = 300 scale](#provisional-f7--300-scale) for what to expect instead.
-> *(A separate, older stale banner — about the superseded
-> `docs/dmd_control_handoff.md`, deleted 2026-08-17 and recoverable at
-> `git show 91ed281:docs/dmd_control_handoff.md` — is retired. Nothing should cite
-> that file.)*
+> ✅ **Current as of rev 5 (2026-08-19), and no regeneration is owed.**
+> `build_label: 5.0mm Ra/Rb 250/200 f7 300 f6 80 p1 100` — the ratified build, with
+> the bench-confirmed 300 mm in the f7 seat. `generator_commit: 1216736`, with no
+> `+dirty` suffix, so it is reproducible from a committed state for the first time.
+> Rev 5 also reconciled the LC alignment cap, which rev 4 stated as 42 mW in prose
+> but 44 in its machine-readable block — the code read the block, so it had been
+> enforcing the looser number. See
+> [What rev 5 changed](#what-rev-5-changed-and-the-trap-it-set) for why the groove
+> scale is unmoved despite f7 changing by 1.2×.
+> *(Two older banners are retired: the superseded `docs/dmd_control_handoff.md`,
+> deleted 2026-08-17 and recoverable at `git show 91ed281:docs/dmd_control_handoff.md`
+> — nothing should cite it — and the rev-4 f7 warning, now resolved.)*
 
 ---
 
@@ -549,7 +536,7 @@ outside it must be OFF, enforced by `tfp.util.assertPatternInPatch` (see above).
 diagonal is what the grating sees, so it overruns the optics at √2 the nominal width.
 
 **Pixel scale.** Build A is isotropic (0.342 µm/px on the DLP7000). Build B is
-**anisotropic and not a single number** — 2.3040 µm/px groove, 2.5897 µm/px
+**anisotropic and not a single number** — 2.3040 µm/px groove, 2.6528 µm/px
 dispersion, axes along the chip diagonals. Stored as `dmd.umPerPixel`. **Always fit
 the affine from a measured grid**; design numbers are a starting point and a sanity
 check, never a calibration.
@@ -685,12 +672,11 @@ once the audit confirms this unit's external-trigger sequencing.
 
 ## Open questions
 
-- [ ] **Handoff regeneration at rev ≥5** with `f7 = 300 mm` — the seat is confirmed
-      300 on the bench [USER 2026-08-19], so rev 4's lateral scales are known-wrong by
-      1.2×, not merely unverified. Owner action in the optics repo: re-pin the default
-      build and `python -m configs.dmd_handoff`.
+- [x] ~~Handoff regeneration at rev ≥5 with `f7 = 300 mm`~~ — **done 2026-08-19**,
+      rev 5, `Ra/Rb 250/200 f7 300`. Design-value sanity bands can go from warn to
+      fail whenever someone wants to make that change.
 - [ ] Reconcile `configs/real.yaml`'s isotropic 0.270 µm/px / 278 px with build B's
-      anisotropic Ø5.0 mm reality — **on the rig**, not from here.
+      anisotropic Ø5.0 mm reality (2.3040 / 2.6528 µm/px) — **on the rig**, not from here.
 - [ ] Resolve the duplicate `alignmentTarget`.
 - [ ] Measure `laser.arm_transmission` (laser head → sample). Until then
       `assertPulseEnergySafe` warns `:armTransmissionAssumed` on every call that

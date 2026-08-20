@@ -23,3 +23,7 @@ scripts/imaging_pc_setup/imaging_pc_config_local.m
 scripts/*_preview.*
 scripts/*_montage.*
 scripts/*_frame.png
+
+# Python bytecode (the sim/ figure scripts)
+__pycache__/
+*.pyc
