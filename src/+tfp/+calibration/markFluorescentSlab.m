@@ -23,6 +23,11 @@ function marks = markFluorescentSlab(dmd, slm, daq, config, options)
 %     .gridStepPx    lateral spacing between marks (default 120 px — far
 %                    enough apart that a defocused mark can't be confused
 %                    with its neighbour)
+%     .gridStepVecPx [dCol dRow] direction the row runs (default [1 0], the
+%                    chip's column axis). Pass [1 1] for the dispersion
+%                    diagonal, which is what BRINGUP_GUIDE §7.4 needs to
+%                    read the SIGN of the tilt gradient: same dz for every
+%                    mark, different depths because the plane is tilted.
 %     .spotRadiusPx  mark spot radius (default 6)
 %     .powerMw       default: burn 50, bleach 10
 %     .dwellS        default: burn 0.5, bleach 30
@@ -57,13 +62,27 @@ end
 
 dzCmdUm      = double(tfp.util.configField(options, 'dzCmdUm', -40:20:40));
 gridStepPx   = double(tfp.util.configField(options, 'gridStepPx', 120));
+% Direction the mark row runs, in DMD pixels. Defaults to +col, which is what
+% the dz-encoded grid has always used. Section 7.4 of the bringup guide needs
+% the other case: a row of SAME-dz marks running along the chip's (1,1)
+% diagonal, which is the dispersion axis under the 45 degree clocking, so that
+% the tilted excitation plane makes them land at different depths. That is a
+% direction, not a second marking routine.
+stepVecPx    = double(tfp.util.configField(options, 'gridStepVecPx', [1 0]));
+if numel(stepVecPx) ~= 2 || ~any(stepVecPx)
+    error('tfp:calibration:markFluorescentSlab:badStepVec', ...
+        'options.gridStepVecPx must be a non-zero [dCol dRow] direction.');
+end
+stepVecPx = stepVecPx(:)' / norm(stepVecPx);
 spotRadiusPx = double(tfp.util.configField(options, 'spotRadiusPx', 6));
 powerMw      = double(tfp.util.configField(options, 'powerMw', defaultPowerMw));
 dwellS       = double(tfp.util.configField(options, 'dwellS', defaultDwellS));
 
 N = numel(dzCmdUm);
-defaultOrigin = [round(dmd.nCols / 2) - round(gridStepPx * (N - 1) / 2), ...
-                 round(dmd.nRows / 2)];
+% Centre the row on the chip whichever way it runs.
+halfExtent    = gridStepPx * (N - 1) / 2 * stepVecPx;
+defaultOrigin = [round(dmd.nCols / 2 - halfExtent(1)), ...
+                 round(dmd.nRows / 2 - halfExtent(2))];
 gridOrigin = double(tfp.util.configField(options, 'gridOriginPx', defaultOrigin));
 
 % --- Prepare the SLM sequence ----------------------------------------
@@ -86,7 +105,8 @@ marks = struct('dzCmdUm', {}, 'dmdCoords', {}, 'mode', {}, ...
     'powerMw', {}, 'dwellS', {}, 'timestamp', {});
 
 for k = 1:N
-    coords = [gridOrigin(1) + (k - 1) * gridStepPx, gridOrigin(2)];
+    coords = round([gridOrigin(1), gridOrigin(2)] + ...
+                   (k - 1) * gridStepPx * stepVecPx);
     pattern = tfp.patterns.singleSpot(dmd, coords, spotRadiusPx);
 
     tfp.util.assertSlmPowerSafe(pattern, powerMw, config);

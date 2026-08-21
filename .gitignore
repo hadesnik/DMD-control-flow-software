@@ -13,6 +13,17 @@ slprj/
 # Session outputs
 data/
 
+# Calibration sessions (scripts/run_calibrationGUI, guided bringup).
+# SPLIT TRACKING, on purpose: the rig's calibration history is part of the
+# record — what the scale was on the day an experiment ran is not recoverable
+# from anything else — but the raw result structs are large and regenerable
+# from nothing. So the human-readable report, the per-step verdicts and the
+# figures are committed; the .mat payloads and any raw frames are not.
+calibration/**/steps/*.mat
+calibration/**/*.tif
+calibration/**/*.tiff
+calibration/**/raw/
+
 # Claude Code harness state (agent worktrees, local memory)
 .claude/
 

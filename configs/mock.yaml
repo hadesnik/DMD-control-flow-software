@@ -42,7 +42,10 @@ imaging:
 
 # --- 3D / SLM sections (disabled by default; mirror real.yaml schema) ---
 slm:
-  enabled: false
+  # Enabled so the guided bringup demo can run its axial steps (sections 2,
+  # 6a, 6c, 7) against MockSLM instead of reporting them blocked. The
+  # modulator is a local simulator: no socket, no Blink SDK, no device.
+  enabled: true
   backend: 'mock'            # MockSLM (Meadowlark-shaped simulator)
   nRows: 1024
   nCols: 1024
@@ -60,6 +63,7 @@ objective:
 
 etl:
   n_planes: 3
+  plane_spacing_um: 20       # what ScanImage would be set to; section 6b checks the fit against it
   plane_calibration_file: ''
 
 zstage:

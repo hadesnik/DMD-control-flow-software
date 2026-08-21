@@ -225,6 +225,31 @@ classdef MockSubstageCamera < tfp.hardware.SubstageCamera
             obj.logEvent('cleanup', []);
         end
 
+        function setScanRect(obj, rect)
+            %setScanRect Render (or stop rendering) the simulated 2p raster.
+            %
+            %   The rectangle stands in for ScanImage in Focus exciting the
+            %   film, which is what tfp.calibration.crossRegisterScanImage
+            %   looks for. It must be switchable rather than permanent: on
+            %   the bench the raster is only running during section 4b, and a
+            %   rectangle left on during section 4a would swamp the very DMD
+            %   spots that step is centroiding. Pass [] to clear.
+            if nargin < 2 || isempty(rect)
+                obj.scanRect_ = [];
+            else
+                if ~isnumeric(rect) || numel(rect) ~= 4 || any(rect < 1)
+                    error('tfp:hardware:MockSubstageCamera:badScanRect', ...
+                        'scanRect must be [x1 y1 width height] with all values >= 1.');
+                end
+                obj.scanRect_ = double(rect(:)');
+            end
+            obj.logEvent('setScanRect', obj.scanRect_);
+        end
+
+        function rect = getScanRect(obj)
+            rect = obj.scanRect_;
+        end
+
         function entries = getLog(obj)
             entries = obj.log_;
         end

@@ -69,10 +69,25 @@ classdef CalibrationApp < handle
             % rendered by tfp.util.formatPowerConfirmSpec so the console
             % prompt, this dialog and the session log all say the same thing.
             options.confirmFcn = @(spec) obj.confirmPower(spec);
+            % The guided path asks questions no instrument can answer, and
+            % the axis-sign loop asks four. Both fall back to the console
+            % when the session is driven without this view.
+            options.askFcn         = @(spec) obj.askOperator(spec);
+            options.signConfirmFcn = @(spec) obj.confirmAxisSign(spec);
             obj.session = tfp.gui.CalibrationSession(config, options);
+
+            % Wizard state lives in w_ alongside the widget handles: the
+            % plan as last rendered, the verdict of each completed step, and
+            % which step is on screen.
+            obj.w_.plan       = tfp.gui.bringupSteps();
+            obj.w_.verdicts   = struct();
+            obj.w_.currentStep = '';
+            obj.w_.knobFields = struct();
+            obj.w_.checkBoxes = gobjects(0);
 
             obj.buildUI();
             obj.refreshAll();
+            obj.showStep(obj.w_.plan(1).id);
             obj.startTimer();
 
             obj.fig_.CloseRequestFcn = @(~,~) obj.onClose();
@@ -96,6 +111,12 @@ classdef CalibrationApp < handle
 
             tg = uitabgroup(outer);
             tg.Layout.Row = 2;
+            % The guided tab comes first because it is the default way to
+            % use this app: it walks the whole of BRINGUP_GUIDE sections
+            % 1-7, one step at a time. The tabs after it are the same
+            % instruments with the guardrails off, for someone who already
+            % knows which measurement they came for.
+            obj.buildWizardTab(uitab(tg, 'Title', 'Guided bringup'));
             obj.buildLaserTab(uitab(tg, 'Title', 'Laser state'));
             obj.buildPreflightTab(uitab(tg, 'Title', 'Preflight'));
             obj.buildCameraTab(uitab(tg, 'Title', 'Camera'));
@@ -136,6 +157,100 @@ classdef CalibrationApp < handle
             obj.w_.statusLabel = uilabel(bar, 'Text', 'Ready.');
             obj.w_.statusLabel.Layout.Row = 2;
             obj.w_.statusLabel.Layout.Column = 4;
+        end
+
+        % --- tab 0: the guided bringup ----------------------------------
+        %
+        %   Every word of instruction, every threshold and every remedy on
+        %   this tab comes from tfp.gui.bringupSteps and tfp.gui.stepVerdict.
+        %   This function decides only where things sit on the screen. That
+        %   is what keeps the procedure testable: tests/test_bringup_steps.m
+        %   reads the same registry under -nodisplay, where no uifigure can
+        %   exist.
+
+        function buildWizardTab(obj, tab)
+            g = uigridlayout(tab, [1 2]);
+            g.ColumnWidth = {340, '1x'};
+
+            % --- left: the procedure, top to bottom -------------------
+            left = uigridlayout(g, [4 1]);
+            left.RowHeight = {24, '1x', 24, 76};
+            uilabel(left, 'Text', 'Procedure — BRINGUP_GUIDE §1–§7', ...
+                'FontWeight', 'bold');
+            obj.w_.stepTable = uitable(left, ...
+                'ColumnName', {'§', 'Step', 'State'}, ...
+                'ColumnWidth', {42, 178, 84}, ...
+                'CellSelectionCallback', @(~, evt) obj.onSelectStep(evt));
+            uilabel(left, 'Text', 'Session record', 'FontWeight', 'bold');
+            obj.w_.reportBox = uitextarea(left, 'Editable', 'off', ...
+                'Value', {'The dated calibration folder opens on the first step.'});
+
+            % --- right: the selected step -----------------------------
+            right = uigridlayout(g, [2 1]);
+            right.RowHeight = {'1.05x', '1x'};
+            obj.buildStepBrief(right);
+            obj.buildStepResult(right);
+        end
+
+        function buildStepBrief(obj, parent)
+            %buildStepBrief The contract of the step, shown BEFORE it runs.
+            p = uipanel(parent, 'Title', 'This step');
+            g = uigridlayout(p, [8 1]);
+            g.RowHeight = {26, 40, 22, '1.4x', '1x', 'fit', 34};
+
+            obj.w_.stepTitle = uilabel(g, 'Text', 'Select a step on the left.', ...
+                'FontSize', 15, 'FontWeight', 'bold');
+            obj.w_.stepPurpose = uilabel(g, 'Text', '', 'WordWrap', 'on');
+            obj.w_.stepHazard = uilabel(g, 'Text', '', 'WordWrap', 'on', ...
+                'FontWeight', 'bold', 'FontColor', [0.72 0.25 0]);
+
+            obj.w_.setupBox = uitextarea(g, 'Editable', 'off', ...
+                'Value', {''}, 'FontSize', 13);
+            obj.w_.willDoBox = uitextarea(g, 'Editable', 'off', 'Value', {''});
+
+            % Knobs are rebuilt per step, so they live in a container this
+            % code empties rather than in fixed widgets.
+            obj.w_.knobPanel = uipanel(g, 'Title', 'Settings', ...
+                'BorderType', 'none');
+
+            btns = uigridlayout(g, [1 5]);
+            btns.ColumnWidth = {150, 100, 110, '1x', 120};
+            btns.Padding = [0 0 0 0];
+            obj.w_.proceedBtn = uibutton(btns, 'Text', 'Proceed', ...
+                'FontWeight', 'bold', 'BackgroundColor', [0.20 0.45 0.75], ...
+                'FontColor', 'w', 'ButtonPushedFcn', @(~,~) obj.onProceedStep());
+            obj.w_.retakeBtn = uibutton(btns, 'Text', 'Retake', ...
+                'Enable', 'off', 'ButtonPushedFcn', @(~,~) obj.onProceedStep());
+            obj.w_.skipBtn = uibutton(btns, 'Text', 'Skip step', ...
+                'ButtonPushedFcn', @(~,~) obj.onSkipStep());
+            obj.w_.blockerLabel = uilabel(btns, 'Text', '', 'WordWrap', 'on', ...
+                'FontColor', [0.72 0.25 0]);
+            obj.w_.nextBtn = uibutton(btns, 'Text', 'Next step ▸', ...
+                'Enable', 'off', 'ButtonPushedFcn', @(~,~) obj.onNextStep());
+        end
+
+        function buildStepResult(obj, parent)
+            %buildStepResult What was measured, what it means, what to do.
+            p = uipanel(parent, 'Title', 'Result');
+            g = uigridlayout(p, [2 2]);
+            g.RowHeight   = {32, '1x'};
+            g.ColumnWidth = {'1.1x', '1x'};
+
+            obj.w_.verdictLabel = uilabel(g, 'Text', 'Not run yet.', ...
+                'FontSize', 14, 'FontWeight', 'bold', 'WordWrap', 'on');
+            obj.w_.verdictLabel.Layout.Column = [1 2];
+
+            obj.w_.checksTable = uitable(g, ...
+                'ColumnName', {'Check', 'Measured', 'Wanted', 'Result'}, ...
+                'ColumnWidth', {'auto', 90, 90, 76});
+
+            rightCol = uigridlayout(g, [2 1]);
+            rightCol.Layout.Row = 2; rightCol.Layout.Column = 2;
+            rightCol.RowHeight = {'1.25x', '1x'};
+            obj.w_.wizAxes = uiaxes(rightCol);
+            title(obj.w_.wizAxes, '');
+            obj.w_.readingBox = uitextarea(rightCol, 'Editable', 'off', ...
+                'Value', {''});
         end
 
         % --- tab 1: laser state -----------------------------------------
@@ -358,6 +473,356 @@ classdef CalibrationApp < handle
     % Callbacks — each forwards to the session and renders the result
     % =======================================================================
     methods (Access = private)
+
+        % --- guided bringup ---------------------------------------------
+
+        function refreshStepTable(obj)
+            %refreshStepTable Repaint the step rail from the session's plan.
+            plan = obj.session.stepPlan();
+            obj.w_.plan = plan;
+            data = cell(numel(plan), 3);
+            for k = 1:numel(plan)
+                data(k, :) = {plan(k).section, plan(k).title, ...
+                              stateText(plan(k).status)};
+            end
+            obj.w_.stepTable.Data = data;
+            try
+                r = obj.session.report();
+                obj.w_.reportBox.Value = { ...
+                    'Session record (rebuilt after every step):', r.htmlPath()};
+            catch
+            end
+        end
+
+        function onSelectStep(obj, evt)
+            if isempty(evt.Indices), return; end
+            row = evt.Indices(1);
+            if row < 1 || row > numel(obj.w_.plan), return; end
+            obj.showStep(obj.w_.plan(row).id);
+        end
+
+        function showStep(obj, stepId)
+            %showStep Render one step's contract, before it runs.
+            obj.w_.currentStep = stepId;
+            brief = obj.session.beginStep(stepId);
+
+            obj.w_.stepTitle.Text = sprintf('§%s — %s', brief.section, brief.title);
+            obj.w_.stepPurpose.Text = brief.purpose;
+            obj.w_.stepHazard.Text = hazardText(brief.hazard);
+
+            obj.w_.setupBox.Value = [{'DO THIS AT THE BENCH:'}, ...
+                                     reshape(brief.setup, 1, [])];
+            if isempty(brief.willDo)
+                obj.w_.willDoBox.Value = {'Nothing is measured — this step is a checklist.'};
+            else
+                obj.w_.willDoBox.Value = [{'WHEN YOU PRESS PROCEED, THE SOFTWARE WILL:'}, ...
+                                          reshape(brief.willDo, 1, [])];
+            end
+
+            obj.buildKnobs(brief);
+
+            blocked = ~isempty(brief.blockers);
+            obj.w_.blockerLabel.Text = strjoin(brief.blockers, '  •  ');
+            obj.w_.proceedBtn.Enable = onOff(~blocked);
+
+            % Show the result already on record for this step, if any.
+            idx = find(strcmp({obj.w_.plan.id}, stepId), 1);
+            st  = obj.w_.plan(idx).status;
+            if isempty(st.verdict)
+                obj.clearResultPane();
+            elseif isfield(obj.w_.verdicts, stepId)
+                obj.renderVerdict(obj.w_.verdicts.(stepId));
+            end
+            obj.w_.retakeBtn.Enable = onOff(~isempty(st.verdict) && ~blocked);
+        end
+
+        function buildKnobs(obj, brief)
+            %buildKnobs Rebuild the per-step controls. Checklist steps get a
+            %   checkbox per item; measurement steps get their declared knobs.
+            delete(obj.w_.knobPanel.Children);
+            obj.w_.knobFields = struct();
+            obj.w_.checkBoxes = gobjects(0);
+
+            if strcmp(brief.kind, 'checklist')
+                g = uigridlayout(obj.w_.knobPanel, [numel(brief.checks) 1]);
+                g.RowHeight = repmat({26}, 1, max(1, numel(brief.checks)));
+                g.Scrollable = 'on';
+                for k = 1:numel(brief.checks)
+                    obj.w_.checkBoxes(k) = uicheckbox(g, 'Text', brief.checks{k});
+                end
+                return
+            end
+
+            n = numel(brief.knobs);
+            if n == 0
+                g = uigridlayout(obj.w_.knobPanel, [1 1]);
+                uilabel(g, 'Text', 'No settings — this step takes no options.', ...
+                    'FontColor', [0.4 0.4 0.4]);
+                return
+            end
+            g = uigridlayout(obj.w_.knobPanel, [n 3]);
+            g.ColumnWidth = {230, 110, '1x'};
+            g.RowHeight = repmat({26}, 1, n);
+            for k = 1:n
+                kb = brief.knobs(k);
+                label = kb.label;
+                if ~isempty(kb.unit), label = sprintf('%s (%s)', label, kb.unit); end
+                uilabel(g, 'Text', label);
+                obj.w_.knobFields.(kb.name) = uieditfield(g, 'numeric', ...
+                    'Value', double(kb.default));
+                uilabel(g, 'Text', kb.hint, 'FontColor', [0.4 0.4 0.4], ...
+                    'WordWrap', 'on');
+            end
+        end
+
+        function values = knobValues(obj)
+            values = struct();
+            if ~isempty(obj.w_.checkBoxes)
+                values.checked = arrayfun(@(c) c.Value, obj.w_.checkBoxes);
+                return
+            end
+            f = fieldnames(obj.w_.knobFields);
+            for k = 1:numel(f)
+                values.(f{k}) = obj.w_.knobFields.(f{k}).Value;
+            end
+        end
+
+        function onProceedStep(obj)
+            stepId = obj.w_.currentStep;
+            if isempty(stepId), return; end
+            obj.guard(@() run(), '');
+            function run()
+                out = obj.session.runStep(stepId, obj.knobValues());
+                obj.w_.verdicts.(stepId) = out;
+                obj.renderVerdict(out);
+                obj.exportStepFigure(stepId);
+                obj.refreshStepTable();
+                obj.setStatus(out.verdict.headline);
+            end
+        end
+
+        function onSkipStep(obj)
+            stepId = obj.w_.currentStep;
+            if isempty(stepId), return; end
+            idx = find(strcmp({obj.w_.plan.id}, stepId), 1);
+            reason = inputdlg({sprintf(['Why is §%s being skipped? The report ' ...
+                'records the reason, because a report that is silent about a ' ...
+                'step reads as if the step passed.'], obj.w_.plan(idx).section)}, ...
+                'Skip step', [2 70], {''});
+            if isempty(reason) || isempty(strtrim(reason{1}))
+                obj.setStatus('Skip cancelled — a reason is required.');
+                return
+            end
+            obj.guard(@() obj.session.skipStep(stepId, reason{1}), ...
+                sprintf('%s skipped.', stepId));
+            obj.refreshStepTable();
+        end
+
+        function onNextStep(obj)
+            idx = find(strcmp({obj.w_.plan.id}, obj.w_.currentStep), 1);
+            if isempty(idx) || idx >= numel(obj.w_.plan), return; end
+            obj.showStep(obj.w_.plan(idx + 1).id);
+        end
+
+        function clearResultPane(obj)
+            obj.w_.verdictLabel.Text = 'Not run yet.';
+            obj.w_.verdictLabel.FontColor = [0.2 0.2 0.2];
+            obj.w_.checksTable.Data = {};
+            obj.w_.readingBox.Value = {''};
+            obj.w_.nextBtn.Enable = 'off';
+            cla(obj.w_.wizAxes);
+            title(obj.w_.wizAxes, '');
+        end
+
+        function renderVerdict(obj, out)
+            %renderVerdict The judgement, the numbers behind it, and the plot.
+            v = out.verdict;
+            obj.w_.verdictLabel.Text = sprintf('%s  —  %s', ...
+                upper(v.verdict), v.headline);
+            obj.w_.verdictLabel.FontColor = verdictColour(v.verdict);
+
+            data = cell(numel(v.rows), 4);
+            for k = 1:numel(v.rows)
+                r = v.rows(k);
+                if isnan(r.ok),   mark = 'not evaluated';
+                elseif r.ok,      mark = 'ok';
+                else,             mark = upper(r.severity);
+                end
+                data(k, :) = {r.label, r.valueText, r.expectedText, mark};
+            end
+            obj.w_.checksTable.Data = data;
+
+            lines = reshape(v.reading, 1, []);
+            if ~isempty(v.remedy)
+                lines = [lines, {''}, {'WHAT TO CHANGE:'}, reshape(v.remedy, 1, [])];
+            end
+            obj.w_.readingBox.Value = lines;
+
+            obj.renderStepPlot(out);
+
+            obj.w_.nextBtn.Enable = onOff(v.canAdvance);
+            obj.w_.retakeBtn.Enable = 'on';
+        end
+
+        function renderStepPlot(obj, out)
+            %renderStepPlot One plot recipe per step, into the wizard axes.
+            ax = obj.w_.wizAxes;
+            cla(ax);
+            r = out.result;
+            try
+                switch out.step.plot
+                    case 'powerCurve'
+                        obj.renderPowerCurveInto(ax, r);
+                    case 'residuals'
+                        stem(ax, r.residualsPerPt, 'filled');
+                        xlabel(ax, 'grid point'); ylabel(ax, 'residual (camera px)');
+                        title(ax, sprintf('Affine residuals — RMS %.2f px', ...
+                            r.residualErrorPx));
+                    case 'tilt'
+                        obj.renderTiltInto(ax, r);
+                    case 'zfit'
+                        plot(ax, r.dzCmdUm, r.zPhysUm, 'o', 'MarkerFaceColor', [0.2 0.45 0.75]);
+                        hold(ax, 'on');
+                        xs = [min(r.dzCmdUm) max(r.dzCmdUm)];
+                        plot(ax, xs, r.fit.slopeUmPerCmd * xs + r.fit.interceptUm, 'r-');
+                        hold(ax, 'off');
+                        xlabel(ax, 'commanded defocus (um)');
+                        ylabel(ax, 'measured best focus (um)');
+                        title(ax, sprintf('slope %.4f, r^2 = %.4f', ...
+                            r.fit.slopeUmPerCmd, r.fit.r2));
+                    case 'planes'
+                        plot(ax, r.zPositionsUm, r.brightness, '-');
+                        xlabel(ax, 'objective z (um)'); ylabel(ax, 'plane brightness');
+                        title(ax, sprintf('plane depths: %s um', ...
+                            num2str(round(r.planeZUm, 1))));
+                    case 'zcompose'
+                        stem(ax, r.etlPlaneZUm, r.dzCmdForPlane, 'filled');
+                        xlabel(ax, 'imaging plane depth (um)');
+                        ylabel(ax, 'SLM command (um)');
+                        title(ax, 'Command that focuses stim at each plane');
+                    case 'marks'
+                        obj.renderMarksInto(ax, r);
+                    case 'scanRect'
+                        if isfield(r, 'rectBboxPx') && numel(r.rectBboxPx) >= 4
+                            b = r.rectBboxPx;
+                            plot(ax, [b(1) b(1)+b(3) b(1)+b(3) b(1) b(1)], ...
+                                     [b(2) b(2) b(2)+b(4) b(2)+b(4) b(2)], '-', ...
+                                     'LineWidth', 2);
+                            axis(ax, 'equal');
+                            xlabel(ax, 'camera x (px)'); ylabel(ax, 'camera y (px)');
+                            title(ax, sprintf('Raster rectangle %dx%d px', ...
+                                round(b(3)), round(b(4))));
+                        end
+                    case 'preflight'
+                        title(ax, 'See the checks table');
+                    otherwise
+                        title(ax, '');
+                end
+                grid(ax, 'on');
+            catch ME
+                title(ax, sprintf('(plot unavailable: %s)', ME.message));
+            end
+        end
+
+        function renderPowerCurveInto(~, ax, curve)
+            v  = curve.voltage.voltageV;
+            mw = curve.voltage.powerMw;
+            sd = curve.voltage.powerStdMw;
+            if isempty(sd), sd = zeros(size(mw)); end
+            errorbar(ax, v, mw, sd, 'k-o', 'LineWidth', 1.4);
+            xlabel(ax, 'AO voltage (V)'); ylabel(ax, 'Power at sample (mW)');
+            title(ax, 'Measured power vs AO voltage');
+        end
+
+        function renderTiltInto(~, ax, calib)
+            hold(ax, 'on');
+            scatter(ax, calib.xDispUm, calib.bestFocusZUm, 40, 'filled');
+            xs = linspace(min(calib.xDispUm), max(calib.xDispUm), 50);
+            plot(ax, xs, calib.fit.aUmPerUm * xs + calib.fit.cUm, 'r-', 'LineWidth', 1.6);
+            plot(ax, xs, calib.expected.depthGradientUmPerUm * xs + calib.fit.cUm, ...
+                'k--', 'LineWidth', 1.2);
+            hold(ax, 'off');
+            xlabel(ax, 'x_{disp} at sample (um)'); ylabel(ax, 'best focus z (um)');
+            legend(ax, {'measured', 'fit', 'handoff design'}, 'Location', 'best');
+            title(ax, sprintf('gradient %.5f um/um (r^2 = %.3f)', ...
+                calib.fit.aUmPerUm, calib.fit.r2));
+        end
+
+        function renderMarksInto(~, ax, r)
+            if isfield(r, 'perMark') && ~isempty(r.perMark)
+                dz  = [r.perMark.dzCmdUm];
+                obs = [r.perMark.observedPlane];
+                pre = [r.perMark.predictedPlane];
+                plot(ax, dz, pre, 'k--o', dz, obs, 'r-s', 'LineWidth', 1.4);
+                legend(ax, {'predicted plane', 'observed plane'}, 'Location', 'best');
+                xlabel(ax, 'commanded defocus (um)'); ylabel(ax, 'imaging plane');
+                title(ax, sprintf('%d of %d marks agree', r.nAgree, r.nTotal));
+            elseif isfield(r, 'planeIdx')
+                plot(ax, r.xDispPx, r.planeIdx, 'o-', 'LineWidth', 1.4);
+                xlabel(ax, 'position along dispersion diagonal (DMD px)');
+                ylabel(ax, 'imaging plane');
+                title(ax, sprintf('march direction = sign %+d', r.depthGradientSign));
+            end
+        end
+
+        function exportStepFigure(obj, stepId)
+            %exportStepFigure Put this step's plot in the report folder.
+            %   PDF for the record and PNG for the report page, which embeds
+            %   it so the report survives being copied off the rig.
+            try
+                rep = obj.session.report();
+                [png, pdf] = rep.figurePaths(stepId);
+                exportgraphics(obj.w_.wizAxes, png, 'Resolution', 150);
+                exportgraphics(obj.w_.wizAxes, pdf, 'ContentType', 'vector');
+                rep.attachFigure(stepId, png, pdf);
+            catch
+                % A figure that will not export must never fail the step it
+                % belongs to — the measurement is already recorded.
+            end
+        end
+
+        function answer = askOperator(obj, spec)
+            %askOperator The dialog rendering of a guided-bringup question.
+            %   Same spec the console prompt takes, so the two cannot drift.
+            msg = strjoin(reshape(tfp.util.configField(spec, 'message', {}), 1, []), ...
+                newline);
+            switch lower(char(tfp.util.configField(spec, 'kind', 'yesno')))
+                case 'yesno'
+                    dflt = logical(tfp.util.configField(spec, 'default', true));
+                    if dflt, defaultOpt = 'Yes'; else, defaultOpt = 'No'; end
+                    a = uiconfirm(obj.fig_, msg, ...
+                        char(tfp.util.configField(spec, 'title', 'Question')), ...
+                        'Options', {'Yes', 'No'}, 'DefaultOption', defaultOpt, ...
+                        'CancelOption', 'No', 'Icon', 'question');
+                    answer = strcmp(a, 'Yes');
+                case 'choice'
+                    opts = tfp.util.configField(spec, 'options', {'Yes', 'No'});
+                    answer = uiconfirm(obj.fig_, msg, ...
+                        char(tfp.util.configField(spec, 'title', 'Question')), ...
+                        'Options', opts, 'Icon', 'question');
+                case 'data'
+                    reply = inputdlg({[msg newline newline ...
+                        'Base-workspace variable name, or path of a .mat holding it:']}, ...
+                        char(tfp.util.configField(spec, 'title', 'Load data')), ...
+                        [1 90], {''});
+                    answer = [];
+                    if isempty(reply) || isempty(strtrim(reply{1})), return; end
+                    name = strtrim(reply{1});
+                    try
+                        if isfile(name)
+                            loaded = load(name);
+                            f = fieldnames(loaded);
+                            answer = loaded.(f{1});
+                        else
+                            answer = evalin('base', name);
+                        end
+                    catch ME
+                        uialert(obj.fig_, ME.message, 'Could not load that');
+                    end
+                otherwise
+                    answer = [];
+            end
+        end
 
         function onApplyLaserState(obj)
             obj.guard(@() obj.session.setLaserState(struct( ...
@@ -627,6 +1092,9 @@ classdef CalibrationApp < handle
             obj.refreshSafetyBar();
             st = obj.session.state();
             obj.w_.allowWrite.Value = st.allowConfigWrite;
+            if isfield(obj.w_, 'stepTable') && isvalid(obj.w_.stepTable)
+                obj.refreshStepTable();
+            end
         end
 
         function refreshSafetyBar(obj)
@@ -748,6 +1216,38 @@ classdef CalibrationApp < handle
             delete(obj.fig_);
         end
     end
+end
+
+% ===========================================================================
+function s = stateText(status)
+%stateText The step rail's one-word state, blockers folded in.
+if isempty(status.verdict)
+    if isempty(status.blockers), s = 'ready'; else, s = 'blocked'; end
+else
+    s = status.verdict;
+    if status.attempts > 1
+        s = sprintf('%s (%d)', s, status.attempts);
+    end
+end
+end
+
+function s = hazardText(h)
+if isempty(h), s = ''; else, s = ['SAFETY: ' h]; end
+end
+
+function c = verdictColour(verdict)
+switch lower(char(verdict))
+    case 'pass',    c = [0.10 0.50 0.22];
+    case 'warn',    c = [0.60 0.42 0.03];
+    case 'adjust',  c = [0.74 0.30 0.00];
+    case 'fail',    c = [0.71 0.14 0.14];
+    case 'skipped', c = [0.40 0.40 0.40];
+    otherwise,      c = [0.20 0.20 0.20];
+end
+end
+
+function s = onOff(tf)
+if tf, s = 'on'; else, s = 'off'; end
 end
 
 % ===========================================================================
