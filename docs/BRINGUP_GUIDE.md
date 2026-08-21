@@ -136,11 +136,21 @@ you walk away.
 
 ---
 
-> **The GUI does §3, §4 and the new §4.5 for you**, behind the pulse-energy
-> interlock and with provenance stamped into every result:
+> **The GUI walks §1 through §7 for you, step by step** —
 > `scripts/run_calibrationGUI.m`, documented in
-> [CALIBRATION_GUI.md](CALIBRATION_GUI.md). The command-line steps below still
-> work and remain the reference; the app runs the same functions.
+> [CALIBRATION_GUI.md](CALIBRATION_GUI.md). For each section it shows the
+> physical setup, asks you to proceed, drives the instruments across all three
+> PCs, plots the result, judges it against the criteria written into the
+> section below, tells you in English what the numbers mean, and decides
+> whether you may move on or must change something at the bench and retake.
+> Everything it measures lands in `calibration/<date>_<session>/` with a
+> readable report.
+>
+> The command-line steps below remain the reference — the app runs the same
+> functions, and every step is equally callable as
+> `s.runStep('<id>')`. **Where the two ever disagree, this document wins**:
+> the thresholds and remedies in `src/+tfp/+gui/bringupSteps.m` are
+> transcribed from here, so a change here needs a change there.
 
 ## 3. Laser power path — calibrate volts → mW
 

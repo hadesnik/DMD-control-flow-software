@@ -158,11 +158,62 @@ BNC connectors are §6.1 p86; XS13 pinout is Table 20 p89–90.
 | `XB8` LASER_OUT | BNC, analog | out | Laser-output photodiode. **Candidate for the per-pixel stim-censor channel** — see [KILLER_DEMO_PLAN.md](KILLER_DEMO_PLAN.md). Check whether it sits before or after the pulse picker; only post-picker tells you which pulses actually left. |
 | `XB4` OSC_OUT | BNC, analog | out | Oscillator pulse-train photodiode |
 | `XB5` / `XB7` / `XB9` | BNC, 3.3 V, 50 Ω | out | Configurable digital outputs, set in the Service app (§5.14 p79) |
-| `XS13.18` SYNC_OUT | TTL 3.3 V, 25 mA | out | ~500 ns sync, jitter ~0.5 ns — candidate hardware timebase for the DAQ |
-| `XS13.16` PP_EN | TTL 3.3 V, 5 V-tol | in | External pulse-picker gate. On the shipped **XS13-A-BNC adapter** as the "PP" BNC — no soldering. Use **active low**: the pin has an internal pull-up, so default-high leaves the output closed (§5.8.1 p66). |
+| `XS13.18` SYNC_OUT | TTL 3.3 V, 25 mA | out | ~500 ns sync at the RA rate, jitter ~0.5 ns (Table 20 p90). Candidate hardware timebase for the DAQ, and **the marker for the stim-censor channel** — see [STIM_IMAGING_SYNC.md](STIM_IMAGING_SYNC.md). **Not** on the XS13-A-BNC adapter; needs the D-SUB 25. |
+| `XS13.16` PP_EN | TTL 3.3 V, 5 V-tol | in | External pulse-picker gate. On the shipped **XS13-A-BNC adapter** as the "PP" BNC — no soldering. Use **active low**: the pin has an internal pull-up, so default-high leaves the output closed (§5.8.1 p66). **The gate for turnaround-locked stimulation** — see [STIM_IMAGING_SYNC.md](STIM_IMAGING_SYNC.md). |
+| `XS13.14` SYNC_IN | TTL 3.3 V, 5 V-tol | in | Locks the RA **frequency** (not seed phase) to an external clock, 100–500 ns high (§5.8.4 p70). The "RA" BNC on the XS13-A-BNC adapter. **Nothing here needs it**, and it is mutually exclusive with SPPT (error E1023). Listed so nobody reaches for it expecting a phase lock. |
 | `XS13.25` SHUTTER_CTRL_TTL | TTL 3.3 V, 5 V-tol | in | Shutter open on high — the real beam-off |
 
 Oscilloscope note: read the 3.3 V digital outs with a **1 MΩ** input, not 50 Ω (p86).
+
+### Stim/imaging sync — killing the photostim artifact
+
+Rationale, options and the bench checklist are in
+[STIM_IMAGING_SYNC.md](STIM_IMAGING_SYNC.md). This is only the pin record.
+
+Three new lines, none wired. The first two are the censor channel (build it first);
+the third is turnaround-locked stimulation (better, but depends on holding phase).
+
+| Line | Dir | Connect to | Notes |
+|---|---|---|---|
+| **TBD DI** | in | CARBIDE `XS13.18` SYNC_OUT | One edge per stim pulse, ~0.5 ns jitter. Binned per-pixel it censors the ~1% of pixels a stim pulse contaminates (~10% once you censor a ~1 µs window for PMT ringing). |
+| **TBD DI** | in | Resonant scanner controller **Period Clock** | TTL at the resonant frequency, low→high at a fixed phase of the mirror motion; one period = two image lines. **T it off the existing run to the digitizer** — confirm that does not load the digitizer input. |
+| **TBD counter out** | out | CARBIDE `XS13.16` PP_EN ("PP" BNC) | NI 6323 counter as a retriggerable single pulse (delay `D`, width `W`) off the Period Clock, 100 MHz timebase → 10 ns resolution. `D` is found on the bench, not computed. |
+
+⚠️ **Enable SPPT on the CARBIDE before using PP_EN for this.** Standard external
+pulse-picker triggering has 0.5–25 µs jitter (§5.8.2 p67), which is the size of the
+whole turnaround window. SPPT drops jitter to 16 ns but adds a *fixed* delay of
+`2/f_RA + ~300 ns` — **20.3 µs at f_RA = 100 kHz, longer than the 17.9 µs turnaround at
+8 kHz**, so the trigger must lead into a later window. Deterministic, but it has to be
+designed in rather than discovered.
+
+Counter/timer configuration is a hardware-specific API and belongs on the DAQ base
+class per `CLAUDE.md`, not in a bench script.
+
+#### Fill in at the bench
+
+| Field | Value | Filled in by / date |
+|---|---|---|
+| DI line for CARBIDE SYNC_OUT | | |
+| Does SYNC_OUT track the **pulse picker**, or only the RA? | | |
+| DI line for the resonant Period Clock | | |
+| Period Clock polarity / amplitude (1 MΩ scope) | | |
+| Counter channel + terminal driving PP_EN | | |
+| Counter delay `D` at which the artifact minimises | | |
+| PMT ringing duration after one stim pulse (µs) | | |
+
+The last row is the one that decides whether a gated PMT has to be bought: if ringing
+outlasts a few pixels, censoring and turnaround-locking both stop being sufficient.
+
+### Chameleon Ultra II (imaging laser) — reference, nothing wired
+
+| Line | Dir | Notes |
+|---|---|---|
+| **Fast photo diode (sync out) BNC**, rear of laser head | out | Confirmed present: Coherent *Chameleon Ultra, Vision, and Vision-S* Operator's Manual doc 1313538, Table 5-1 — "Synchronizes external equipment with the Chameleon output pulse." Electrical spec **not stated in the manual**; scope it before trusting it, and expect it may need a Schmitt trigger to clock a digitizer. |
+
+Nothing in the current plan needs it. It is recorded here so the question "does the
+Chameleon even have a sync out?" is answered once — it does — without implying that
+laser-clock synchronisation is a route to artifact rejection. It is not; see
+[STIM_IMAGING_SYNC.md](STIM_IMAGING_SYNC.md).
 
 ### Arm transmission (laser → sample)
 

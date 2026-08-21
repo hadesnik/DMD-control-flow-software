@@ -17,14 +17,19 @@ classdef ScanImageCalibBridge < handle
     %   an experiment data path: volumes come back as bare numeric arrays
     %   over a socket sized for calibration, not for acquisition.
     %
-    %   Wire format (bare numeric vectors only):
-    %     [1 nFast nSlow]  set pixel counts     reply [0]
-    %     [2 0]            enter Focus          reply [0]
-    %     [3 0]            abort                reply [0]
-    %     [4 nPlanes]      plane brightness     reply [0 b1..bN]
-    %     [5 nPlanes]      grab a volume        reply [0 nRows nCols nFrames pixels...]
-    %     [6 x y w h]      command an mROI      reply [0]
-    %     [7 0]            report config        reply [0 nFast nSlow nSlices zoom]
+    %   Wire format (bare numeric vectors only). Opcodes 1-3 are the z-ruler
+    %   block, identical to si_motor_helper's and served by the same helper —
+    %   one MATLAB can hold only one accept loop, and section 6b needs the z
+    %   ruler and plane brightness in the same measurement loop. This class
+    %   uses only the calibration block; tfp.hardware.RelayZStage uses 1-3
+    %   with zstage.relay_port set to 3048.
+    %     [10 nFast nSlow] set pixel counts     reply [0]
+    %     [11 0]           enter Focus          reply [0]
+    %     [12 0]           abort                reply [0]
+    %     [13 nPlanes]     plane brightness     reply [0 b1..bN]
+    %     [14 nPlanes]     grab a volume        reply [0 nRows nCols nFrames pixels...]
+    %     [15 x y w h]     command an mROI      reply [0]
+    %     [16 0]           report config        reply [0 nFast nSlow nSlices zoom]
     %     [99 0]           shutdown the helper  reply [0]
     %   A reply whose first element is non-zero is an error code.
     %
@@ -46,6 +51,7 @@ classdef ScanImageCalibBridge < handle
         sock_        = []      % msocket handle, or 'mock'
         mockState_   = struct('nFast', 512, 'nSlow', 256, 'nSlices', 3, ...
                               'zoom', 1, 'nRows', 64, 'nCols', 64)
+        mockReplies_ = {}      % queued canned replies for the mock transport
         log_         = struct('timestamp', {}, 'eventType', {}, 'payload', {})
     end
 
@@ -131,15 +137,15 @@ classdef ScanImageCalibBridge < handle
                      'unidentifiable in the camera''s view of the raster. ' ...
                      'Use e.g. 512 x 256.'], nFast, nSlow);
             end
-            obj.request([1 nFast nSlow], 0);
+            obj.request([10 nFast nSlow], 0);
         end
 
         function startFocus(obj)
-            obj.request([2 0], 0);
+            obj.request([11 0], 0);
         end
 
         function abort(obj)
-            obj.request([3 0], 0);
+            obj.request([12 0], 0);
         end
 
         function b = planeBrightness(obj, nPlanes)
@@ -150,7 +156,7 @@ classdef ScanImageCalibBridge < handle
                 cfg = obj.config();
                 nPlanes = cfg.nSlices;
             end
-            reply = obj.request([4 nPlanes], nPlanes);
+            reply = obj.request([13 nPlanes], nPlanes);
             b = reply(2:end);
         end
 
@@ -160,7 +166,7 @@ classdef ScanImageCalibBridge < handle
                 cfg = obj.config();
                 nPlanes = cfg.nSlices;
             end
-            reply = obj.request([5 nPlanes], 3);
+            reply = obj.request([14 nPlanes], 3);
             nRows = reply(2); nCols = reply(3); nFrames = reply(4);
             expect = nRows * nCols * nFrames;
             if numel(reply) - 4 ~= expect
@@ -175,12 +181,12 @@ classdef ScanImageCalibBridge < handle
 
         function commandRoi(obj, xUm, yUm, wUm, hUm)
             %commandRoi Centre a small scan region at a sample position.
-            obj.request([6 xUm yUm wUm hUm], 0);
+            obj.request([15 xUm yUm wUm hUm], 0);
         end
 
         function cfg = config(obj)
             %config What ScanImage is currently set to.
-            reply = obj.request([7 0], 4);
+            reply = obj.request([16 0], 4);
             cfg = struct('nFast', reply(2), 'nSlow', reply(3), ...
                 'nSlices', reply(4), 'zoom', reply(5));
         end
@@ -189,6 +195,15 @@ classdef ScanImageCalibBridge < handle
             %shutdownHelper Ask the helper to exit its loop, then disconnect.
             try, obj.request([99 0], 0); catch, end
             obj.disconnect();
+        end
+
+        function queueMockReply(obj, reply)
+            %queueMockReply Test hook: push a canned reply for the mock
+            %   transport, the same idiom tfp.hardware.MeadowlarkSLM uses.
+            %   Queue a wrong reply to exercise an error path that the public
+            %   API cannot otherwise produce — an error code from the helper,
+            %   or a volume too large to arrive in one message.
+            obj.mockReplies_{end+1} = reply;
         end
 
         function entries = getLog(obj)
@@ -240,20 +255,25 @@ classdef ScanImageCalibBridge < handle
             %mockReply The socket-free emulator, for protocol tests.
             %   Answers with the right SHAPES and nothing meaningful: a test
             %   that needed real pixel values would be testing the emulator.
+            if ~isempty(obj.mockReplies_)
+                reply = obj.mockReplies_{1};
+                obj.mockReplies_(1) = [];
+                return
+            end
             s = obj.mockState_;
             switch message(1)
-                case 1
+                case 10
                     obj.mockState_.nFast = message(2);
                     obj.mockState_.nSlow = message(3);
                     reply = 0;
-                case {2, 3, 6}
+                case {11, 12, 15}
                     reply = 0;
-                case 4
+                case 13
                     reply = [0, zeros(1, message(2))];
-                case 5
+                case 14
                     n = message(2);
                     reply = [0, s.nRows, s.nCols, n, zeros(1, s.nRows * s.nCols * n)];
-                case 7
+                case 16
                     reply = [0, s.nFast, s.nSlow, s.nSlices, s.zoom];
                 case 99
                     reply = 0;

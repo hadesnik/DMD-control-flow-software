@@ -1,5 +1,10 @@
 function app = run_calibrationGUI(configPath, varargin)
-%run_calibrationGUI Launch the calibration GUI.
+%run_calibrationGUI Launch the guided calibration GUI.
+%
+%   Walks docs/BRINGUP_GUIDE.md sections 1-7 step by step: what to do at the
+%   bench, ask to proceed, drive the instruments across all three PCs, plot
+%   the result, judge it, and decide whether to move on or adjust something
+%   and retake. Each session writes calibration/<date>_<name>/report.html.
 %
 %   app = run_calibrationGUI()                      % configs/real.yaml (the rig)
 %   app = run_calibrationGUI('configs/mock.yaml')   % DEMO — no hardware at all
@@ -31,8 +36,12 @@ function app = run_calibrationGUI(configPath, varargin)
 %       refuses to output;
 %     * enter the laser state FIRST: the pulse-energy interlock is fail-closed
 %       on rep rate;
-%     * for the field-tilt tab, si_motor_helper must be running in the
-%       ScanImage MATLAB on the imaging PC (port 3047).
+%     * for anything axial, an imaging-PC helper must be running in the
+%       ScanImage MATLAB: si_motor_helper (port 3047) for the z ruler alone,
+%       or si_calib_helper (port 3048) for the guided bringup, which also
+%       drives ScanImage's pixel counts, mROI, per-plane brightness and stack
+%       grabs. Run ONE of them — a MATLAB can hold only one accept loop —
+%       and set zstage.relay_port to match. See docs/PORTS.md.
 %
 %   Everything the app does is also available from the command line with the
 %   same interlocks and the same provenance — see docs/CALIBRATION_GUI.md,

@@ -79,6 +79,7 @@ classdef CalibrationSession < handle
         promptFcn_
         askFcn_                % @(spec) answer — the guided path's questions
         signConfirmFcn_ = []   % @(spec) logical for the axis-sign loop
+        calibrationRoot_ = ''  % options override for the dated-folder root
         cameraBusy_ = false
         liveOn_     = false
         darkFrame_  = []
@@ -105,6 +106,8 @@ classdef CalibrationSession < handle
             obj.askFcn_     = tfp.util.configField(options, 'askFcn', ...
                                 @tfp.util.consoleAsk);
             obj.signConfirmFcn_ = tfp.util.configField(options, 'signConfirmFcn', []);
+            obj.calibrationRoot_ = char(tfp.util.configField(options, ...
+                                        'calibrationRoot', ''));
 
             % A mock session must not be able to rewrite a rig config, whatever
             % the caller asked for.
@@ -217,6 +220,8 @@ classdef CalibrationSession < handle
             status(end+1) = obj.laserRow();
             status(end+1) = obj.powerMeterRow();
             status(end+1) = obj.scanImageRow();
+            status(end+1) = obj.calibHelperRow();
+            status(end+1) = obj.modulatorRow();
 
             obj.log('preflight', status);
         end
@@ -319,6 +324,17 @@ classdef CalibrationSession < handle
             options = obj.withDefaults(options, 'backgroundFrame', obj.darkFrame_);
             options = obj.withDefaults(options, 'stagePositionUm', obj.stagePosition());
             obj.laser_.beginStep('dmd_to_camera');
+            % alignDMDtoCamera has no power option of its own — it projects
+            % whatever the modulator is already set to. Command the requested
+            % calibration power here, through the controller, so the step is
+            % self-contained and the interlock and confirmation dialog both
+            % apply. Without this the operator has to remember to set power on
+            % another tab first, and forgetting means a fit made in the dark.
+            powerMw = tfp.util.configField(options, 'powerMw', []);
+            if ~isempty(powerMw) && powerMw > 0
+                obj.laser_.setPowerMw(powerMw, 'dmd_to_camera grid');
+            end
+            options = rmfieldIfPresent(options, 'powerMw');
             calib = obj.withCamera(@() tfp.calibration.alignDMDtoCamera( ...
                 obj.dmd_, obj.camera_, options));
             calib = obj.finish('dmdToCamera', calib, '');
@@ -337,9 +353,13 @@ classdef CalibrationSession < handle
             end
             % Put the simulated raster on the mock camera for the duration,
             % and take it off again — the software equivalent of pressing
-            % Focus in ScanImage for this step and stopping afterwards. On
-            % real hardware this is a no-op and the operator does it.
+            % Focus in ScanImage for this step and stopping afterwards.
             restore = obj.withMockRaster();  %#ok<NASGU>
+            % On the real rig, do the same thing for real: set the non-square
+            % pixel count and start Focus through the imaging-PC helper, then
+            % stop. Without the helper this is a no-op and the operator does
+            % it by hand, which is what the step's setup text tells them.
+            rasterGuard = obj.withScanImageRaster(options.scanPixels);  %#ok<NASGU>
             calib = obj.withCamera(@() tfp.calibration.crossRegisterScanImage( ...
                 obj.camera_, dmdCalib, options));
             calib = obj.finish('scanCrossRegister', calib, '');
@@ -356,6 +376,15 @@ classdef CalibrationSession < handle
             options = obj.withDefaults(options, 'allowConfigWrite', obj.allowConfigWrite);
             if ~isempty(obj.signConfirmFcn_)
                 options = obj.withDefaults(options, 'confirmFcn', obj.signConfirmFcn_);
+            end
+            % Command the predicted mROI through the imaging-PC helper before
+            % asking whether the spot is centred in it. Without the helper the
+            % operator sets it by hand from the numbers in the dialog — which
+            % is the same question, with a walk across the room in the middle
+            % of it.
+            if ~isempty(obj.siCalib_) && ~obj.isMock_
+                inner = options.confirmFcn;
+                options.confirmFcn = @(spec) obj.commandRoiThenAsk(spec, inner);
             end
             if obj.isMock_
                 % In a mock session the simulation answers this one, and
@@ -547,6 +576,14 @@ classdef CalibrationSession < handle
             obj.log('step_note', struct('step', char(stepId), 'note', char(text)));
         end
 
+        function tf = hasReport(obj)
+            %hasReport Has a dated folder been opened yet?
+            %   Lets the view show the path without CREATING one: merely
+            %   launching the app should not leave an empty session folder
+            %   behind on a rig where someone opens it to look at a tab.
+            tf = ~isempty(obj.report_) && isvalid(obj.report_);
+        end
+
         function r = report(obj)
             %report The dated calibration folder, opened on first use.
             if isempty(obj.report_) || ~isvalid(obj.report_)
@@ -569,8 +606,11 @@ classdef CalibrationSession < handle
             %   history is part of the record, not scratch output, and the
             %   .gitignore tracks the small artifacts while ignoring the
             %   heavy .mat results. Override with config.paths.calibrationDir.
-            pathsCfg = tfp.util.configField(obj.config, 'paths', struct());
-            root = char(tfp.util.configField(pathsCfg, 'calibrationDir', ''));
+            root = obj.calibrationRoot_;
+            if isempty(root)
+                pathsCfg = tfp.util.configField(obj.config, 'paths', struct());
+                root = char(tfp.util.configField(pathsCfg, 'calibrationDir', ''));
+            end
             if isempty(root)
                 here = fileparts(mfilename('fullpath'));            % src/+tfp/+gui
                 repo = fileparts(fileparts(fileparts(here)));       % repo root
@@ -1348,9 +1388,16 @@ classdef CalibrationSession < handle
                         knobField(k, 'vMax', 5), max(3, round(knobField(k, 'nSteps', 21))));
                     options = stripKnobs(options, {'vMin', 'vMax', 'nSteps'});
                 case 'lateral_dmd_camera'
+                    % alignDMDtoCamera wants an ODD points-per-axis count and
+                    % calls it nGridPoints; the operator-facing knob is
+                    % "grid points per side". Rounding to odd here rather than
+                    % rejecting the input keeps a typo from ending the step.
                     n = round(knobField(k, 'gridSize', 5));
-                    options.gridSize = [n n];
+                    if mod(n, 2) == 0, n = n + 1; end
+                    options.nGridPoints = max(3, n);
+                    options.spotRadius  = knobField(k, 'spotRadiusPx', 8);
                     options.backgroundFrame = obj.darkFrame_;
+                    options = stripKnobs(options, {'gridSize', 'spotRadiusPx'});
                 case 'lateral_scan_camera'
                     options.scanPixels = [round(knobField(k, 'scanPixelsFast', 512)), ...
                                           round(knobField(k, 'scanPixelsSlow', 256))];
@@ -1385,6 +1432,37 @@ classdef CalibrationSession < handle
                      spec.predSlowPx >= 1 && spec.predSlowPx <= n(2);
             catch
             end
+        end
+
+        function guard = withScanImageRaster(obj, scanPixels)
+            %withScanImageRaster Set the pixel count and run Focus for one step.
+            %   Returns an onCleanup that stops the acquisition again. A no-op
+            %   when si_calib_helper is not reachable: the step still works
+            %   with the operator driving ScanImage, and saying so beats
+            %   failing on a helper the rig may deliberately not be running.
+            guard = [];
+            if isempty(obj.siCalib_), return; end
+            try
+                obj.siCalib_.connect();
+                obj.siCalib_.setPixelCounts(scanPixels(1), scanPixels(2));
+                obj.siCalib_.startFocus();
+            catch ME
+                obj.log('scanimage_raster_manual', struct('message', ME.message));
+                return
+            end
+            bridge = obj.siCalib_;
+            guard = onCleanup(@() abortQuietly(bridge));
+        end
+
+        function ok = commandRoiThenAsk(obj, spec, innerConfirmFcn)
+            %commandRoiThenAsk Put the predicted mROI on screen, then ask.
+            try
+                obj.siCalib_.connect();
+                obj.siCalib_.commandRoi(spec.predXUm, spec.predYUm, 50, 50);
+            catch ME
+                obj.log('roi_command_manual', struct('message', ME.message));
+            end
+            ok = innerConfirmFcn(spec);
         end
 
         function guard = withMockRaster(obj)
@@ -1554,6 +1632,53 @@ classdef CalibrationSession < handle
             end
         end
 
+        function row = calibHelperRow(obj)
+            %calibHelperRow The imaging-PC calibration helper on port 3048.
+            %   Optional by design: without it sections 4b, 4c, 6b and 7 still
+            %   run, with the app telling the operator what to set in
+            %   ScanImage and waiting. The row exists so it is obvious which
+            %   of those two experiences you are about to have.
+            remedy = ['In the ScanImage MATLAB on the imaging PC: ' ...
+                      'addpath(''<repo>/scripts/imaging_pc_setup''); si_calib_helper. ' ...
+                      'Run it INSTEAD of si_motor_helper (one accept loop per ' ...
+                      'MATLAB) and set zstage.relay_port: 3048. See docs/PORTS.md.'];
+            if isempty(obj.siCalib_)
+                row = struct('device', 'ScanImage calib helper', 'status', 'absent', ...
+                    'detail', 'no scanimage.host configured', 'remedy', remedy);
+                return
+            end
+            try
+                obj.siCalib_.connect();
+                cfg = obj.siCalib_.config();
+                row = struct('device', 'ScanImage calib helper', 'status', 'ok', ...
+                    'detail', sprintf('%d x %d px, %d slices, zoom %g', ...
+                        cfg.nFast, cfg.nSlow, cfg.nSlices, cfg.zoom), ...
+                    'remedy', '');
+            catch ME
+                row = struct('device', 'ScanImage calib helper', 'status', 'absent', ...
+                    'detail', ME.message, 'remedy', remedy);
+            end
+        end
+
+        function row = modulatorRow(obj)
+            %modulatorRow The SLM / PLM, which is optional for a 2D bringup.
+            slmCfg = tfp.util.configField(obj.config, 'slm', struct());
+            if ~logical(tfp.util.configField(slmCfg, 'enabled', false))
+                row = struct('device', 'Modulator (SLM)', 'status', 'absent', ...
+                    'detail', 'slm.enabled is false — 2D mode', ...
+                    'remedy', ['Nothing to fix unless you want the axial steps ' ...
+                               '(sections 2, 6a, 6c, 7). Skip them, or set ' ...
+                               'slm.enabled: true with the right backend.']);
+            elseif isempty(obj.slm_)
+                row = struct('device', 'Modulator (SLM)', 'status', 'fail', ...
+                    'detail', 'slm.enabled is true but the modulator would not build', ...
+                    'remedy', 'Check slm.backend and slm.host; the console carries the construction error.');
+            else
+                row = obj.checkDevice('Modulator (SLM)', @() obj.slm_.getStatus(), ...
+                    'Start slm_server on the SLM PC (port 3046) and check slm.host.');
+            end
+        end
+
         function row = scanImageRow(obj)
             siCfg = tfp.util.configField(obj.config, 'scanimage', struct());
             mode  = char(tfp.util.configField(siCfg, 'mode', 'ttl_only'));
@@ -1597,6 +1722,18 @@ if isstruct(s) && isfield(s, name) && ~isempty(s.(name))
 else
     v = default;
 end
+end
+
+function abortQuietly(bridge)
+%abortQuietly Stop a ScanImage acquisition without letting teardown throw.
+try
+    bridge.abort();
+catch
+end
+end
+
+function s = rmfieldIfPresent(s, name)
+if isfield(s, name), s = rmfield(s, name); end
 end
 
 function s = stripKnobs(s, names)

@@ -48,15 +48,26 @@ classdef CalibrationReport < handle
             obj.sessionName = char(sessionName);
             obj.meta = meta;
 
+            % A second session on the same day keeps its own folder rather
+            % than overwriting the morning's calibration — and a third
+            % started in the same SECOND (which happens in tests, and on a
+            % rig where someone relaunches after a mistake) keeps its own
+            % too. Never reuse an existing folder: recording into someone
+            % else's session is worse than an ugly name.
             stamp = char(datetime('now', 'Format', 'yyyy-MM-dd'));
             base  = fullfile(char(root), sprintf('%s_%s', stamp, obj.sessionName));
-            if isfolder(base)
-                % A second session on the same day keeps its own folder rather
-                % than overwriting the morning's calibration.
-                base = sprintf('%s_%s', base, ...
+            candidate = base;
+            if isfolder(candidate)
+                candidate = sprintf('%s_%s', base, ...
                     char(datetime('now', 'Format', 'HHmmss')));
             end
-            obj.dir = base;
+            suffix = 1;
+            withTime = candidate;
+            while isfolder(candidate)
+                suffix = suffix + 1;
+                candidate = sprintf('%s_%d', withTime, suffix);
+            end
+            obj.dir = candidate;
             mkdir(obj.dir);
             mkdir(fullfile(obj.dir, 'steps'));
             mkdir(fullfile(obj.dir, 'figures'));
@@ -177,7 +188,10 @@ classdef CalibrationReport < handle
 
         function writeHtml(obj)
             h = {};
-            h{end+1} = '<title>Calibration report</title>';
+            % Named for the session, so a rig PC with four of these open in
+            % four tabs can tell them apart by the tab alone.
+            h{end+1} = sprintf('<title>Bringup record — %s</title>', ...
+                esc(obj.sessionName));
             h{end+1} = styleBlock();
             h{end+1} = '<main>';
             h{end+1} = sprintf('<h1>Calibration session &mdash; %s</h1>', ...

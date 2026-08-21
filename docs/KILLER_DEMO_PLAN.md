@@ -205,6 +205,13 @@ approach failing rather than a correctable systematic.
 
 ## Imaging artifact — resolved, not a blocker
 
+> Worked through in full in **[STIM_IMAGING_SYNC.md](STIM_IMAGING_SYNC.md)** (2026-08-21),
+> which adds a better primary option — gating the stim into the resonant turnaround, where
+> no pixel is being acquired — and rules out laser phase-locking on the record. **Read the
+> ⚠️ there before implementing the phase dither below: dithering and turnaround-locking are
+> mutually exclusive, and doing both gives the worst case.** Note also that `XS13.18`
+> SYNC_OUT is a cleaner censor marker than the pick-off photodiode.
+
 The 1038 nm stim beam does directly excite GCaMP, but at 100 kHz stim vs 80 MHz imaging
 with ~100 ns pixel dwell, only **~1% of pixels** see a stim pulse. Pick off a bit of the
 stim beam onto a photodiode, digitize it on a spare channel binned per-pixel like

@@ -1,5 +1,5 @@
 classdef CalibrationApp < handle
-    %CalibrationApp Operator front end for the first DMD-at-sample calibrations.
+    %CalibrationApp Guided operator front end for the rig bringup.
     %
     %   THIS FILE IS A VIEW. It builds widgets, forwards clicks to
     %   tfp.gui.CalibrationSession, and renders what the session returns. It
@@ -30,8 +30,20 @@ classdef CalibrationApp < handle
     %            handoff's 89 uJ ceiling, a red banner naming any simulated
     %            device, and a BEAM OFF button that is never gated by any
     %            dialog.
-    %     Row 2  six tabs: Laser state, Preflight, Camera, Power, Spatial,
-    %            Field tilt.
+    %     Row 2  seven tabs. GUIDED BRINGUP first — the default way to use
+    %            this app, walking docs/BRINGUP_GUIDE.md sections 1-7 one
+    %            step at a time: what to do at the bench, Proceed, the
+    %            measurement, the plot, a verdict with its reasoning, and
+    %            either Next or a remedy to apply and Retake. Then Laser
+    %            state, Preflight, Camera, Power, Spatial and Field tilt —
+    %            the same instruments with the guardrails off, for someone
+    %            who already knows which measurement they came for.
+    %
+    %   The guided tab renders tfp.gui.bringupSteps (the procedure as data),
+    %   tfp.gui.stepMetrics (the arithmetic) and tfp.gui.stepVerdict (the
+    %   judgement). Not one instruction, threshold or remedy is written in
+    %   this file; that is what keeps the procedure testable under
+    %   matlab -nodisplay, where no uifigure can exist.
     %
     %   The live display runs on a timer rather than a while-ishandle loop
     %   (which is what scripts/basler_live_preview.m does): a loop blocks the
@@ -486,11 +498,15 @@ classdef CalibrationApp < handle
                               stateText(plan(k).status)};
             end
             obj.w_.stepTable.Data = data;
-            try
-                r = obj.session.report();
+            % Deliberately hasReport() and not report(): asking for the
+            % report CREATES the dated folder, and merely opening the app to
+            % look at a tab should not leave an empty session behind.
+            if obj.session.hasReport()
+                obj.w_.reportBox.Value = {'Session record (rebuilt after every step):', ...
+                    obj.session.report().htmlPath()};
+            else
                 obj.w_.reportBox.Value = { ...
-                    'Session record (rebuilt after every step):', r.htmlPath()};
-            catch
+                    'The dated calibration folder opens when the first step runs.'};
             end
         end
 
@@ -652,9 +668,15 @@ classdef CalibrationApp < handle
             end
             obj.w_.checksTable.Data = data;
 
+            % One text area holds all three blocks, because the wizard has no
+            % separate widget for them the way the HTML report does.
             lines = reshape(v.reading, 1, []);
             if ~isempty(v.remedy)
                 lines = [lines, {''}, {'WHAT TO CHANGE:'}, reshape(v.remedy, 1, [])];
+            end
+            if ~isempty(out.step.records)
+                lines = [lines, {''}, {'RECORD SHEET:'}, ...
+                         reshape(out.step.records, 1, [])];
             end
             obj.w_.readingBox.Value = lines;
 

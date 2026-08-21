@@ -38,6 +38,11 @@ function calib = alignDMDtoCamera(dmd, camera, options)
 %
 %   Output calibration struct:
 %     .dmdToSample_affine  — 3×3: [x;y;1] = A * [u;v;1], DMD→camera px
+%     .residualsPerPt      — nAccepted x 1 per-point residuals (camera px);
+%                            the RMS alone cannot tell a uniform scale error
+%                            from one bad point, and those want opposite fixes
+%     .dmdPtsAccepted / .imgPtsAccepted / .imgPtsPredicted — the points the
+%                            fit actually used, for diagnosis
 %     .umPerPixel          — passed through from options
 %     .pixelsPerUm         — 1/umPerPixel
 %     .powerCurve          — empty struct (filled by powerMeterSweep)
@@ -157,6 +162,16 @@ calib.notes              = notes;
 calib.residualErrorPx    = calib_fit.residualErrorPx;
 calib.nCalibrationPoints = nPts;
 calib.stagePositionUm    = stagePosUm;   % [] unless a sample-mount stage is in use
+% PER-POINT residuals and the accepted point lists, passed through from the
+% fit. The RMS alone cannot distinguish "every point is 1.2 px off" (a scale
+% or focus problem) from "one point is 8 px off and the rest are perfect" (a
+% spot that fell outside the illuminated patch) — and those want opposite
+% actions at the bench. The calibration GUI plots these; without them its
+% residual panel silently drew nothing.
+calib.residualsPerPt     = calib_fit.residualsPerPt;
+calib.dmdPtsAccepted     = calib_fit.dmdPtsAccepted;
+calib.imgPtsAccepted     = calib_fit.imgPtsAccepted;
+calib.imgPtsPredicted    = calib_fit.imgPtsPredicted;
 end
 
 % =========================================================================

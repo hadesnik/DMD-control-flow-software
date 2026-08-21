@@ -11,6 +11,19 @@ function si_calib_helper(options)
 %   and it exists so the guided bringup does not have to say "now walk to
 %   the other PC and set the pixel count by hand" three times per session.
 %
+%   A SUPERSET OF si_motor_helper, and it has to be. One MATLAB can hold
+%   only one blocking accept loop, so the two helpers cannot run side by
+%   side — and BRINGUP_GUIDE section 6b needs both at once: it steps the
+%   objective z and then reads per-plane brightness, over and over. So
+%   opcodes 1/2/3 here are byte-identical to si_motor_helper's, and
+%   tfp.hardware.RelayZStage talks to this helper unchanged once you set
+%
+%       zstage:
+%         relay_port: 3048
+%
+%   Run si_motor_helper when the z ruler is all you need (it is smaller and
+%   has been on the rig longer); run this one for the guided bringup.
+%
 %   WHAT IT DOES NOT DO. It never modifies ScanImage internals — it sets
 %   documented properties and calls documented methods on hSI, exactly as a
 %   person clicking the GUI would. If a property name below turns out to be
@@ -19,17 +32,24 @@ function si_calib_helper(options)
 %
 %   Wire format (bare numeric vectors only — msocket-safe, same discipline
 %   as si_motor_helper):
-%     [1 nFast nSlow]   set pixels/line and lines/frame  -> [0]
-%     [2 0]             enter Focus                      -> [0]
-%     [3 0]             abort (idle)                     -> [0]
-%     [4 nPlanes]       per-plane mean brightness        -> [0 b1 b2 ... bN]
-%     [5 nPlanes]       grab one volume, return pixels   -> [0 nRows nCols nFrames pixels...]
-%     [6 x y w h]       command a centred mROI (um)      -> [0]
-%     [7 0]             report configuration             -> [0 nFast nSlow nSlices zoom]
+%
+%   Z ruler — IDENTICAL to si_motor_helper, so RelayZStage works unchanged:
+%     [1 zUm]           absolute move (um)               -> [0]
+%     [2 0]             read position                    -> [0 zUm]
+%     [3 dzUm]          relative move (um)               -> [0]
+%
+%   Calibration control — numbered from 10 to leave the z block alone:
+%     [10 nFast nSlow]  set pixels/line and lines/frame  -> [0]
+%     [11 0]            enter Focus                      -> [0]
+%     [12 0]            abort (idle)                     -> [0]
+%     [13 nPlanes]      per-plane mean brightness        -> [0 b1 b2 ... bN]
+%     [14 nPlanes]      grab one volume, return pixels   -> [0 nRows nCols nFrames pixels...]
+%     [15 x y w h]      command a centred mROI (um)      -> [0]
+%     [16 0]            report configuration             -> [0 nFast nSlow nSlices zoom]
 %     [99 0]            shutdown the helper              -> [0], loop exits
 %   First reply element ~= 0 is an error code; detail prints on this console.
 %
-%   Opcode 5 sends a whole volume as a flat vector after three size
+%   Opcode 14 sends a whole volume as a flat vector after three size
 %   elements. That is deliberately dumb: msocket round-trips bare numeric
 %   arrays reliably and structs only when flat, so the shape travels as
 %   numbers and the client reshapes. Keep volumes small — this link is for
@@ -68,27 +88,37 @@ while true
                 continue
             end
             switch req(1)
+                % --- z ruler (si_motor_helper's opcodes, unchanged) ---
                 case 1
-                    setPixelCounts_(double(req(2)), double(req(3)));
+                    writeZ_(double(req(2)));
                     mssend(sock, 0);
                 case 2
+                    mssend(sock, [0, readZ_()]);
+                case 3
+                    writeZ_(readZ_() + double(req(2)));
+                    mssend(sock, 0);
+                % --- calibration control ---
+                case 10
+                    setPixelCounts_(double(req(2)), double(req(3)));
+                    mssend(sock, 0);
+                case 11
                     startFocus_();
                     mssend(sock, 0);
-                case 3
+                case 12
                     abortAll_();
                     mssend(sock, 0);
-                case 4
+                case 13
                     b = planeBrightness_(double(req(2)));
                     mssend(sock, [0, b(:)']);
-                case 5
+                case 14
                     vol = grabVolume_(double(req(2)));
                     mssend(sock, [0, size(vol, 1), size(vol, 2), size(vol, 3), ...
                                   double(vol(:))']);
-                case 6
+                case 15
                     commandRoi_(double(req(2)), double(req(3)), ...
                                 double(req(4)), double(req(5)));
                     mssend(sock, 0);
-                case 7
+                case 16
                     mssend(sock, [0, reportConfig_()]);
                 case 99
                     mssend(sock, 0);
@@ -115,6 +145,24 @@ end
 % Every one of these is a %VERIFY item on first use. They are separated out
 % so a ScanImage version difference is a one-line edit here rather than a
 % hunt through the protocol above.
+
+function zUm = readZ_()
+% %VERIFY hSI.hMotors.motorPosition — the same patch point si_motor_helper
+% uses, kept character-for-character identical so a fix to one is a fix to
+% both.
+pos = evalin('base', 'hSI.hMotors.motorPosition');
+zUm = double(pos(3));
+end
+
+function writeZ_(zUm)
+% %VERIFY blocking semantics: motorPosition assignment on SI2019bR0 blocks
+% until the MP-285 completes the move.
+pos    = evalin('base', 'hSI.hMotors.motorPosition');
+pos(3) = double(zUm);
+assignin('base', 'tfp_motor_target__', pos);
+evalin('base', 'hSI.hMotors.motorPosition = tfp_motor_target__;');
+evalin('base', 'clear tfp_motor_target__');
+end
 
 function setPixelCounts_(nFast, nSlow)
 % %VERIFY hSI.hRoiManager.pixelsPerLine / linesPerFrame.

@@ -50,6 +50,7 @@ classdef test_calibration_app_smoke < matlab.unittest.TestCase
             config.paths = struct('dataDir', testCase.tmpDir);
             app = tfp.gui.CalibrationApp(config, struct( ...
                 'visible', false, 'sessionName', 'smoke', ...
+                'calibrationRoot', testCase.tmpDir, ...
                 'configPath', fullfile(root, 'configs', 'mock.yaml')));
             testCase.addTeardown(@() closeIfValid(app));
         end
@@ -69,8 +70,8 @@ classdef test_calibration_app_smoke < matlab.unittest.TestCase
 
             tabs = findall(fig, 'Type', 'uitab');
             titles = sort({tabs.Title});
-            testCase.verifyEqual(titles, sort({'Laser state', 'Preflight', ...
-                'Camera', 'Power', 'Spatial', 'Field tilt'}));
+            testCase.verifyEqual(titles, sort({'Guided bringup', 'Laser state', ...
+                'Preflight', 'Camera', 'Power', 'Spatial', 'Field tilt'}));
 
             % The safety bar must exist before anything else is usable.
             btns = findall(fig, 'Type', 'uibutton');
@@ -79,8 +80,40 @@ classdef test_calibration_app_smoke < matlab.unittest.TestCase
 
             % NB uiaxes report Type 'axes', so query by class instead.
             axesFound = findall(fig, '-isa', 'matlab.ui.control.UIAxes');
-            testCase.verifyGreaterThanOrEqual(numel(axesFound), 6, ...
-                'expected camera, histogram, profile, power, spatial and tilt axes');
+            testCase.verifyGreaterThanOrEqual(numel(axesFound), 7, ...
+                'expected camera, histogram, profile, power, spatial, tilt and wizard axes');
+        end
+
+        function theGuidedTabOpensOnTheFirstStep(testCase)
+            % The app is a guided procedure first and an instrument panel
+            % second, so it must come up already showing step one rather than
+            % waiting to be told where to start.
+            app = testCase.launch();
+            fig = testCase.figureOf(app);
+
+            labels = findall(fig, 'Type', 'uilabel');
+            texts  = {labels.Text};
+            steps  = tfp.gui.bringupSteps();
+            wanted = sprintf('§%s — %s', steps(1).section, steps(1).title);
+            testCase.verifyTrue(any(strcmp(texts, wanted)), sprintf( ...
+                'expected the guided tab to open on ''%s''', wanted));
+
+            % And the step rail must list the whole procedure, not a subset.
+            tables = findall(fig, 'Type', 'uitable');
+            sizes  = cellfun(@(d) size(d, 1), {tables.Data});
+            testCase.verifyTrue(any(sizes == numel(steps)), ...
+                'the step rail must show every step of the procedure');
+        end
+
+        function launchingDoesNotCreateAnEmptySessionFolder(testCase)
+            % Opening the app to look at a tab must not litter the
+            % calibration folder with empty dated sessions.
+            app = testCase.launch();
+            testCase.verifyFalse(app.session.hasReport());
+            root = app.session.calibrationRoot();
+            listing = dir(fullfile(root, '2*'));
+            testCase.verifyEmpty(listing, ...
+                'no dated folder should exist until a step actually runs');
         end
 
         function demoConfigWiresAMockRig(testCase)

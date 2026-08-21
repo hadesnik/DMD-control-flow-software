@@ -198,7 +198,7 @@ switch v.verdict
 end
 end
 
-function lines = readingFor(step, v)
+function lines = readingFor(~, v)
 %readingFor The interpretation paragraph: what each number means, with the
 %   failing ones explained first because that is what the operator needs.
 lines = {};
@@ -221,9 +221,10 @@ for k = order
     end
     lines{end+1} = line; %#ok<AGROW>
 end
-if ~isempty(step.records)
-    lines{end+1} = ['Record sheet: ' strjoin(step.records, '; ') '.'];
-end
+% Deliberately NOT the record-sheet items: they are step data, not a
+% reading of this result, and the report renders them in their own block.
+% Front ends without such a block (the wizard's text area, the console)
+% append step.records themselves.
 end
 
 function s = joinLabels(rows)

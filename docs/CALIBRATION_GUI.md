@@ -1,8 +1,12 @@
 # Calibration GUI — operator guide
 
-`tfp.gui.CalibrationApp` runs the first DMD-at-sample calibrations on the DAQ
-PC: live camera tuning, CARBIDE volts→mW, the two-step spatial calibration with
-axis-sign verification, and the field-tilt (depth-plane) measurement.
+`tfp.gui.CalibrationApp` walks **the whole of
+[BRINGUP_GUIDE.md](BRINGUP_GUIDE.md) §1–§7**, one step at a time, on the DAQ PC.
+At each step it tells you what to do physically, asks you to proceed, drives the
+instruments across all three PCs, plots what it measured, judges it against
+declared criteria, says in English what the numbers mean, writes it all into a
+dated folder, and decides whether you may move on or must change something at
+the bench and retake.
 
 Launch with `scripts/run_calibrationGUI.m`:
 
@@ -12,9 +16,101 @@ app = run_calibrationGUI('configs/mock.yaml')     % demo, no hardware needed
 ```
 
 > **Everything here also works from the command line**, with the same
-> interlocks and the same provenance. The app is a view over
+> interlocks, the same verdicts and the same record. The app is a view over
 > `tfp.gui.CalibrationSession`, which is headless by construction — see
 > [Running without the GUI](#running-without-the-gui).
+
+---
+
+## The guided bringup
+
+The first tab is the default way to use the app. The remaining six tabs are the
+same instruments with the guardrails off, for someone who already knows which
+measurement they came for.
+
+**Left: the procedure**, §1 to §7 top to bottom, each row showing its state —
+`ready`, `blocked`, or the verdict it earned. A blocked step says *why* in
+words ("the laser state has not been entered, and the pulse-energy interlock is
+fail-closed on rep rate"), not by greying out a button.
+
+**Right, before you press anything:**
+
+- **What this step is for** — one sentence on what it measures and why.
+- **DO THIS AT THE BENCH** — the physical actions, in order. Put the film on,
+  focus the camera, put ScanImage in Focus with a non-square pixel count, swap
+  the film for the slab.
+- **SAFETY** — the hazard sentence for this step, when it has one.
+- **WHEN YOU PRESS PROCEED, THE SOFTWARE WILL** — what is about to happen, so
+  consent is informed rather than reflexive.
+- **Settings** — the knobs this step accepts, each with its default and a note
+  on what it buys.
+
+**Right, after it runs:**
+
+- A **verdict banner**: `PASS`, `WARN`, `ADJUST` or `FAIL`.
+- A **checks table** — every criterion, what was measured, what was wanted, and
+  the result.
+- The **plot** for that step, exported to the report folder as PNG and PDF.
+- **Reading** — what each number means, failures explained first, and, when it
+  did not pass, **what to change** at the bench.
+
+### The four verdicts
+
+They are deliberately not a pass/fail pair, because the four situations call for
+four different actions:
+
+| Verdict | Meaning | Next step |
+|---|---|---|
+| `pass` | every criterion met | enabled |
+| `warn` | outside a **design** band, but the measurement is the truth — the repo's standing doctrine is that the handoff is design intent and the bench is fact | enabled |
+| `adjust` | something **physical** is wrong; the remedy says what | blocked — change it, then Retake |
+| `fail` | the **measurement** did not work (bad fit, too few points, a device that did not answer) | blocked — Retake with different settings |
+
+A criterion whose field is missing is reported as **not evaluated** and never
+silently passes: it contributes `warn`, except where its own severity is `fail`,
+in which case not being able to verify is itself a stop. That rule is why
+"power at 0 V is off" cannot be skipped by a result that happens to lack the
+field.
+
+### Where the words come from
+
+Every instruction, threshold and remedy on that tab is data in
+`src/+tfp/+gui/bringupSteps.m` — one declarative entry per guide section.
+`stepMetrics.m` derives the quantities the criteria test, `stepVerdict.m`
+applies them. None of the three touches graphics or hardware, so all of it runs
+and is tested under `matlab -nodisplay` (`tests/test_bringup_steps.m`).
+`CalibrationApp.m` decides only where things sit on the screen.
+
+### Skipping
+
+A step can be skipped — a 2D-only session has no SLM to link — but the app
+requires a reason and writes it into the report. A report that is silent about
+a step reads as if the step passed.
+
+---
+
+## Where the session is written
+
+`calibration/<YYYY-MM-DD>_<session>/` in the repo, rebuilt **after every step**
+rather than at the end, so the record survives a crashed MATLAB or an operator
+who walks away mid-procedure.
+
+| Path | What | Tracked |
+|---|---|---|
+| `report.html` | the whole session, self-contained, openable in a browser | ✅ |
+| `report.json` | the same, machine-readable | ✅ |
+| `steps/<id>.json` | one step's verdict, checks and derived metrics | ✅ |
+| `steps/<id>.mat` | that step's full result struct with provenance | ❌ |
+| `figures/<id>.png` / `.pdf` | the step's plot, also embedded in the report | ✅ |
+
+The split is in `.gitignore` and the reasoning is in
+[`calibration/README.md`](../calibration/README.md): what the scale was on the
+day an experiment ran is not recoverable from anything else, so the readable
+record belongs in version control; the `.mat` payloads carry camera stacks and
+do not.
+
+Override the location with `config.paths.calibrationDir`, or the session option
+`calibrationRoot`.
 
 ---
 
@@ -109,8 +205,19 @@ and then to `./data`, so results land relative to the rig's working directory.
 | Needed for | Where | What |
 |---|---|---|
 | Field tilt (objective mount) | imaging PC, inside the ScanImage MATLAB | `addpath('<repo>/scripts/imaging_pc_setup'); si_motor_helper` |
-| Cross-registration | imaging PC | ScanImage in **Focus**, **non-square** pixel count |
+| Cross-registration, ETL planes, mark stacks | imaging PC, same MATLAB | `si_calib_helper` |
 | SLM defocus (later) | Holo/SLM PC | `slm_server` |
+
+`si_calib_helper` (port 3048, see [PORTS.md](PORTS.md)) is what makes §4b, §4c,
+§6b and §7 hands-off: it sets ScanImage's pixel counts, enters Focus, commands
+an mROI, reports per-plane brightness and returns a volume, all over msocket
+from the DAQ PC. Without it those steps still run — the app tells you what to
+set and waits — but you walk to the other PC for each one.
+
+> Its `hSI` property names are `%VERIFY` on first use, exactly as
+> `si_motor_helper`'s `motorPosition` was. They are isolated in patch-point
+> functions at the bottom of the file so a ScanImage version difference is a
+> one-line edit.
 
 ---
 
@@ -236,27 +343,49 @@ a `power_confirm` event. That is the audit trail for every beam-on decision.
 
 ## Running without the GUI
 
+The guided path is six methods, and they are the same six the wizard calls:
+
 ```matlab
 addpath('src');
 config = tfp.io.loadConfig('configs/real.yaml');
 s = tfp.gui.CalibrationSession(config, struct('configPath', 'configs/real.yaml'));
 
-s.setLaserState(struct('repRateKhz', 100, 'pulsePickerDivision', 1, ...
-                       'frontPanelPowerW', 8.5));
-disp(struct2table(s.preflight()));
+plan = s.stepPlan();                       % the procedure + live status
+disp(struct2table(rmfield(plan, {'setup','willDo','checks','knobs', ...
+                                 'criteria','remedy','records','status'})));
 
-curve = s.runPowerSweep();                                    % volts -> mW
-calA  = s.runDmdToCamera();                                   % step A
-calB  = s.runScanCrossRegister(struct('scanPixels', [512 256]));  % step B
-calC  = s.runVerifySigns();                                   % step C
-comp  = s.composeLateral();
-tilt  = s.runFieldTilt();
+brief = s.beginStep('power_curve');        % read the setup out loud
+disp(char(brief.setup));
+
+out = s.runStep('power_curve');            % measure, judge, record
+disp(out.verdict.headline);
+disp(char(out.verdict.reading));
+
+s.skipStep('slm_link', 'no modulator on the arm this week');
+s.noteStep('field_tilt', 'film looked bleached top left');
+disp(s.report().htmlPath());
 
 s.shutdown();     % laser first, DAQ last
 ```
 
+The individual measurements are still directly callable when you want one
+without the procedure around it:
+
+```matlab
+curve = s.runPowerSweep();                                        % volts -> mW
+calA  = s.runDmdToCamera();                                       % step A
+calB  = s.runScanCrossRegister(struct('scanPixels', [512 256]));  % step B
+calC  = s.runVerifySigns();                                       % step C
+comp  = s.composeLateral();
+tilt  = s.runFieldTilt();
+slmC  = s.runSlmDefocus();                                        % §6a
+etlC  = s.runEtlPlanes();                                         % §6b
+zcal  = s.composeZ();                                             % §6c
+```
+
 Prompts fall back to `input()` at the command line via
-`tfp.util.consoleConfirmPower`, using the same wording the dialog shows.
+`tfp.util.consoleConfirmPower` and `tfp.util.consoleAsk`, using the same
+wording the dialogs show.
 
 ---
 
@@ -264,9 +393,15 @@ Prompts fall back to `input()` at the command line via
 
 | Path | What |
 |---|---|
+| `src/+tfp/+gui/bringupSteps.m` | the procedure as data: instructions, criteria, remedies |
+| `src/+tfp/+gui/stepMetrics.m` | the arithmetic the criteria test |
+| `src/+tfp/+gui/stepVerdict.m` | pass / warn / adjust / fail, and why |
+| `src/+tfp/+gui/CalibrationReport.m` | the dated folder and its HTML report |
 | `src/+tfp/+gui/CalibrationSession.m` | all state and every decision; headless, fully tested |
 | `src/+tfp/+gui/CalibrationApp.m` | the `uifigure` view; no logic |
 | `src/+tfp/+gui/FrameProcessor.m` | display image math; pure and static |
+| `src/+tfp/+hardware/ScanImageCalibBridge.m` | the DAQ-PC client for `si_calib_helper` |
+| `scripts/imaging_pc_setup/si_calib_helper.m` | the imaging-PC server (port 3048) |
 | `src/+tfp/+hardware/LaserPowerController.m` | the only thing that drives the modulator |
 | `src/+tfp/+util/assertPulseEnergySafe.m` | the relay-pupil interlock |
 | `src/+tfp/+calibration/measureFieldTilt.m` | the depth-plane measurement |

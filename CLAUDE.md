@@ -22,7 +22,8 @@ exactly one file into this repo, `docs/optics_handoff.md` — see
 ## Status
 
 Phases 1–2 complete; Phase 4 (SLM remote focusing + 3D) landed mock-first 2026-08-15.
-Test suite as of 2026-08-19: **439 passed / 0 failed / 1 filtered, 440 total** (the
+The calibration GUI became a **guided §1–§7 bringup wizard** 2026-08-21.
+Test suite as of 2026-08-21: **474 passed / 0 failed / 1 filtered, 475 total** (the
 filtered one is `test_optics_handoff_constants/slm_relay_mag_key_is_still_pending`,
 skipped by assumption — rev 5 still does not publish `slm_bfp_relay_mag`). The NIR
 DLP650LNIR has **not** arrived; bring-up runs on the borrowed visible DLP7000.
@@ -296,7 +297,11 @@ moved M_gs by 1.78× and both scale constants with it. If the arm is rebuilt,
 - **DAQ PC** (ephys/control): NI PCIe-6323, runs MATLAB, drives the DMD, generates all
   triggers and analog control, acquires ephys. **The DMD lives here.** Timing master.
 - **Imaging PC**: ScanImage for 2p GCaMP imaging. Triggered by TTL from the DAQ PC.
-  Also hosts `si_motor_helper` for the relay Z-stage backend.
+  Also hosts `si_motor_helper` (port 3047, relay Z-stage backend) **or**
+  `si_calib_helper` (port 3048), which is a superset: the same z opcodes plus
+  calibration control of ScanImage (pixel counts, Focus, mROI, per-plane brightness,
+  one volume of pixels) for the guided bringup. **Run one, not both** — a MATLAB can
+  hold only one accept loop — and point `zstage.relay_port` at whichever it is.
 - **SLM PC**: PCIe + Meadowlark Blink SDK. The DAQ PC never sends pixels — it sends a
   small **mask spec** over msocket (port 3046, see [docs/PORTS.md](docs/PORTS.md)) and
   the SLM PC recomputes identical masks with the shared `tfp.slm` engine
@@ -384,7 +389,10 @@ only.
 │   ├── +trial/                    ← Trial, TrialSequence, Sequencer
 │   ├── +calibration/              ← lateral affines, z-calibration, PSF, power sweep
 │   ├── +experiments/              ← runnable exp_* scripts
-│   ├── +gui/                      ← CalibrationSession (headless brain, tested)
+│   ├── +gui/                      ← bringupSteps (the §1–§7 procedure as data)
+│   │                                 + stepMetrics + stepVerdict (headless judgement)
+│   │                                 + CalibrationSession (headless brain, tested)
+│   │                                 + CalibrationReport (dated folder + HTML report)
 │   │                                 + CalibrationApp (uifigure view, never tested)
 │   │                                 + FrameProcessor (pure display image math)
 │   ├── +analysis/  +io/  +util/  +sim/
@@ -632,8 +640,30 @@ once the audit confirms this unit's external-trigger sequencing.
   permanently untestable. `tests/test_gui_headless_guard.m` enforces this mechanically.
   Programmatic `classdef`, never a binary `.mlapp`. **`run_calibrationGUI('configs/mock.yaml')`
   runs the whole app with no hardware** — `tfp.sim.wireMockRig` connects the mock camera
-  to the mock DMD through a known truth affine and a tilted excitation plane, so a demo
-  session measures a simulation instead of fitting noise.
+  to the mock DMD (and the mock SLM, and a simulated 2p raster) through a known truth
+  affine and a tilted excitation plane, so a demo session measures a simulation instead
+  of fitting noise.
+- **The GUI is a guided procedure, not an instrument panel** [USER 2026-08-21]. It walks
+  [BRINGUP_GUIDE](docs/BRINGUP_GUIDE.md) §1–§7 step by step: physical setup instructions,
+  ask to proceed, drive the instruments across all three PCs, plot, judge against declared
+  criteria, explain the numbers in English, write the record, and decide *retake* vs
+  *next step*. The target user is a total novice following the guide.
+  **The procedure is DATA, not code**: `src/+tfp/+gui/bringupSteps.m` holds one
+  declarative entry per section (setup text, what the software will do, hazard, knobs,
+  acceptance criteria, remedies, record-sheet items); `stepMetrics.m` derives the
+  quantities the criteria test; `stepVerdict.m` applies them. All three are headless and
+  tested (`tests/test_bringup_steps.m`) — **never move an instruction, threshold or
+  remedy into `CalibrationApp.m`**, which decides only where things sit on the screen.
+  Four verdicts, not two: `pass` / `warn` (outside a *design* band — the bench is fact,
+  the handoff is intent, so advancing is correct) / `adjust` (something physical is
+  wrong — blocked) / `fail` (the measurement did not work — blocked). A criterion whose
+  field is missing is reported as **not evaluated** and never silently passes.
+- **Calibration sessions are written to `calibration/<YYYY-MM-DD>_<name>/`** in the repo,
+  rebuilt after every step. `report.html` (self-contained), `report.json`, per-step
+  verdict JSON and figures are **tracked**; the heavy `steps/*.mat` payloads are
+  gitignored. What the scale was on the day an experiment ran is not recoverable from
+  anything else, so the readable record belongs in version control. See
+  [`calibration/README.md`](calibration/README.md).
 - ScanImage integration is via TCP/IP or named pipe — **never modify ScanImage
   internals**.
 - The DLPC410 supports binary pattern rates to 12,500 Hz, but don't assume that is
@@ -683,7 +713,10 @@ once the audit confirms this unit's external-trigger sequencing.
       uses a sample-plane power. Entering the front-panel wattage avoids it.
 - [ ] Wire the CARBIDE modulator BNC and fill in [docs/WIRING.md](docs/WIRING.md);
       **verify on a meter that 0 V means OFF** before connecting the beam — every
-      zero-on-error path in the software assumes it.
+      zero-on-error path in the software assumes it. *(The guided §3 step now also
+      measures this — `m.zeroIsOff` is a `fail`-severity criterion that stops the
+      whole procedure — but that is a second line of defence, not a substitute for
+      the meter check before the beam is connected.)*
 - [ ] Route the build-A ensemble experiments through `LaserPowerController` rather
       than calling `outputSingleAnalog` directly (allow-listed in
       `tests/test_gui_headless_guard.m` for now).

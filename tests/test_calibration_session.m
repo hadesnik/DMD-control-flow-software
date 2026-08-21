@@ -277,5 +277,101 @@ classdef test_calibration_session < matlab.unittest.TestCase
             testCase.verifyTrue(st.simulated.camera);
             s.shutdown();
         end
+
+        % --- guided bringup ------------------------------------------------
+
+        function stepPlanReportsReadyBlockedAndDone(testCase)
+            s = testCase.makeSession('calibrationRoot', testCase.tmpDir);
+            plan = s.stepPlan();
+            testCase.verifyEqual(numel(plan), numel(tfp.gui.bringupSteps()));
+
+            first = plan(strcmp({plan.id}, 'prereq_bench'));
+            testCase.verifyEqual(first.status.state, 'ready');
+
+            % Nothing that puts light on the sample is reachable before the
+            % laser state is entered — the interlock is fail-closed on rep
+            % rate, and the plan says so in words rather than by a grey button.
+            power = plan(strcmp({plan.id}, 'power_curve'));
+            testCase.verifyEqual(power.status.state, 'blocked');
+            testCase.verifyNotEmpty(power.status.blockers);
+            testCase.verifySubstring(strjoin(power.status.blockers, ' '), 'laser state');
+            s.shutdown();
+        end
+
+        function runStepRefusesABlockedStep(testCase)
+            s = testCase.makeSession('calibrationRoot', testCase.tmpDir);
+            testCase.verifyError(@() s.runStep('field_tilt'), ...
+                'tfp:gui:CalibrationSession:stepBlocked');
+            s.shutdown();
+        end
+
+        function guidedRunJudgesAndRecordsEachStep(testCase)
+            s = testCase.makeSession('calibrationRoot', testCase.tmpDir);
+
+            checks = s.beginStep('prereq_bench');
+            testCase.verifyNotEmpty(checks.setup);
+            out = s.runStep('prereq_bench', ...
+                struct('checked', true(1, numel(checks.checks))));
+            testCase.verifyEqual(out.verdict.verdict, 'pass');
+
+            out = s.runStep('laser_state', struct('repRateKhz', 100, ...
+                'pulsePickerDivision', 1, 'frontPanelPowerW', 8.5));
+            testCase.verifyEqual(out.verdict.verdict, 'pass');
+
+            % The step that was blocked a moment ago is now reachable.
+            plan = s.stepPlan();
+            power = plan(strcmp({plan.id}, 'power_curve'));
+            testCase.verifyEmpty(power.status.blockers);
+
+            % And the record exists on disk, per step, as it goes.
+            r = s.report();
+            testCase.verifyTrue(isfile(r.htmlPath()));
+            html = fileread(r.htmlPath());
+            testCase.verifySubstring(html, 'Bench prerequisites');
+            testCase.verifySubstring(html, 'Laser state');
+            s.shutdown();
+        end
+
+        function anUnconfirmedChecklistBlocksTheNextStep(testCase)
+            % The section 1 bench list is not busywork: each unticked item is
+            % a scale constant that would be wrong downstream while every
+            % internal consistency check still passed.
+            s = testCase.makeSession('calibrationRoot', testCase.tmpDir);
+            step = s.beginStep('prereq_bench');
+            partial = true(1, numel(step.checks));
+            partial(1) = false;
+            out = s.runStep('prereq_bench', struct('checked', partial));
+            testCase.verifyEqual(out.verdict.verdict, 'adjust');
+            testCase.verifyFalse(out.verdict.canAdvance);
+            testCase.verifyNotEmpty(out.verdict.remedy);
+            s.shutdown();
+        end
+
+        function retakingAStepCountsAttempts(testCase)
+            s = testCase.makeSession('calibrationRoot', testCase.tmpDir);
+            step = s.beginStep('prereq_bench');
+            n = numel(step.checks);
+            s.runStep('prereq_bench', struct('checked', false(1, n)));
+            out = s.runStep('prereq_bench', struct('checked', true(1, n)));
+            testCase.verifyEqual(out.attempt, 2);
+            plan = s.stepPlan();
+            st = plan(strcmp({plan.id}, 'prereq_bench')).status;
+            testCase.verifyEqual(st.attempts, 2);
+            testCase.verifyEqual(st.state, 'pass');
+            s.shutdown();
+        end
+
+        function skippingIsRecordedWithItsReason(testCase)
+            % Skipping is legitimate — a 2D-only session has no SLM to link —
+            % but a report that is silent about a step reads as if it passed.
+            s = testCase.makeSession('calibrationRoot', testCase.tmpDir);
+            s.skipStep('slm_link', 'no modulator on the arm this week');
+            plan = s.stepPlan();
+            st = plan(strcmp({plan.id}, 'slm_link')).status;
+            testCase.verifyEqual(st.state, 'skipped');
+            html = fileread(s.report().htmlPath());
+            testCase.verifySubstring(html, 'no modulator on the arm this week');
+            s.shutdown();
+        end
     end
 end

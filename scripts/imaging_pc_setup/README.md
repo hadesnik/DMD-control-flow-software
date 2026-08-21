@@ -24,6 +24,31 @@ values back to the scope PC in real time, enabling live ΔF/F monitoring.
 Port assignment:
 - **3043** — control channel (ScanImage metadata, already in SImsocketPrep.m)
 - **3044** — F-streaming channel (these scripts)
+- **3047** — z-motor relay, this PC is the SERVER (`si_motor_helper`)
+- **3048** — calibration control, this PC is the SERVER (`si_calib_helper`)
+
+`docs/PORTS.md` in the repo root is the authority for all five.
+
+### The two server helpers — run ONE
+
+`si_motor_helper` (3047) and `si_calib_helper` (3048) both block in an accept
+loop, and a MATLAB can hold only one. They are not alternatives by taste:
+
+| Helper | Serves | Use it when |
+|---|---|---|
+| `si_motor_helper` | z move / read / relative | the DAQ PC only needs the z ruler |
+| `si_calib_helper` | **the same z opcodes**, plus pixel counts, Focus, abort, mROI, per-plane brightness, one volume of pixels | running the guided bringup (`run_calibrationGUI`) |
+
+`si_calib_helper` is a strict superset — its opcodes 1/2/3 are byte-identical
+to `si_motor_helper`'s — so `tfp.hardware.RelayZStage` works against it
+unchanged once the DAQ PC's config says `zstage.relay_port: 3048`. That matters
+because BRINGUP_GUIDE §6b needs the z ruler and per-plane brightness inside the
+same measurement loop.
+
+```matlab
+addpath('<repo>/scripts/imaging_pc_setup');
+si_calib_helper          % listens on 3048 until [99 0] or Ctrl-C
+```
 
 ## Machine-local configuration
 
@@ -78,6 +103,8 @@ with a clear message if ScanImage is acquiring.)
 | `si_send_rois.m` | Send ROI centroids to the scope PC after drawing ROIs |
 | `SIStreamTeardown.m` | Run at end of session to disconnect cleanly |
 | `test_msocket_link.m` | Control-channel dry-run; no ScanImage, no hardware |
+| `si_motor_helper.m` | Server: z move/read for `tfp.hardware.RelayZStage` (port 3047) |
+| `si_calib_helper.m` | Server: the same z opcodes plus calibration control of ScanImage (port 3048) |
 
 ## Checking this PC's ScanImage config
 
