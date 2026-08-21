@@ -45,7 +45,10 @@ seqIdPtr = libpointer('uint32Ptr', uint32(0));
 ret = calllib(LIB_ALIAS, 'AlpSeqAlloc', devId, int32(1), int32(1), seqIdPtr);
 if ret ~= ALP_OK, error('AlpSeqAlloc failed: %d', ret); end
 seqId = seqIdPtr.Value;
-st('seqId') = seqId;
+% Load-bearing: alpCleanup reads seqId from `st` to free the sequence.
+% Code Analyzer flags it because it cannot see the handle the cleanup
+% closure holds, so the suppression says so rather than looking dead.
+st('seqId') = seqId;   %#ok<NASGU>
 
 dataPtr = libpointer('uint8Ptr', patternData);
 ret = calllib(LIB_ALIAS, 'AlpSeqPut', devId, seqId, int32(0), int32(1), dataPtr);

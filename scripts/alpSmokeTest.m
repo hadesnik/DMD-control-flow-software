@@ -72,7 +72,10 @@ seqIdPtr = libpointer('uint32Ptr', uint32(0));
 ret = calllib(LIB_ALIAS, 'AlpSeqAlloc', devId, int32(1), int32(1), seqIdPtr);
 checkRet(ret, ALP_OK, 'AlpSeqAlloc');
 seqId = seqIdPtr.Value;
-st('seqId') = seqId;
+% Load-bearing: alpCleanup reads seqId from `st` to free the sequence.
+% Code Analyzer flags it because it cannot see the handle the cleanup
+% closure holds, so the suppression says so rather than looking dead.
+st('seqId') = seqId;   %#ok<NASGU>
 fprintf('Sequence allocated (id=0x%08X)\n', seqId);
 
 % --- Build pattern data ---------------------------------------------------
